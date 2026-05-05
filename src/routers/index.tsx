@@ -1,13 +1,24 @@
-import LoginScreen from '../screens/LoginScreen';
+import ExtensionLayout from '../layouts/ExtensionLayout'
+import FacebookScreen from '../screens/FacebookScreen'
+import LoginScreen from '../screens/LoginScreen'
 
 const routes = {
-  login: <LoginScreen />,
-};
-
-function AppRouter() {
-  const activeRoute = 'login';
-
-  return routes[activeRoute];
+  login: (
+    <ExtensionLayout>
+      <LoginScreen />
+    </ExtensionLayout>
+  ),
+  facebook: (
+    <ExtensionLayout>
+      <FacebookScreen />
+    </ExtensionLayout>
+  ),
 }
 
-export default AppRouter;
+function AppRouter() {
+  const activeRoute = 'facebook'
+
+  return routes[activeRoute]
+}
+
+export default AppRouter

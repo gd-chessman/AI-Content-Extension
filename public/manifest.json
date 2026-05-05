@@ -3,11 +3,17 @@
   "name": "AI Content Extension",
   "description": "Chrome extension UI for Facebook, ChatGPT, Grok, Admin, and Excel workflows.",
   "version": "0.1.0",
+  "background": {
+    "service_worker": "background.js"
+  },
   "action": {
     "default_title": "AI Content Extension",
     "default_popup": "index.html"
   },
-  "permissions": ["storage", "activeTab", "scripting", "tabs"],
+  "side_panel": {
+    "default_path": "index.html"
+  },
+  "permissions": ["storage", "activeTab", "scripting", "tabs", "sidePanel"],
   "host_permissions": [
     "https://www.facebook.com/*",
     "https://chatgpt.com/*",
