@@ -1,11 +1,12 @@
 {
-  "name": "fe-temp",
+  "name": "ai-content-extension-fe",
   "private": true,
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "vite build --watch --mode development",
     "build": "vite build",
+    "build:extension": "vite build",
     "lint": "eslint .",
     "preview": "vite preview"
   },
