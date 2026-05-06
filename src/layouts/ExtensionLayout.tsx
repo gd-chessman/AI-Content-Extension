@@ -20,9 +20,17 @@ type ExtensionChrome = {
 
 type ExtensionLayoutProps = {
   children: ReactNode
+  bottomTabs?: Array<{
+    id: string
+    label: string
+    icon?: ReactNode
+    iconClassName?: string
+  }>
+  activeTabId?: string
+  onTabChange?: (tabId: string) => void
 }
 
-export default function ExtensionLayout({ children }: ExtensionLayoutProps) {
+export default function ExtensionLayout({ children, bottomTabs = [], activeTabId, onTabChange }: ExtensionLayoutProps) {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false)
 
   useEffect(() => {
@@ -99,6 +107,29 @@ export default function ExtensionLayout({ children }: ExtensionLayoutProps) {
 
       <section className="flex h-full w-full min-w-[390px] flex-col rounded-[28px] border border-slate-800 bg-slate-900/95 p-4 pt-14 shadow-2xl shadow-black/40">
         <div className="min-h-0 flex-1">{children}</div>
+        {bottomTabs.length > 0 ? (
+          <nav className="mt-3 grid grid-cols-5 gap-2 rounded-2xl bg-slate-800 p-2">
+            {bottomTabs.map((tab) => {
+              const isActive = activeTabId === tab.id
+
+              return (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => onTabChange?.(tab.id)}
+                  className={`rounded-xl py-1.5 transition ${
+                    isActive ? 'bg-violet-500/20 text-violet-300' : 'text-slate-400 hover:bg-slate-700/60'
+                  }`}
+                >
+                  <span className="flex flex-col items-center justify-center gap-0.5">
+                    <span className={`text-base leading-none ${tab.iconClassName || ''}`}>{tab.icon || '◻︎'}</span>
+                    <span className="text-[10px] font-medium leading-none">{tab.label}</span>
+                  </span>
+                </button>
+              )
+            })}
+          </nav>
+        ) : null}
       </section>
     </main>
   )

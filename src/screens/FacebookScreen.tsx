@@ -32,82 +32,82 @@ const fanpages = [
   {
     id: 'fp-1',
     name: 'Life’s Soft Corners',
-    url: 'https://www.facebook.com/profile.php?id=61569738030637',
+    url: 'https://www.facebook.com/profile.php?id=61569738030637&sk=reels_tab',
   },
   {
     id: 'fp-2',
     name: 'Jobs Day',
-    url: 'https://www.facebook.com/profile.php?id=61572370626218',
+    url: 'https://www.facebook.com/profile.php?id=61572370626218&sk=reels_tab',
   },
   {
     id: 'fp-3',
     name: 'Historias interesantes',
-    url: 'https://www.facebook.com/profile.php?id=61573236719024',
+    url: 'https://www.facebook.com/profile.php?id=61573236719024&sk=reels_tab',
   },
   {
     id: 'fp-4',
     name: 'Real US Stories',
-    url: 'https://www.facebook.com/profile.php?id=61579479232452',
+    url: 'https://www.facebook.com/profile.php?id=61579479232452&sk=reels_tab',
   },
   {
     id: 'fp-5',
     name: 'Stay Strong',
-    url: 'https://www.facebook.com/profile.php?id=100076971480617',
+    url: 'https://www.facebook.com/profile.php?id=100076971480617&sk=reels_tab',
   },
   {
     id: 'fp-6',
     name: 'Macey Twists',
-    url: 'https://www.facebook.com/profile.php?id=61569262584357',
+    url: 'https://www.facebook.com/profile.php?id=61569262584357&sk=reels_tab',
   },
   {
     id: 'fp-7',
     name: 'US Fulls',
-    url: 'https://www.facebook.com/profile.php?id=61572113256252',
+    url: 'https://www.facebook.com/profile.php?id=61572113256252&sk=reels_tab',
   },
   {
     id: 'fp-8',
     name: 'Stories You Felt',
-    url: 'https://www.facebook.com/profile.php?id=61572370886595',
+    url: 'https://www.facebook.com/profile.php?id=61572370886595&sk=reels_tab',
   },
   {
     id: 'fp-9',
     name: 'Life Stories',
-    url: 'https://www.facebook.com/profile.php?id=61582198786094',
+    url: 'https://www.facebook.com/profile.php?id=61582198786094&sk=reels_tab',
   },
   {
     id: 'fp-10',
     name: 'He Said One Thing',
-    url: 'https://www.facebook.com/profile.php?id=61570806537498',
+    url: 'https://www.facebook.com/profile.php?id=61570806537498&sk=reels_tab',
   },
   {
     id: 'fp-11',
     name: 'YoungWay',
-    url: 'https://www.facebook.com/profile.php?id=61572346863816',
+    url: 'https://www.facebook.com/profile.php?id=61572346863816&sk=reels_tab',
   },
   {
     id: 'fp-12',
     name: '2T For Life',
-    url: 'https://www.facebook.com/profile.php?id=61570818320633',
+    url: 'https://www.facebook.com/profile.php?id=61570818320633&sk=reels_tab',
   },
   {
     id: 'fp-13',
     name: '4T for LIFE',
-    url: 'https://www.facebook.com/profile.php?id=61566282316440',
+    url: 'https://www.facebook.com/profile.php?id=61566282316440&sk=reels_tab',
   },
   {
     id: 'fp-14',
     name: 'Story Makers',
-    url: 'https://www.facebook.com/profile.php?id=61588320100559',
+    url: 'https://www.facebook.com/profile.php?id=61588320100559&sk=reels_tab',
   },
   {
     id: 'fp-15',
     name: 'Mystery Life Tales',
-    url: 'https://www.facebook.com/profile.php?id=61582428256985',
+    url: 'https://www.facebook.com/profile.php?id=61582428256985&sk=reels_tab',
   },
   {
     id: 'fp-16',
     name: 'Stories Shape Life',
-    url: 'https://www.facebook.com/profile.php?id=61586700770655',
+    url: 'https://www.facebook.com/profile.php?id=61586700770655&sk=reels_tab',
   },
 ]
 
@@ -238,6 +238,27 @@ export default function FacebookScreen() {
       setCopyStatus('error')
       window.setTimeout(() => setCopyStatus('idle'), 1200)
     }
+  }
+
+  const runStep1OnChatgpt = () => {
+    const reelContent = contentText.trim()
+    if (!reelContent) {
+      return
+    }
+
+    window.dispatchEvent(
+      new CustomEvent('switch-main-tab', {
+        detail: { tabId: 'chatgpt' },
+      }),
+    )
+
+    window.setTimeout(() => {
+      window.dispatchEvent(
+        new CustomEvent('run-chatgpt-step1-from-facebook', {
+          detail: { reelContent },
+        }),
+      )
+    }, 120)
   }
 
   const refreshSelectedReelFromFacebook = (reelOverride?: ScannedReel) => {
@@ -694,10 +715,7 @@ export default function FacebookScreen() {
           <div className="flex h-9 w-9 items-center justify-center rounded-2xl bg-blue-500 text-base font-bold text-white shadow-lg shadow-blue-900/30">
             f
           </div>
-          <div>
-            <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Facebook</p>
-            <h1 className="text-sm font-semibold text-white">Khai thác Reels</h1>
-          </div>
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Facebook</p>
         </div>
         <button type="button" className="rounded-xl bg-slate-800 px-3 py-1.5 text-xs font-medium text-slate-200">
           Hôm nay
@@ -737,7 +755,7 @@ export default function FacebookScreen() {
                 : 'bg-transparent text-slate-400'
             }`}
           >
-            Chi tiết Reels
+            Chi tiết Reel
           </button>
         </div>
       </section>
@@ -886,56 +904,47 @@ export default function FacebookScreen() {
           ) : (
             <p className="mt-2 rounded-xl bg-slate-900 px-3 py-2 text-[11px] text-slate-500">Chưa chọn reels nào.</p>
           )}
-          <textarea
-            placeholder="Caption, voice script, hashtag... hiển thị tại đây"
-            value={contentText}
-            onChange={(event) => {
-              setContentText(event.target.value)
-              setIsContentDirty(true)
-            }}
-            className="mt-2 h-28 w-full resize-none rounded-2xl bg-slate-900 px-3 py-2.5 text-xs text-slate-100 outline-none placeholder:text-slate-500 focus:ring-2 focus:ring-violet-400/30"
-          />
-          <div className="mt-2 flex gap-2">
+          <div className="relative mt-2">
+            <textarea
+              placeholder="Caption, voice script, hashtag... hiển thị tại đây"
+              value={contentText}
+              onChange={(event) => {
+                setContentText(event.target.value)
+                setIsContentDirty(true)
+              }}
+              className="h-44 w-full resize-none rounded-2xl bg-slate-900 px-3 py-2.5 pr-11 text-xs text-slate-100 outline-none placeholder:text-slate-500 focus:ring-2 focus:ring-violet-400/30"
+            />
             <button
               type="button"
-              onClick={() => {
-                if (!selectedReel) return
-                setContentText(buildContentText(selectedReel))
-                setIsContentDirty(false)
-              }}
-              className="w-full rounded-2xl bg-slate-900 px-3 py-2.5 text-xs font-semibold text-slate-100 ring-1 ring-slate-700 transition hover:bg-slate-900/70"
+              onClick={copyContent}
+              disabled={!contentText.trim()}
+              aria-label="Sao chép nội dung"
+              title={
+                copyStatus === 'ok'
+                  ? 'Đã sao chép'
+                  : copyStatus === 'error'
+                    ? 'Sao chép lỗi'
+                    : 'Sao chép'
+              }
+              className="absolute bottom-2 right-2 inline-flex h-8 w-8 items-center justify-center rounded-lg bg-violet-500 text-sm text-white transition hover:bg-violet-600 disabled:cursor-not-allowed disabled:opacity-40"
             >
-              Cập nhật từ reels
+              {copyStatus === 'ok' ? '✓' : '⧉'}
             </button>
           </div>
           <div className="mt-2 flex gap-2">
             <button
               type="button"
-              onClick={copyContent}
+              onClick={runStep1OnChatgpt}
               disabled={!contentText.trim()}
-              className="w-full rounded-2xl bg-violet-500 px-3 py-2.5 text-xs font-semibold text-white transition hover:bg-violet-600 disabled:cursor-not-allowed disabled:opacity-40"
+              className="w-full rounded-2xl bg-slate-900 px-3 py-2.5 text-xs font-semibold text-slate-100 ring-1 ring-slate-700 transition hover:bg-slate-900/70"
             >
-              {copyStatus === 'ok' ? 'Đã sao chép' : copyStatus === 'error' ? 'Sao chép lỗi' : 'Sao chép'}
+              Chạy tiến trình 1 trên ChatGPT
             </button>
           </div>
           </section>
         ) : null}
       </div>
 
-      <nav className="mt-3 grid grid-cols-4 gap-2 rounded-2xl bg-slate-800 p-2">
-        <button type="button" className="rounded-xl bg-violet-500/20 py-2 text-[11px] font-semibold text-violet-300">
-          📊 Khai thác
-        </button>
-        <button type="button" className="rounded-xl py-2 text-[11px] font-medium text-slate-400">
-          ✍️ Viết
-        </button>
-        <button type="button" className="rounded-xl py-2 text-[11px] font-medium text-slate-400">
-          📁 Kho
-        </button>
-        <button type="button" className="rounded-xl py-2 text-[11px] font-medium text-slate-400">
-          ⚙️ Cài đặt
-        </button>
-      </nav>
     </div>
   )
 }
