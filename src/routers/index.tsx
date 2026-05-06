@@ -67,7 +67,11 @@ function AppRouter() {
       activeTabId={activeRoute}
       onTabChange={(tabId) => setActiveRoute(tabId as Exclude<RouteId, 'login'>)}
     >
-      {routeContent[activeRoute]}
+      {(Object.keys(routeContent) as Array<Exclude<RouteId, 'login'>>).map((routeId) => (
+        <div key={routeId} className={activeRoute === routeId ? 'h-full' : 'hidden h-full'}>
+          {routeContent[routeId]}
+        </div>
+      ))}
     </ExtensionLayout>
   )
 }
