@@ -1,1 +1,31 @@
 @import "tailwindcss";
+
+:root {
+  --app-bg: #0a0a0a;
+  --app-surface: #111827;
+  --app-surface-soft: rgba(255, 255, 255, 0.06);
+  --app-border: rgba(255, 255, 255, 0.12);
+  --app-text: #ffffff;
+  --app-text-muted: #a3a3a3;
+  --app-primary: #60a5fa;
+  --app-primary-strong: #3b82f6;
+}
+
+html,
+body,
+#root {
+  background: var(--app-bg);
+  color: var(--app-text);
+}
+
+.glass-panel {
+  background: linear-gradient(225deg, rgba(255, 255, 255, 0) 0%, rgba(255, 255, 255, 0.05) 50%, rgba(255, 255, 255, 0) 100%);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(14px);
+}
+
+.primary-blue-btn {
+  background: linear-gradient(to right, #60a5fa, #60a5fa, #93c5fd);
+  color: #0f172a;
+  box-shadow: 0 8px 30px rgba(59, 130, 246, 0.25);
+}

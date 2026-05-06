@@ -315,9 +315,9 @@ export default function ChatgptScreen() {
   }, [])
 
   return (
-    <section className="rounded-3xl bg-slate-800 p-4">
+    <section className="glass-panel rounded-3xl p-4">
       <h2 className="text-sm font-semibold text-white">Quy trình ChatGPT</h2>
-      <p className="mt-1 text-[11px] text-slate-400">Nhấn từng tiến trình để tự động gửi prompt mẫu vào ChatGPT.</p>
+      <p className="mt-1 text-[11px] text-slate-400">Nhấn từng tiến trình để tự động điền prompt mẫu vào ChatGPT.</p>
 
       <div className="mt-3 grid grid-cols-2 gap-2">
         {PROCESS_STEPS.map((step) => (
@@ -325,14 +325,14 @@ export default function ChatgptScreen() {
             key={step.id}
             type="button"
             onClick={() => void runProcess(step)}
-            className="rounded-2xl bg-emerald-500/20 px-3 py-2.5 text-xs font-semibold text-emerald-200 transition hover:bg-emerald-500/30"
+            className="primary-blue-btn cursor-pointer rounded-2xl px-3 py-2.5 text-xs font-semibold transition hover:opacity-90"
           >
             {step.label}
           </button>
         ))}
       </div>
 
-      <p className="mt-3 rounded-xl bg-slate-900 px-3 py-2 text-[11px] text-slate-300">{status}</p>
+      <p className="mt-3 rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-[11px] text-slate-300">{status}</p>
     </section>
   )
 }

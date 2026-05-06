@@ -7,7 +7,7 @@ export default function BottomTabBar() {
         <button
           key={tab}
           type="button"
-          className={`rounded-lg px-2 py-2 text-xs font-medium ${
+          className={`cursor-pointer rounded-lg px-2 py-2 text-xs font-medium ${
             index === 0
               ? 'bg-white text-slate-900 shadow-sm'
               : 'text-slate-500 hover:bg-white/70'

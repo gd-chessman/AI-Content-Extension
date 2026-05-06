@@ -83,14 +83,14 @@ export default function ExtensionLayout({ children, bottomTabs = [], activeTabId
   }
 
   return (
-    <main className="relative flex h-[100dvh] w-full min-w-[390px] min-h-[620px] items-center justify-center bg-slate-950 p-2 text-slate-100">
+    <main className="relative flex h-[100dvh] w-full min-w-[390px] min-h-[620px] items-center justify-center bg-[var(--app-bg)] p-1.5 text-[var(--app-text)]">
       <button
         type="button"
         aria-label="Mở sidebar"
         title="Mở sidebar"
         onClick={openSidebar}
         disabled={isSidebarOpen}
-        className="absolute right-4 top-4 z-10 inline-flex h-9 w-9 items-center justify-center rounded-xl border border-violet-400/40 bg-violet-500/15 text-violet-200 backdrop-blur transition enabled:hover:bg-violet-500/25 disabled:cursor-not-allowed disabled:opacity-40"
+        className="absolute right-4 top-4 z-10 inline-flex h-9 w-9 cursor-pointer items-center justify-center rounded-xl border border-[var(--app-border)] bg-white/10 text-blue-300 backdrop-blur transition enabled:hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-40"
       >
         <svg
           viewBox="0 0 24 24"
@@ -105,10 +105,10 @@ export default function ExtensionLayout({ children, bottomTabs = [], activeTabId
         </svg>
       </button>
 
-      <section className="flex h-full w-full min-w-[390px] flex-col rounded-[28px] border border-slate-800 bg-slate-900/95 p-4 pt-14 shadow-2xl shadow-black/40">
+      <section className="glass-panel flex h-full w-full min-w-[390px] flex-col rounded-2xl p-4 pt-14 shadow-2xl shadow-black/40">
         <div className="min-h-0 flex-1">{children}</div>
         {bottomTabs.length > 0 ? (
-          <nav className="mt-3 grid grid-cols-5 gap-2 rounded-2xl bg-slate-800 p-2">
+          <nav className="mt-3 grid grid-cols-5 gap-2 rounded-2xl border border-white/10 bg-white/5 p-2 backdrop-blur">
             {bottomTabs.map((tab) => {
               const isActive = activeTabId === tab.id
 
@@ -117,8 +117,8 @@ export default function ExtensionLayout({ children, bottomTabs = [], activeTabId
                   key={tab.id}
                   type="button"
                   onClick={() => onTabChange?.(tab.id)}
-                  className={`rounded-xl py-1.5 transition ${
-                    isActive ? 'bg-violet-500/20 text-violet-300' : 'text-slate-400 hover:bg-slate-700/60'
+                  className={`cursor-pointer rounded-xl py-1.5 transition ${
+                    isActive ? 'bg-blue-500/20 text-blue-300' : 'text-slate-400 hover:bg-white/10'
                   }`}
                 >
                   <span className="flex flex-col items-center justify-center gap-0.5">

@@ -35,7 +35,7 @@ export default function LoginScreen() {
 
         <button
           type="button"
-          className="w-full rounded-2xl bg-indigo-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-indigo-700"
+          className="w-full cursor-pointer rounded-2xl bg-indigo-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-indigo-700"
         >
           Đăng nhập
         </button>

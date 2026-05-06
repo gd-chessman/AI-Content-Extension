@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { FiSearch } from 'react-icons/fi'
+import { SiOpenai } from 'react-icons/si'
 
 type ScannedReel = {
   id: string
@@ -717,20 +719,20 @@ export default function FacebookScreen() {
           </div>
           <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Facebook</p>
         </div>
-        <button type="button" className="rounded-xl bg-slate-800 px-3 py-1.5 text-xs font-medium text-slate-200">
+        <button type="button" className="cursor-pointer rounded-xl border border-white/10 bg-white/10 px-3 py-1.5 text-xs font-medium text-slate-200 backdrop-blur">
           Hôm nay
         </button>
       </header>
 
-      <section className="mb-3 rounded-2xl bg-slate-800 p-1.5">
+      <section className="mb-3 rounded-2xl border border-white/10 bg-white/5 p-1.5 backdrop-blur">
         <div className="grid grid-cols-3 gap-1.5">
           <button
             type="button"
             onClick={() => setActiveView('fanpages')}
-            className={`rounded-xl px-2 py-2 text-xs font-semibold ${
+            className={`cursor-pointer rounded-xl px-2 py-2 text-xs font-semibold transition ${
               activeView === 'fanpages'
-                ? 'bg-violet-500 text-white'
-                : 'bg-transparent text-slate-400'
+                ? 'primary-blue-btn'
+                : 'bg-transparent text-slate-400 hover:bg-white/10'
             }`}
           >
             Trang
@@ -738,10 +740,10 @@ export default function FacebookScreen() {
           <button
             type="button"
             onClick={() => setActiveView('reels')}
-            className={`rounded-xl px-2 py-2 text-xs font-semibold ${
+            className={`cursor-pointer rounded-xl px-2 py-2 text-xs font-semibold transition ${
               activeView === 'reels'
-                ? 'bg-violet-500 text-white'
-                : 'bg-transparent text-slate-400'
+                ? 'primary-blue-btn'
+                : 'bg-transparent text-slate-400 hover:bg-white/10'
             }`}
           >
             Reels
@@ -749,10 +751,10 @@ export default function FacebookScreen() {
           <button
             type="button"
             onClick={() => setActiveView('content')}
-            className={`rounded-xl px-2 py-2 text-xs font-semibold ${
+            className={`cursor-pointer rounded-xl px-2 py-2 text-xs font-semibold transition ${
               activeView === 'content'
-                ? 'bg-violet-500 text-white'
-                : 'bg-transparent text-slate-400'
+                ? 'primary-blue-btn'
+                : 'bg-transparent text-slate-400 hover:bg-white/10'
             }`}
           >
             Chi tiết Reel
@@ -762,7 +764,7 @@ export default function FacebookScreen() {
 
       <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
         {activeView === 'fanpages' ? (
-          <section className="rounded-3xl bg-slate-800 p-3">
+          <section className="glass-panel rounded-3xl p-3">
           <h2 className="text-sm font-semibold text-white">Fanpage nguồn</h2>
           <div className="mt-2 space-y-2">
             {fanpages.map((page) => (
@@ -771,10 +773,10 @@ export default function FacebookScreen() {
                 type="button"
                 onClick={() => openFanpage(page.url)}
                 disabled={openedFacebookUrls.has(normalizeUrl(page.url))}
-                className={`flex w-full items-center justify-between rounded-2xl px-3 py-3 text-left disabled:cursor-default ${
+                className={`flex w-full cursor-pointer items-center justify-between rounded-2xl px-3 py-3 text-left disabled:cursor-default ${
                   openedFacebookUrls.has(normalizeUrl(page.url))
                     ? 'border border-emerald-500/40 bg-emerald-500/10'
-                    : 'bg-slate-900'
+                    : 'border border-blue-300/20 bg-blue-400/10 hover:bg-blue-400/15'
                 }`}
               >
                 <div>
@@ -786,7 +788,7 @@ export default function FacebookScreen() {
                     Đang mở
                   </span>
                 ) : (
-                  <span className="rounded-lg bg-violet-500/20 px-2 py-1 text-[10px] font-semibold text-violet-300">
+                  <span className="rounded-lg bg-blue-500/20 px-2 py-1 text-[10px] font-semibold text-blue-300">
                     Chọn
                   </span>
                 )}
@@ -798,37 +800,40 @@ export default function FacebookScreen() {
 
         {activeView === 'reels' ? (
           <>
-          <section className="rounded-3xl bg-slate-800 p-3">
+          <section className="glass-panel rounded-3xl p-3">
             <h2 className="text-sm font-semibold text-white">Bộ lọc tìm reels</h2>
             <div className="mt-2 space-y-2">
               <input
                 type="text"
                 placeholder="Từ khóa: làm đẹp, bán hàng..."
-                className="w-full rounded-2xl bg-slate-900 px-3 py-2.5 text-xs text-slate-100 outline-none placeholder:text-slate-500 focus:ring-2 focus:ring-violet-400/30"
+                className="w-full rounded-2xl bg-slate-900/90 px-3 py-2.5 text-xs text-slate-100 outline-none placeholder:text-slate-500 focus:ring-2 focus:ring-blue-400/30"
               />
               <input
                 type="text"
                 placeholder="Lượt xem tối thiểu: 100000"
                 value={minViewInput}
                 onChange={(event) => setMinViewInput(event.target.value)}
-                className="w-full rounded-2xl bg-slate-900 px-3 py-2.5 text-xs text-slate-100 outline-none placeholder:text-slate-500 focus:ring-2 focus:ring-violet-400/30"
+                className="w-full rounded-2xl bg-slate-900/90 px-3 py-2.5 text-xs text-slate-100 outline-none placeholder:text-slate-500 focus:ring-2 focus:ring-blue-400/30"
               />
               <button
                 type="button"
                 onClick={handleScanReels}
-                className="w-full rounded-2xl bg-violet-500 px-3 py-2.5 text-xs font-semibold text-white"
+                className="primary-blue-btn w-full cursor-pointer rounded-2xl px-3 py-2.5 text-xs font-semibold transition hover:opacity-90"
               >
-                Quét reels ngay
+                <span className="inline-flex items-center gap-1.5">
+                  <FiSearch aria-hidden="true" className="h-3.5 w-3.5" />
+                  Quét reels ngay
+                </span>
               </button>
               {scanStatus ? <p className="text-[11px] text-slate-400">{scanStatus}</p> : null}
             </div>
           </section>
 
-            <section className="rounded-3xl bg-slate-800 p-3">
+            <section className="glass-panel rounded-3xl p-3">
             <h2 className="text-sm font-semibold text-white">Danh sách reels</h2>
               <div className="mt-2 space-y-2">
               {scannedReels.map((reel) => (
-                <article key={reel.id} className="rounded-2xl bg-slate-900 p-3">
+                <article key={reel.id} className="rounded-2xl border border-blue-300/20 bg-blue-400/10 p-3">
                   <div className="flex gap-2">
                     {reel.imageUrl ? (
                       <img
@@ -837,7 +842,7 @@ export default function FacebookScreen() {
                         className="h-14 w-14 shrink-0 rounded-lg object-cover"
                       />
                     ) : (
-                      <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-lg bg-slate-800 text-[10px] text-slate-500">
+                      <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-lg bg-blue-500/10 text-[10px] text-slate-500">
                         No image
                       </div>
                     )}
@@ -852,7 +857,7 @@ export default function FacebookScreen() {
                     <button
                       type="button"
                       onClick={() => handleSelectReel(reel)}
-                      className="rounded-lg bg-violet-500/20 px-2 py-1 text-[10px] font-semibold text-violet-300 transition hover:bg-violet-500/25"
+                      className="cursor-pointer rounded-lg bg-blue-500/20 px-2 py-1 text-[10px] font-semibold text-blue-300 transition hover:bg-blue-500/25"
                     >
                       Chọn
                     </button>
@@ -860,7 +865,7 @@ export default function FacebookScreen() {
                 </article>
               ))}
               {scannedReels.length === 0 ? (
-                <p className="rounded-xl bg-slate-900 px-3 py-2 text-[11px] text-slate-500">
+                <p className="rounded-xl border border-blue-300/20 bg-blue-400/10 px-3 py-2 text-[11px] text-slate-500">
                   Chưa có dữ liệu. Nhấn "Quét reels ngay" để lấy tối đa {MAX_SCAN_RESULTS} video theo ngưỡng lượt xem hiện tại.
                 </p>
               ) : null}
@@ -870,10 +875,10 @@ export default function FacebookScreen() {
         ) : null}
 
         {activeView === 'content' ? (
-          <section className="rounded-3xl bg-slate-800 p-3">
+          <section className="glass-panel rounded-3xl p-3">
           <h2 className="text-sm font-semibold text-white">Chi tiết Reels</h2>
           {selectedReel ? (
-            <div className="mt-2 rounded-2xl border border-slate-700 bg-slate-900/30 p-3">
+            <div className="mt-2 rounded-2xl border border-blue-300/20 bg-blue-400/10 p-3">
               <div className="flex gap-3">
                 {selectedReel.imageUrl ? (
                   <img
@@ -882,7 +887,7 @@ export default function FacebookScreen() {
                     className="h-16 w-16 rounded-xl object-cover"
                   />
                 ) : (
-                  <div className="flex h-16 w-16 items-center justify-center rounded-xl bg-slate-800 text-[10px] text-slate-500">
+                  <div className="flex h-16 w-16 items-center justify-center rounded-xl bg-blue-500/10 text-[10px] text-slate-500">
                     No image
                   </div>
                 )}
@@ -893,7 +898,7 @@ export default function FacebookScreen() {
                     href={selectedReel.url}
                     target="_blank"
                     rel="noreferrer"
-                    className="mt-1 block truncate text-[10px] text-violet-300"
+                    className="mt-1 block truncate text-[10px] text-blue-300"
                     title={selectedReel.url}
                   >
                     {selectedReel.url}
@@ -902,7 +907,7 @@ export default function FacebookScreen() {
               </div>
             </div>
           ) : (
-            <p className="mt-2 rounded-xl bg-slate-900 px-3 py-2 text-[11px] text-slate-500">Chưa chọn reels nào.</p>
+            <p className="mt-2 rounded-xl border border-blue-300/20 bg-blue-400/10 px-3 py-2 text-[11px] text-slate-500">Chưa chọn reels nào.</p>
           )}
           <div className="relative mt-2">
             <textarea
@@ -912,7 +917,7 @@ export default function FacebookScreen() {
                 setContentText(event.target.value)
                 setIsContentDirty(true)
               }}
-              className="h-44 w-full resize-none rounded-2xl bg-slate-900 px-3 py-2.5 pr-11 text-xs text-slate-100 outline-none placeholder:text-slate-500 focus:ring-2 focus:ring-violet-400/30"
+              className="h-44 w-full resize-none rounded-2xl bg-slate-900/90 px-3 py-2.5 pr-11 text-xs text-slate-100 outline-none placeholder:text-slate-500 focus:ring-2 focus:ring-blue-400/30"
             />
             <button
               type="button"
@@ -926,7 +931,7 @@ export default function FacebookScreen() {
                     ? 'Sao chép lỗi'
                     : 'Sao chép'
               }
-              className="absolute bottom-2 right-2 inline-flex h-8 w-8 items-center justify-center rounded-lg bg-violet-500 text-sm text-white transition hover:bg-violet-600 disabled:cursor-not-allowed disabled:opacity-40"
+              className="absolute bottom-2 right-2 inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg bg-blue-500 text-sm text-white transition hover:bg-blue-600 disabled:cursor-not-allowed disabled:opacity-40"
             >
               {copyStatus === 'ok' ? '✓' : '⧉'}
             </button>
@@ -936,9 +941,12 @@ export default function FacebookScreen() {
               type="button"
               onClick={runStep1OnChatgpt}
               disabled={!contentText.trim()}
-              className="w-full rounded-2xl bg-slate-900 px-3 py-2.5 text-xs font-semibold text-slate-100 ring-1 ring-slate-700 transition hover:bg-slate-900/70"
+              className="primary-blue-btn w-full cursor-pointer rounded-2xl px-3 py-2.5 text-xs font-semibold transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
             >
-              Chạy tiến trình 1 trên ChatGPT
+              <span className="inline-flex items-center gap-1.5">
+                <SiOpenai aria-hidden="true" className="h-3.5 w-3.5" />
+                Chạy tiến trình 1 trên ChatGPT
+              </span>
             </button>
           </div>
           </section>
