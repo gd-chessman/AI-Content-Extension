@@ -86,13 +86,13 @@ const fanpages = [
   },
   {
     id: 'fp-12',
-    name: 'Profile 61579479232452',
-    url: 'https://www.facebook.com/profile.php?id=61579479232452&sk=reels_tab',
+    name: 'Real US Stories',
+    url: 'https://www.facebook.com/profile.php?id=61579479232452',
   },
   {
     id: 'fp-13',
-    name: 'Profile 61588320100559',
-    url: 'https://www.facebook.com/profile.php?id=61588320100559&sk=reels_tab',
+    name: 'Story Makers',
+    url: 'https://www.facebook.com/profile.php?id=61588320100559',
   },
   {
     id: 'fp-14',
@@ -108,6 +108,76 @@ const fanpages = [
     id: 'fp-16',
     name: 'Profile 61584657914140',
     url: 'https://www.facebook.com/profile.php?id=61584657914140&sk=reels_tab',
+  },
+  {
+    id: 'fp-17',
+    name: 'Life’s Soft Corners',
+    url: 'https://www.facebook.com/profile.php?id=61569738030637',
+  },
+  {
+    id: 'fp-18',
+    name: 'Jobs Day',
+    url: 'https://www.facebook.com/profile.php?id=61572370626218',
+  },
+  {
+    id: 'fp-19',
+    name: 'Historias interesantes',
+    url: 'https://www.facebook.com/profile.php?id=61573236719024',
+  },
+  {
+    id: 'fp-20',
+    name: 'Stay Strong',
+    url: 'https://www.facebook.com/profile.php?id=100076971480617',
+  },
+  {
+    id: 'fp-21',
+    name: 'Macey Twists',
+    url: 'https://www.facebook.com/profile.php?id=61569262584357',
+  },
+  {
+    id: 'fp-22',
+    name: 'US Fulls',
+    url: 'https://www.facebook.com/profile.php?id=61572113256252',
+  },
+  {
+    id: 'fp-23',
+    name: 'Stories You Felt',
+    url: 'https://www.facebook.com/profile.php?id=61572370886595',
+  },
+  {
+    id: 'fp-24',
+    name: 'Life Stories',
+    url: 'https://www.facebook.com/profile.php?id=61582198786094',
+  },
+  {
+    id: 'fp-25',
+    name: 'He Said One Thing',
+    url: 'https://www.facebook.com/profile.php?id=61570806537498',
+  },
+  {
+    id: 'fp-26',
+    name: 'YoungWay',
+    url: 'https://www.facebook.com/profile.php?id=61572346863816',
+  },
+  {
+    id: 'fp-27',
+    name: '2T For Life',
+    url: 'https://www.facebook.com/profile.php?id=61570818320633',
+  },
+  {
+    id: 'fp-28',
+    name: '4T for LIFE',
+    url: 'https://www.facebook.com/profile.php?id=61566282316440',
+  },
+  {
+    id: 'fp-29',
+    name: 'Mystery Life Tales',
+    url: 'https://www.facebook.com/profile.php?id=61582428256985',
+  },
+  {
+    id: 'fp-30',
+    name: 'Stories Shape Life',
+    url: 'https://www.facebook.com/profile.php?id=61586700770655',
   },
 ]
 
