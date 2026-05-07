@@ -125,6 +125,11 @@ const fanpages = [
 
 const MIN_VIEW_COUNT = 500_000
 const MAX_SCAN_RESULTS = 5
+const formatViewInput = (value: string) => {
+  const digits = value.replace(/[^\d]/g, '')
+  if (!digits) return ''
+  return Number(digits).toLocaleString('en-US')
+}
 
 export default function FacebookScreen() {
   const [activeView, setActiveView] = useState<'fanpages' | 'reels' | 'content'>('fanpages')
@@ -132,10 +137,12 @@ export default function FacebookScreen() {
   const [scannedReels, setScannedReels] = useState<ScannedReel[]>([])
   const [scanStatus, setScanStatus] = useState('')
   const [minViewInput, setMinViewInput] = useState(String(MIN_VIEW_COUNT))
+  const [maxViewInput, setMaxViewInput] = useState('')
   const [selectedReel, setSelectedReel] = useState<ScannedReel | null>(null)
   const [contentText, setContentText] = useState('')
   const [copyStatus, setCopyStatus] = useState<'idle' | 'ok' | 'error'>('idle')
   const [isContentDirty, setIsContentDirty] = useState(false)
+  const [reelLinkInput, setReelLinkInput] = useState('')
   const isContentDirtyRef = useRef(false)
 
   useEffect(() => {
@@ -239,6 +246,45 @@ export default function FacebookScreen() {
     window.setTimeout(() => {
       refreshSelectedReelFromFacebook(reel)
     }, 1300)
+  }
+
+  const handleSelectReelByLink = () => {
+    const raw = reelLinkInput.trim()
+    if (!raw) return
+
+    let normalizedLink = raw
+    try {
+      normalizedLink = new URL(raw).toString()
+    } catch {
+      setScanStatus('Link chưa hợp lệ. Hãy dán đúng URL reel Facebook.')
+      return
+    }
+
+    const normalizedTarget = normalizeUrl(normalizedLink)
+    const reelId = normalizedTarget.match(/\/reel\/(\d+)/)?.[1] || normalizedTarget.match(/[?&]reel_id=(\d+)/)?.[1] || ''
+
+    const matchByUrl = scannedReels.find((item) => normalizeUrl(item.url) === normalizedTarget)
+    const matchById = !matchByUrl && reelId ? scannedReels.find((item) => item.url.includes(reelId)) : null
+    const matched = matchByUrl || matchById
+
+    if (matched) {
+      handleSelectReel(matched)
+      setScanStatus('Đã chọn reel theo link từ danh sách đã quét.')
+      return
+    }
+
+    const fallbackReel: ScannedReel = {
+      id: normalizedTarget,
+      title: 'Reel từ link',
+      description: '',
+      views: '',
+      viewCount: 0,
+      url: normalizedTarget,
+      imageUrl: '',
+    }
+
+    handleSelectReel(fallbackReel)
+    setScanStatus('Đã chọn reel theo link (không nằm trong danh sách đã quét).')
   }
 
   const copyContent = async () => {
@@ -461,13 +507,21 @@ export default function FacebookScreen() {
   const handleScanReels = () => {
     const extensionChrome = (globalThis as { chrome?: ExtensionChrome }).chrome
     const minViewCount = Number(minViewInput.replace(/[^\d]/g, '')) || MIN_VIEW_COUNT
+    const parsedMaxView = Number(maxViewInput.replace(/[^\d]/g, ''))
+    const maxViewCount = Number.isFinite(parsedMaxView) && parsedMaxView > 0 ? parsedMaxView : Number.POSITIVE_INFINITY
 
     if (!extensionChrome?.tabs?.query || !extensionChrome?.scripting?.executeScript) {
       setScanStatus('Không thể quét trong môi trường hiện tại.')
       return
     }
 
-    setScanStatus('Đang quét reels — extension sẽ cuộn trang để tải thêm video nếu cần...')
+    if (maxViewCount < minViewCount) {
+      setScanStatus('Giá trị max phải lớn hơn hoặc bằng min.')
+      setScannedReels([])
+      return
+    }
+
+    setScanStatus('Đang quét reels theo khoảng lượt xem — extension sẽ cuộn trang để tải thêm video nếu cần...')
     extensionChrome.tabs.query({ url: ['*://*.facebook.com/*'], active: true, currentWindow: true }, async (activeTabs) => {
       const targetTab = activeTabs[0]
 
@@ -511,7 +565,7 @@ export default function FacebookScreen() {
       try {
         const result = await extensionChrome.scripting?.executeScript?.({
           target: { tabId: targetTab.id },
-          func: (async (minViews: number, limit: number) => {
+          func: (async (minViews: number, maxViews: number, limit: number) => {
             const normalizeNumber = (raw: string) => raw.replace(/\./g, '').replace(',', '.')
 
             const parseViewCount = (text: string) => {
@@ -615,7 +669,7 @@ export default function FacebookScreen() {
                 if (!text) return
 
                 const viewCount = parseViewCount(text)
-                if (!viewCount || viewCount < minViews) return
+                if (!viewCount || viewCount < minViews || viewCount > maxViews) return
 
                 const title =
                   (anchor.getAttribute('aria-label') || text.split('\n').find((line) => line.trim().length > 0) || 'Reel')
@@ -699,15 +753,19 @@ export default function FacebookScreen() {
               .sort((a, b) => b.viewCount - a.viewCount)
               .slice(0, limit)
           }) as (...args: unknown[]) => unknown,
-          args: [minViewCount, MAX_SCAN_RESULTS],
+          args: [minViewCount, maxViewCount, MAX_SCAN_RESULTS],
         })
 
         const reels = (result?.[0]?.result as ScannedReel[] | undefined) || []
         setScannedReels(reels)
+        const rangeLabel =
+          Number.isFinite(maxViewCount) && maxViewCount !== Number.POSITIVE_INFINITY
+            ? `${minViewCount.toLocaleString('en-US')} - ${maxViewCount.toLocaleString('en-US')}`
+            : `>= ${minViewCount.toLocaleString('en-US')}`
         setScanStatus(
           reels.length > 0
-            ? `Đã quét được ${reels.length} video trên ${minViewCount.toLocaleString('en-US')} lượt xem.`
-            : `Không tìm thấy video nào trên ${minViewCount.toLocaleString('en-US')} lượt xem.`,
+            ? `Đã quét được ${reels.length} video trong khoảng ${rangeLabel} lượt xem.`
+            : `Không tìm thấy video nào trong khoảng ${rangeLabel} lượt xem.`,
         )
       } catch {
         setScanStatus('Quét thất bại. Hãy mở đúng trang reels của fanpage rồi thử lại.')
@@ -818,13 +876,22 @@ export default function FacebookScreen() {
                 placeholder="Từ khóa: làm đẹp, bán hàng..."
                 className="w-full rounded-2xl bg-slate-900/90 px-3 py-2.5 text-xs text-slate-100 outline-none placeholder:text-slate-500 focus:ring-2 focus:ring-blue-400/30"
               />
-              <input
-                type="text"
-                placeholder="Lượt xem tối thiểu: 100000"
-                value={minViewInput}
-                onChange={(event) => setMinViewInput(event.target.value)}
-                className="w-full rounded-2xl bg-slate-900/90 px-3 py-2.5 text-xs text-slate-100 outline-none placeholder:text-slate-500 focus:ring-2 focus:ring-blue-400/30"
-              />
+              <div className="grid grid-cols-2 gap-2">
+                <input
+                  type="text"
+                  placeholder="Tối thiểu: 100,000"
+                  value={minViewInput}
+                  onChange={(event) => setMinViewInput(formatViewInput(event.target.value))}
+                  className="w-full rounded-2xl bg-slate-900/90 px-3 py-2.5 text-xs text-slate-100 outline-none placeholder:text-slate-500 focus:ring-2 focus:ring-blue-400/30"
+                />
+                <input
+                  type="text"
+                  placeholder="Tối đa: 5,000,000"
+                  value={maxViewInput}
+                  onChange={(event) => setMaxViewInput(formatViewInput(event.target.value))}
+                  className="w-full rounded-2xl bg-slate-900/90 px-3 py-2.5 text-xs text-slate-100 outline-none placeholder:text-slate-500 focus:ring-2 focus:ring-blue-400/30"
+                />
+              </div>
               <button
                 type="button"
                 onClick={handleScanReels}
@@ -835,6 +902,23 @@ export default function FacebookScreen() {
                   Quét reels ngay
                 </span>
               </button>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  placeholder="Dán link reel để chọn nhanh"
+                  value={reelLinkInput}
+                  onChange={(event) => setReelLinkInput(event.target.value)}
+                  className="w-full rounded-2xl bg-slate-900/90 px-3 py-2.5 text-xs text-slate-100 outline-none placeholder:text-slate-500 focus:ring-2 focus:ring-blue-400/30"
+                />
+                <button
+                  type="button"
+                  onClick={handleSelectReelByLink}
+                  disabled={!reelLinkInput.trim()}
+                  className="cursor-pointer whitespace-nowrap rounded-2xl bg-blue-500/20 px-3 py-2.5 text-xs font-semibold text-blue-200 transition hover:bg-blue-500/30 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Chọn link
+                </button>
+              </div>
               {scanStatus ? <p className="text-[11px] text-slate-400">{scanStatus}</p> : null}
             </div>
           </section>
