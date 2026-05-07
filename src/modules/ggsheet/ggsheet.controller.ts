@@ -5,24 +5,24 @@ import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
 import { JwtPayload } from '../auth/jwt.strategy';
 import { UserRole } from '../users/users.schema';
-import { UpdateSettingsDto } from './settings.dto';
-import { SettingsService } from './settings.service';
+import { UpdateGgSheetDto } from './ggsheet.dto';
+import { GgSheetService } from './ggsheet.service';
 
-@Controller('settings')
+@Controller('ggsheet')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(UserRole.USER)
-export class SettingsController {
-  constructor(private readonly settingsService: SettingsService) {}
+export class GgSheetController {
+  constructor(private readonly ggSheetService: GgSheetService) {}
 
   @Get('me')
-  getMySettings(@Req() req: Request) {
+  getMySetting(@Req() req: Request) {
     const user = req.user as JwtPayload;
-    return this.settingsService.getMySettings(user.sub);
+    return this.ggSheetService.getMySetting(user.sub);
   }
 
   @Patch('me')
-  updateMySettings(@Req() req: Request, @Body() dto: UpdateSettingsDto) {
+  updateMySetting(@Req() req: Request, @Body() dto: UpdateGgSheetDto) {
     const user = req.user as JwtPayload;
-    return this.settingsService.updateMySettings(user.sub, dto);
+    return this.ggSheetService.updateMySetting(user.sub, dto);
   }
 }

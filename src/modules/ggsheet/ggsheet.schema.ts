@@ -1,18 +1,15 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Types } from 'mongoose';
 
-export type SettingDocument = HydratedDocument<Setting>;
+export type GgSheetSettingDocument = HydratedDocument<GgSheetSetting>;
 
 @Schema({ timestamps: true })
-export class Setting {
+export class GgSheetSetting {
   @Prop({ type: Types.ObjectId, required: true, unique: true, index: true })
   userId: Types.ObjectId;
-
-  @Prop({ default: '' })
-  adminPath: string;
 
   @Prop({ default: '' })
   ggSheetPath: string;
 }
 
-export const SettingSchema = SchemaFactory.createForClass(Setting);
+export const GgSheetSettingSchema = SchemaFactory.createForClass(GgSheetSetting);

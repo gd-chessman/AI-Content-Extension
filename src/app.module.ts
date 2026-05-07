@@ -10,7 +10,8 @@ import { SharedModule } from './shared/shared.module';
 import { UsersModule } from './modules/users/users.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { FanpagesModule } from './modules/fanpages/fanpages.module';
-import { SettingsModule } from './modules/settings/settings.module';
+import { WebBlogModule } from './modules/webblog/webblog.module';
+import { GgSheetModule } from './modules/ggsheet/ggsheet.module';
 
 @Module({
   imports: [
@@ -24,7 +25,8 @@ import { SettingsModule } from './modules/settings/settings.module';
     UsersModule,
     AuthModule,
     FanpagesModule,
-    SettingsModule,
+    WebBlogModule,
+    GgSheetModule,
   ],
   controllers: [AppController],
   providers: [AppService]
