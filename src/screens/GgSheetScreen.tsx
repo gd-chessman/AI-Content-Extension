@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { FiAlertTriangle, FiCheck, FiDownload, FiInfo, FiSave, FiSend } from 'react-icons/fi'
 
 type BrowserTab = { id?: number; url?: string; active?: boolean }
@@ -446,6 +446,14 @@ export default function GgSheetScreen() {
           : `Gom xong nhưng ghi lên GG Sheet thất bại${writeResult.failedColumns.length ? ` ở cột ${writeResult.failedColumns.join(', ')}` : ''}.`,
     )
   }
+
+  useEffect(() => {
+    const onCollectFromChatgpt = () => {
+      void collectFromChatgpt()
+    }
+    window.addEventListener('run-ggsheet-collect-from-chatgpt', onCollectFromChatgpt as EventListener)
+    return () => window.removeEventListener('run-ggsheet-collect-from-chatgpt', onCollectFromChatgpt as EventListener)
+  }, [])
 
   return (
     <section className="flex h-full flex-col gap-2 rounded-2xl border border-white/10 bg-black/25 p-3">

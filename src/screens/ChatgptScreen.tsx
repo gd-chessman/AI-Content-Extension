@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
-import { FiAlignLeft, FiAlertTriangle, FiCheck, FiCopy, FiEdit3, FiFileText, FiFilm, FiImage, FiInfo, FiItalic, FiScissors, FiType } from 'react-icons/fi'
+import { FiAlignLeft, FiAlertTriangle, FiCheck, FiCopy, FiDownload, FiEdit3, FiFileText, FiFilm, FiImage, FiInfo, FiItalic, FiScissors, FiType } from 'react-icons/fi'
 import { IoFlash } from 'react-icons/io5'
 import { RiAdminFill } from 'react-icons/ri'
-import { SiX } from 'react-icons/si'
+import { SiGooglesheets, SiX } from 'react-icons/si'
 
 type BrowserTab = { id?: number; url?: string; active?: boolean }
 type ExtensionChrome = {
@@ -1215,6 +1215,14 @@ export default function ChatgptScreen() {
     setStatus('Đã gửi dữ liệu sang WebAdmin (tiêu đề + nội dung dài có chèn ảnh 1/2).')
   }
 
+  const runGgSheetCollectTool = () => {
+    window.dispatchEvent(new CustomEvent('switch-main-tab', { detail: { tabId: 'ggsheet' } }))
+    window.setTimeout(() => {
+      window.dispatchEvent(new CustomEvent('run-ggsheet-collect-from-chatgpt'))
+    }, 120)
+    setStatus('Đã chuyển sang GGSheet và bắt đầu gom dữ liệu từ ChatGPT.')
+  }
+
   const extractAndSplitLatestImageFromStep3 = async () => {
     const extensionChrome = getChrome()
     if (!extensionChrome?.tabs?.query || !extensionChrome.scripting?.executeScript || !extensionChrome.tabs.captureVisibleTab) {
@@ -1575,7 +1583,7 @@ export default function ChatgptScreen() {
         </aside>
       </div>
       <div className="mt-3 rounded-2xl border border-white/10 bg-black/30 p-2">
-        <div className="grid grid-cols-3 gap-1.5 sm:grid-cols-6">
+        <div className="grid grid-cols-4 gap-1.5 sm:grid-cols-8">
         <button
           type="button"
           onClick={() => void fillGrokWithVideoImage(1)}
@@ -1613,6 +1621,17 @@ export default function ChatgptScreen() {
           <span className="relative inline-flex items-center justify-center gap-1">
             <RiAdminFill className="h-3 w-3" />
             <FiFileText className="h-3 w-3" />
+          </span>
+        </button>
+        <button
+          type="button"
+          onClick={runGgSheetCollectTool}
+          className="inline-flex h-8 cursor-pointer items-center justify-center rounded-lg bg-green-500/20 px-2 text-green-100 transition hover:bg-green-500/30"
+          title="Gom dữ liệu GGSheet từ ChatGPT"
+        >
+          <span className="relative inline-flex items-center justify-center gap-1">
+            <SiGooglesheets className="h-3 w-3" />
+            <FiDownload className="h-3 w-3" />
           </span>
         </button>
         </div>
