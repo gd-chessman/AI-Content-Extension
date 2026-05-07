@@ -28,9 +28,10 @@ type ExtensionLayoutProps = {
   }>
   activeTabId?: string
   onTabChange?: (tabId: string) => void
+  onProfileClick?: () => void
 }
 
-export default function ExtensionLayout({ children, bottomTabs = [], activeTabId, onTabChange }: ExtensionLayoutProps) {
+export default function ExtensionLayout({ children, bottomTabs = [], activeTabId, onTabChange, onProfileClick }: ExtensionLayoutProps) {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false)
 
   useEffect(() => {
@@ -84,6 +85,26 @@ export default function ExtensionLayout({ children, bottomTabs = [], activeTabId
 
   return (
     <main className="relative flex h-[100dvh] w-full min-w-[390px] min-h-[620px] items-center justify-center bg-[var(--app-bg)] p-1.5 text-[var(--app-text)]">
+      <button
+        type="button"
+        aria-label="Hồ sơ"
+        title="Hồ sơ"
+        onClick={onProfileClick}
+        className="absolute left-4 top-4 z-10 inline-flex h-9 w-9 cursor-pointer items-center justify-center rounded-full border border-[var(--app-border)] bg-white/10 text-slate-300 backdrop-blur transition hover:bg-white/20 active:border-blue-400 active:shadow-[0_0_0_2px_rgba(59,130,246,0.35)]"
+      >
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          className="h-4 w-4"
+          aria-hidden="true"
+        >
+          <circle cx="12" cy="8" r="3.2" />
+          <path d="M5.5 19c1.8-3 4-4.3 6.5-4.3S16.7 16 18.5 19" />
+        </svg>
+      </button>
+
       <button
         type="button"
         aria-label="Mở sidebar"

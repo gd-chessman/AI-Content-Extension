@@ -8,9 +8,10 @@ import FacebookScreen from '../screens/FacebookScreen'
 import GgSheetScreen from '../screens/GgSheetScreen'
 import GrokScreen from '../screens/GrokScreen'
 import LoginScreen from '../screens/LoginScreen'
+import ProfileScreen from '../screens/ProfileScreen'
 import WebAdminScreen from '../screens/WebAdminScreen'
 
-type RouteId = 'login' | 'facebook' | 'chatgpt' | 'grok' | 'webadmin' | 'ggsheet'
+type RouteId = 'login' | 'profile' | 'facebook' | 'chatgpt' | 'grok' | 'webadmin' | 'ggsheet'
 type BrowserTab = { id?: number; url?: string; active?: boolean }
 type ExtensionChrome = {
   tabs?: {
@@ -24,7 +25,7 @@ type ExtensionChrome = {
 }
 
 const mainTabs: Array<{
-  id: Exclude<RouteId, 'login'>
+  id: Exclude<RouteId, 'login' | 'profile'>
   label: string
   icon: ReactNode
   iconClassName: string
@@ -83,6 +84,7 @@ function AppRouter() {
   }
 
   const routeContent: Record<Exclude<RouteId, 'login'>, ReactNode> = {
+    profile: <ProfileScreen />,
     facebook: <FacebookScreen />,
     chatgpt: <ChatgptScreen />,
     grok: <GrokScreen />,
@@ -94,10 +96,13 @@ function AppRouter() {
     <ExtensionLayout
       bottomTabs={mainTabs}
       activeTabId={activeRoute}
+      onProfileClick={() => setActiveRoute('profile')}
       onTabChange={(tabId) => {
         const routeId = tabId as Exclude<RouteId, 'login'>
         setActiveRoute(routeId)
-        syncBrowserTabByRoute(routeId)
+        if (routeId !== 'profile') {
+          syncBrowserTabByRoute(routeId)
+        }
       }}
     >
       {(Object.keys(routeContent) as Array<Exclude<RouteId, 'login'>>).map((routeId) => (
