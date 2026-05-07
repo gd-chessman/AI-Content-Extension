@@ -842,15 +842,6 @@ export default function FacebookScreen() {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <header className="mb-3 flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <div className="flex h-9 w-9 items-center justify-center rounded-2xl bg-blue-500 text-base font-bold text-white shadow-lg shadow-blue-900/30">
-            f
-          </div>
-          <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Facebook</p>
-        </div>
-      </header>
-
       <section className="mb-3 rounded-2xl border border-white/10 bg-white/5 p-1.5 backdrop-blur">
         <div className="grid grid-cols-3 gap-1.5">
           <button

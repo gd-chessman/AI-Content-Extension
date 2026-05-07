@@ -1,13 +1,13 @@
 {
   "manifest_version": 3,
-  "name": "AI Content Extension",
+  "name": "AI Content Extension - LE VAN QUY",
   "description": "Chrome extension UI for Facebook, ChatGPT, Grok, Admin, and Excel workflows.",
   "version": "0.1.0",
   "background": {
     "service_worker": "background.js"
   },
   "action": {
-    "default_title": "AI Content Extension",
+    "default_title": "AI Content Extension - LE VAN QUY",
     "default_popup": "index.html"
   },
   "side_panel": {
