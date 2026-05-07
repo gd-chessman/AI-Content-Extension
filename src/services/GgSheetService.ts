@@ -4,6 +4,20 @@ export type GgSheetSetting = {
   ggSheetPath?: string
 }
 
+export type GgSheetPushPayload = {
+  title?: string
+  shortContent?: string
+  fullContent?: string
+}
+
+export type GgSheetPushPreview = {
+  sheetId: string
+  targetRow: number
+  targetRange: string
+  sheetUrl: string
+  data: Required<GgSheetPushPayload>
+}
+
 const GGSHEET_CACHE_KEY = 'ggSheetSettingCache'
 
 const cacheGgSheetSetting = (setting: GgSheetSetting) => {
@@ -37,4 +51,14 @@ export const updateMyGgSheetSetting = async (payload: GgSheetSetting) => {
   const setting = response.data as GgSheetSetting
   cacheGgSheetSetting(setting)
   return setting
+}
+
+export const previewPushGgSheet = async (payload: GgSheetPushPayload) => {
+  const response = await axiosClient.post('/ggsheet/push/preview', payload)
+  return response.data as GgSheetPushPreview
+}
+
+export const pushGgSheet = async (payload: GgSheetPushPayload) => {
+  const response = await axiosClient.post('/ggsheet/push', payload)
+  return response.data as { ok: boolean; targetRow: number; updatedRange: string; updatedCells: number }
 }

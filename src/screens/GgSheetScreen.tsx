@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
-import { FiAlertTriangle, FiCheck, FiDownload, FiInfo, FiSave, FiSend, FiSettings } from 'react-icons/fi'
-import { getMyGgSheetSetting, updateMyGgSheetSetting } from '@/services/GgSheetService'
+import { FiAlertTriangle, FiCheck, FiDownload, FiInfo, FiSave, FiSend, FiSettings, FiX } from 'react-icons/fi'
+import { getMyGgSheetSetting, previewPushGgSheet, pushGgSheet, updateMyGgSheetSetting, type GgSheetPushPreview } from '@/services/GgSheetService'
 
 type BrowserTab = { id?: number; url?: string; active?: boolean }
 type ExtensionChrome = {
@@ -27,13 +27,26 @@ type CollectedData = {
   fullContent: string
 }
 
+const formatPreviewLines = (value: string, maxLines: number) => {
+  const lines = (value || '')
+    .replace(/\r/g, '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+
+  if (lines.length <= maxLines) return lines.join('\n')
+  if (maxLines <= 2) return `${lines[0] || ''}\n...`
+
+  const headCount = Math.floor((maxLines - 1) / 2)
+  const tailCount = maxLines - headCount - 1
+  const head = lines.slice(0, headCount)
+  const tail = lines.slice(lines.length - tailCount)
+  return [...head, '...', ...tail].join('\n')
+}
+
 const CHATGPT_URL = 'https://chatgpt.com/'
 const CHATGPT_PATTERNS = ['*://chatgpt.com/*', '*://chat.openai.com/*']
 const extractSheetId = (url: string) => url.match(/\/spreadsheets\/d\/([^/]+)/)?.[1] || ''
-const toTsvRow = (values: CollectedData) =>
-  [values.title || '', values.shortContent || '', '', '', '', values.fullContent || '']
-    .map((cell) => String(cell).replace(/\r/g, ' ').replace(/\t/g, ' ').trim())
-    .join('\t')
 
 export default function GgSheetScreen() {
   const [sheetUrl, setSheetUrl] = useState('')
@@ -50,9 +63,10 @@ export default function GgSheetScreen() {
         : 'info'
   const [data, setData] = useState<CollectedData>({ title: '', shortContent: '', fullContent: '' })
   const [isSaving, setIsSaving] = useState(false)
+  const [previewData, setPreviewData] = useState<GgSheetPushPreview | null>(null)
+  const [showPreviewModal, setShowPreviewModal] = useState(false)
   const sheetId = extractSheetId(sheetUrl)
   const isSheetConfigured = Boolean(sheetId)
-  const isValidSheetUrl = (url?: string) => Boolean(sheetId && url && url.includes(sheetId))
 
   useEffect(() => {
     const loadSettings = async () => {
@@ -118,30 +132,6 @@ export default function GgSheetScreen() {
       target = await createTab(url)
       await sleep(700)
       return target
-    }
-
-    target = await updateTab(target.id)
-    await sleep(300)
-    return target
-  }
-
-  const getOrOpenSheetTab = async () => {
-    if (!sheetId) return null
-    const allTabs = await queryTabs(undefined)
-    let sheetTabs = allTabs.filter((tab) => isValidSheetUrl(tab.url))
-    if (sheetTabs.length === 0) {
-      // Fallback query explicitly scoped to Google domains.
-      const googleTabs = await queryTabs(['*://docs.google.com/*'])
-      sheetTabs = googleTabs.filter((tab) => isValidSheetUrl(tab.url))
-      if (sheetTabs.length === 0) {
-        // Relaxed fallback: any opened Google Sheets tab.
-        sheetTabs = googleTabs.filter((tab) => (tab.url || '').includes('docs.google.com/spreadsheets'))
-      }
-    }
-    let target: BrowserTab | null | undefined = sheetTabs.find((tab) => tab.active) || sheetTabs[0]
-
-    if (!target?.id) {
-      return null
     }
 
     target = await updateTab(target.id)
@@ -270,147 +260,34 @@ export default function GgSheetScreen() {
     return extracted
   }
 
-  const getNextRow = async () => {
-    if (!sheetId) return 2
+  const openPushPreview = async (values: CollectedData) => {
+    setIsSaving(true)
+    setStatus('Đang kiểm tra dòng đẩy dữ liệu trên GG Sheet...')
     try {
-      const query = encodeURIComponent('select B where B is not null')
-      const url = `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?gid=0&headers=1&tq=${query}`
-      const response = await fetch(url)
-      const text = await response.text()
-      const jsonText = text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1)
-      const payload = JSON.parse(jsonText) as { table?: { rows?: Array<{ c?: Array<{ v?: string | number | null }> }> } }
-      const rows = payload?.table?.rows || []
-      const nonEmpty = rows.filter((row) => {
-        const value = row?.c?.[0]?.v
-        return typeof value === 'string' ? value.trim().length > 0 : value !== null && value !== undefined
-      }).length
-      return Math.max(2, nonEmpty + 2)
+      const preview = await previewPushGgSheet(values)
+      setPreviewData(preview)
+      setShowPreviewModal(true)
+      setStatus(`Sẵn sàng đẩy dữ liệu lên dòng ${preview.targetRow}. Xác nhận để tiếp tục.`)
     } catch {
-      return 2
+      setStatus('Không thể kiểm tra trước khi đẩy GG Sheet.')
+    } finally {
+      setIsSaving(false)
     }
   }
 
-  const writeRowToSheet = async (row: number, values: CollectedData) => {
-    const extensionChrome = getChrome()
-    if (!extensionChrome?.scripting?.executeScript || !extensionChrome?.tabs?.query) {
-      return { ok: false, failedColumns: ['B', 'C', 'G'] }
-    }
-    const target = await getOrOpenSheetTab()
-    if (!target?.id) return { ok: false, failedColumns: ['B', 'C', 'G'] }
-
-    // One-shot paste payload for B:G (B=title, C=short, D/E/F empty, G=full)
-    const tsvRow = toTsvRow(values)
-
+  const confirmPushToSheet = async () => {
+    if (!previewData) return
+    setIsSaving(true)
+    setStatus('Đang đẩy dữ liệu lên GG Sheet...')
     try {
-      await navigator.clipboard.writeText(tsvRow)
+      const result = await pushGgSheet(previewData.data)
+      setShowPreviewModal(false)
+      setPreviewData(null)
+      setStatus(`Đã ghi dữ liệu vào GG Sheet tại dòng ${result.targetRow} (B, C, G).`)
     } catch {
-      return {
-        ok: false,
-        failedColumns: ['B', 'C', 'G'],
-      }
-    }
-
-    const result = await extensionChrome.scripting.executeScript({
-      target: { tabId: target.id },
-      func: (async (targetRow: number) => {
-        const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
-        const focusTargetCell = async () => {
-          const url = new URL(window.location.href)
-          url.hash = `gid=0&range=B${targetRow}`
-          if (url.hash !== window.location.hash) {
-            window.location.hash = url.hash
-          }
-          await sleep(600)
-
-          const selectedCell =
-            (document.querySelector('[role="gridcell"][aria-selected="true"]') as HTMLElement | null) ||
-            (document.querySelector('[role="gridcell"][tabindex="0"]') as HTMLElement | null)
-          if (!selectedCell) return false
-          selectedCell.click()
-          selectedCell.focus()
-          await sleep(120)
-          return true
-        }
-
-        const pasteFromClipboard = async () => {
-          const active = (document.activeElement as HTMLElement | null) || document.body
-          active.focus()
-          active.dispatchEvent(new KeyboardEvent('keydown', { key: 'v', code: 'KeyV', ctrlKey: true, bubbles: true }))
-          active.dispatchEvent(new KeyboardEvent('keyup', { key: 'v', code: 'KeyV', ctrlKey: true, bubbles: true }))
-          active.dispatchEvent(new KeyboardEvent('keydown', { key: 'v', code: 'KeyV', metaKey: true, bubbles: true }))
-          active.dispatchEvent(new KeyboardEvent('keyup', { key: 'v', code: 'KeyV', metaKey: true, bubbles: true }))
-          await sleep(240)
-          return true
-        }
-
-        let ok = false
-        for (let attempt = 0; attempt < 3; attempt += 1) {
-          const focused = await focusTargetCell()
-          if (!focused) {
-            await sleep(220)
-            continue
-          }
-          ok = await pasteFromClipboard()
-          if (ok) break
-          await sleep(220)
-        }
-
-        return {
-          ok,
-          failedColumns: ok ? [] : ['B', 'C', 'G'],
-        }
-      }) as (...args: unknown[]) => unknown,
-      args: [row],
-    })
-
-    const payload = (result?.[0]?.result as { ok?: boolean; failedColumns?: string[] } | undefined) || {}
-    return {
-      ok: Boolean(payload.ok),
-      failedColumns: payload.failedColumns || [],
-    }
-  }
-
-  const focusSheetRowForManualPaste = async (row: number, values: CollectedData) => {
-    const extensionChrome = getChrome()
-    if (!extensionChrome?.tabs?.query || !extensionChrome?.tabs?.update) return false
-    const target = await getOrOpenSheetTab()
-    if (!target?.id) return false
-
-    try {
-      await navigator.clipboard.writeText(toTsvRow(values))
-    } catch {
-      return false
-    }
-
-    const rawUrl = target.url || sheetUrl
-    const base = rawUrl.split('#')[0] || rawUrl
-    const focused = await updateTab(target.id, `${base}#gid=0&range=B${row}`)
-    return Boolean(focused?.id)
-  }
-
-  const copyRowForManualPaste = async (values: CollectedData) => {
-    const text = toTsvRow(values)
-    try {
-      await navigator.clipboard.writeText(text)
-      return true
-    } catch {
-      try {
-        const textarea = document.createElement('textarea')
-        textarea.value = text
-        textarea.setAttribute('readonly', 'true')
-        textarea.style.position = 'fixed'
-        textarea.style.opacity = '0'
-        textarea.style.pointerEvents = 'none'
-        textarea.style.left = '-9999px'
-        document.body.appendChild(textarea)
-        textarea.focus()
-        textarea.select()
-        const ok = document.execCommand('copy')
-        document.body.removeChild(textarea)
-        return ok
-      } catch {
-        return false
-      }
+      setStatus('Đẩy dữ liệu lên GG Sheet thất bại.')
+    } finally {
+      setIsSaving(false)
     }
   }
 
@@ -424,34 +301,7 @@ export default function GgSheetScreen() {
       return
     }
 
-    setIsSaving(true)
-    setStatus('Đang tính dòng tiếp theo và ghi dữ liệu lên GG Sheet...')
-    const nextRow = await getNextRow()
-    const existingSheetTab = await getOrOpenSheetTab()
-    if (!existingSheetTab?.id) {
-      setIsSaving(false)
-      setStatus('Không tìm thấy tab Google Sheets đang mở. Hãy mở sẵn 1 tab sheet rồi thử lại.')
-      return
-    }
-    const writeResult = await writeRowToSheet(nextRow, data)
-    setIsSaving(false)
-
-    if (!writeResult.ok) {
-      const failedInfo =
-        writeResult.failedColumns.length > 0 ? ` Cột lỗi: ${writeResult.failedColumns.join(', ')}.` : ''
-      const copied = await copyRowForManualPaste(data)
-      const focused = await focusSheetRowForManualPaste(nextRow, data)
-      setStatus(
-        focused
-          ? `Không ghi tự động được.${failedInfo} Đã copy dữ liệu và mở ô B${nextRow}. Bấm Cmd+V để dán.`
-          : copied
-            ? `Không ghi tự động được.${failedInfo} Đã copy dữ liệu vào clipboard. Vào sheet và dán tại ô B${nextRow}.`
-            : `Không ghi được lên GG Sheet.${failedInfo} Đồng thời không copy được clipboard, hãy thử lại.`,
-      )
-      return
-    }
-
-    setStatus(`Đã ghi dữ liệu vào GG Sheet tại dòng ${nextRow} (cột B, C, G).`)
+    await openPushPreview(data)
   }
 
   const collectAndPush = async () => {
@@ -459,35 +309,11 @@ export default function GgSheetScreen() {
       setStatus('Chưa cấu hình đường dẫn GG Sheet. Hãy vào cài đặt và lưu ggSheetPath trước.')
       return
     }
-    setIsSaving(true)
     const collected = await collectFromChatgpt()
     if (!collected) {
-      setIsSaving(false)
       return
     }
-    const nextRow = await getNextRow()
-    const existingSheetTab = await getOrOpenSheetTab()
-    if (!existingSheetTab?.id) {
-      setIsSaving(false)
-      setStatus('Đã gom dữ liệu nhưng chưa thấy tab Google Sheets đang mở. Hãy mở tab sheet rồi thử lại.')
-      return
-    }
-    const writeResult = await writeRowToSheet(nextRow, collected)
-    setIsSaving(false)
-    if (writeResult.ok) {
-      setStatus(`Đã gom và đẩy dữ liệu lên GG Sheet dòng ${nextRow} (B, C, G).`)
-      return
-    }
-
-    const copied = await copyRowForManualPaste(collected)
-    const focused = await focusSheetRowForManualPaste(nextRow, collected)
-    setStatus(
-      focused
-        ? `Gom xong nhưng ghi tự động thất bại ở cột ${writeResult.failedColumns.join(', ')}. Đã copy sẵn dữ liệu và mở ô B${nextRow}, bấm Cmd+V để hoàn tất.`
-        : copied
-          ? `Gom xong nhưng ghi tự động thất bại ở cột ${writeResult.failedColumns.join(', ')}. Đã copy dữ liệu, hãy dán vào ô B${nextRow}.`
-          : `Gom xong nhưng ghi lên GG Sheet thất bại${writeResult.failedColumns.length ? ` ở cột ${writeResult.failedColumns.join(', ')}` : ''}.`,
-    )
+    await openPushPreview(collected)
   }
 
   useEffect(() => {
@@ -499,7 +325,7 @@ export default function GgSheetScreen() {
   }, [])
 
   return (
-    <section className="glass-panel flex h-full min-h-0 flex-col gap-2 rounded-3xl p-3">
+    <section className="glass-panel relative flex h-full min-h-0 flex-col gap-2 rounded-3xl p-3">
       <div className="flex items-center justify-between">
         <h2 className="text-sm font-semibold text-white">GG Sheet</h2>
         <button
@@ -610,6 +436,51 @@ export default function GgSheetScreen() {
           </p>
         </div>
       </div>
+      {showPreviewModal && previewData ? (
+        <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/50 p-3">
+          <div className="w-full max-w-md rounded-2xl border border-blue-300/40 bg-slate-950/95 p-3">
+            <p className="text-sm font-semibold text-white">Xác nhận đẩy GG Sheet</p>
+            <p className="mt-2 text-[11px] text-slate-300">
+              Dữ liệu sẽ được ghi vào dòng <span className="font-semibold text-emerald-200">{previewData.targetRow}</span> ({previewData.targetRange})
+            </p>
+            <div className="mt-2 space-y-1 rounded-xl border border-white/10 bg-black/25 p-2 text-[11px] text-slate-200">
+              <p><span className="text-slate-400">Tiêu đề:</span> {previewData.data.title || '...'}</p>
+              <p className="whitespace-pre-wrap">
+                <span className="text-slate-400">Nội dung ngắn:</span>{' '}
+                {previewData.data.shortContent ? formatPreviewLines(previewData.data.shortContent, 5) : '...'}
+              </p>
+              <p className="whitespace-pre-wrap">
+                <span className="text-slate-400">Nội dung dài:</span>{' '}
+                {previewData.data.fullContent ? formatPreviewLines(previewData.data.fullContent, 8) : '...'}
+              </p>
+            </div>
+            <div className="mt-3 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowPreviewModal(false)
+                  setPreviewData(null)
+                }}
+                className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-white/10 text-slate-200 transition hover:bg-white/20"
+                title="Hủy"
+                aria-label="Hủy"
+              >
+                <FiX className="h-3.5 w-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => void confirmPushToSheet()}
+                disabled={isSaving}
+                className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-emerald-500/25 text-emerald-100 transition hover:bg-emerald-500/35 disabled:opacity-50"
+                title="Xác nhận đẩy"
+                aria-label="Xác nhận đẩy"
+              >
+                <FiCheck className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </section>
   )
 }
