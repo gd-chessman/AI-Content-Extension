@@ -48,27 +48,23 @@ function AppRouter() {
     const settings = getCachedSettings()
     const webadminUrl = (settings.adminPath || '').trim()
     const ggSheetUrl = (settings.ggSheetPath || '').trim()
-    const toPattern = (url: string) => {
+    const toOrigin = (url: string) => {
       try {
         const parsed = new URL(url)
-        return `${parsed.origin}/*`
+        return parsed.origin
       } catch {
         return url
       }
     }
-    const normalizeUrl = (url: string) => {
-      const value = (url || '').trim()
-      if (!value) return ''
-      return value.replace(/\/+$/, '')
-    }
+    const toPattern = (url: string) => `${toOrigin(url)}/*`
     const targetByRoute: Partial<Record<Exclude<RouteId, 'login'>, { url: string; patterns: string[] }>> = {
-      facebook: { url: 'https://www.facebook.com/', patterns: ['*://*.facebook.com/*'] },
-      chatgpt: { url: 'https://chatgpt.com/', patterns: ['*://chatgpt.com/*', '*://chat.openai.com/*'] },
-      grok: { url: 'https://grok.com/imagine/saved', patterns: ['*://grok.com/imagine*'] },
+      facebook: { url: 'https://www.facebook.com', patterns: ['*://*.facebook.com/*'] },
+      chatgpt: { url: 'https://chatgpt.com', patterns: ['*://chatgpt.com/*', '*://chat.openai.com/*'] },
+      grok: { url: 'https://grok.com', patterns: ['*://grok.com/*'] },
       ...(webadminUrl
         ? {
             webadmin: {
-              url: webadminUrl,
+              url: toOrigin(webadminUrl),
               patterns: [toPattern(webadminUrl)],
             },
           }
@@ -76,7 +72,7 @@ function AppRouter() {
       ...(ggSheetUrl
         ? {
             ggsheet: {
-              url: ggSheetUrl,
+              url: toOrigin(ggSheetUrl),
               patterns: [toPattern(ggSheetUrl)],
             },
           }
@@ -91,12 +87,7 @@ function AppRouter() {
     extensionChrome.tabs.query({ url: target.patterns, currentWindow: true }, (tabs) => {
       const existing = tabs.find((tab) => tab.active && tab.id) || tabs.find((tab) => tab.id)
       if (existing?.id) {
-        const isSameUrl = normalizeUrl(existing.url || '') === normalizeUrl(target.url)
-        if (isSameUrl) {
-          extensionChrome.tabs?.update?.(existing.id, { active: true })
-          return
-        }
-        extensionChrome.tabs?.update?.(existing.id, { url: target.url, active: true })
+        extensionChrome.tabs?.update?.(existing.id, { active: true })
         return
       }
       extensionChrome.tabs?.create?.({ url: target.url, active: true })

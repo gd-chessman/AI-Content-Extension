@@ -51,6 +51,7 @@ export default function GgSheetScreen() {
   const [data, setData] = useState<CollectedData>({ title: '', shortContent: '', fullContent: '' })
   const [isSaving, setIsSaving] = useState(false)
   const sheetId = extractSheetId(sheetUrl)
+  const isSheetConfigured = Boolean(sheetId)
   const isValidSheetUrl = (url?: string) => Boolean(sheetId && url && url.includes(sheetId))
 
   useEffect(() => {
@@ -498,7 +499,7 @@ export default function GgSheetScreen() {
   }, [])
 
   return (
-    <section className="glass-panel flex h-full min-h-0 flex-col rounded-3xl p-3">
+    <section className="glass-panel flex h-full min-h-0 flex-col gap-2 rounded-3xl p-3">
       <div className="flex items-center justify-between">
         <h2 className="text-sm font-semibold text-white">GG Sheet</h2>
         <button
@@ -534,7 +535,7 @@ export default function GgSheetScreen() {
           </div>
         </div>
       ) : null}
-      <div className="mt-2 rounded-xl border border-white/10 bg-white/5 p-2">
+      <div className="rounded-xl border border-white/10 bg-white/5 p-2">
         <p
           className={`inline-flex items-center gap-1.5 rounded-lg border px-2 py-1 text-[11px] ${
             statusTone === 'success'
@@ -559,18 +560,19 @@ export default function GgSheetScreen() {
         </p>
       </div>
 
-      <div className="grid grid-cols-2 gap-1.5">
+      <div className="grid grid-cols-2 gap-2">
         <button
           type="button"
+          disabled={!isSheetConfigured || isSaving}
           onClick={() => void collectFromChatgpt()}
-          className="inline-flex cursor-pointer items-center justify-center gap-1 rounded-lg bg-blue-500/20 px-2 py-1.5 text-xs text-blue-100 transition hover:bg-blue-500/30"
+          className="inline-flex cursor-pointer items-center justify-center gap-1 rounded-lg bg-blue-500/20 px-2 py-1.5 text-xs text-blue-100 transition hover:bg-blue-500/30 disabled:cursor-not-allowed disabled:opacity-40"
         >
           <FiDownload className="h-3.5 w-3.5" />
           Gom dữ liệu
         </button>
         <button
           type="button"
-          disabled={isSaving}
+          disabled={!isSheetConfigured || isSaving}
           onClick={() => void pushToSheet()}
           className="inline-flex cursor-pointer items-center justify-center gap-1 rounded-lg bg-emerald-500/20 px-2 py-1.5 text-xs text-emerald-100 transition hover:bg-emerald-500/30 disabled:cursor-not-allowed disabled:opacity-40"
         >
@@ -579,7 +581,7 @@ export default function GgSheetScreen() {
         </button>
         <button
           type="button"
-          disabled={isSaving}
+          disabled={!isSheetConfigured || isSaving}
           onClick={() => void collectAndPush()}
           className="col-span-2 inline-flex cursor-pointer items-center justify-center gap-1 rounded-lg bg-violet-500/20 px-2 py-1.5 text-xs text-violet-100 transition hover:bg-violet-500/30 disabled:cursor-not-allowed disabled:opacity-40"
         >
@@ -588,22 +590,22 @@ export default function GgSheetScreen() {
         </button>
       </div>
 
-      <div className="grid min-h-0 flex-1 grid-cols-1 gap-1.5 overflow-auto rounded-xl border border-white/10 bg-white/5 p-2">
+      <div className="grid min-h-0 flex-1 grid-cols-1 gap-2 overflow-auto rounded-xl border border-white/10 bg-white/5 p-2.5">
         <div>
           <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Tiêu đề</p>
-          <p className="mt-1 whitespace-pre-wrap rounded-lg border border-white/10 bg-black/20 p-1.5 text-[11px] text-slate-100">
+          <p className="mt-1 whitespace-pre-wrap rounded-lg border border-white/10 bg-black/20 p-2 text-[11px] text-slate-100">
             {data.title || '...'}
           </p>
         </div>
         <div>
           <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Nội dung ngắn</p>
-          <p className="mt-1 whitespace-pre-wrap rounded-lg border border-white/10 bg-black/20 p-1.5 text-[11px] text-slate-100">
+          <p className="mt-1 whitespace-pre-wrap rounded-lg border border-white/10 bg-black/20 p-2 text-[11px] text-slate-100">
             {data.shortContent || '...'}
           </p>
         </div>
         <div>
           <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Nội dung dài (link bài báo)</p>
-          <p className="mt-1 whitespace-pre-wrap rounded-lg border border-white/10 bg-black/20 p-1.5 text-[11px] text-slate-100">
+          <p className="mt-1 whitespace-pre-wrap rounded-lg border border-white/10 bg-black/20 p-2 text-[11px] text-slate-100">
             {data.fullContent || '...'}
           </p>
         </div>
