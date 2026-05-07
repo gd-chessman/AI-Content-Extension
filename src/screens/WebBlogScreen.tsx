@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { FiAlertTriangle, FiCheck, FiCopy, FiInfo, FiSave, FiSettings } from 'react-icons/fi'
-import { getMySettings, updateMySettings } from '@/services/SettingsService'
+import { getMyWebBlogSetting, updateMyWebBlogSetting } from '@/services/WebBlogService'
 
-type WebAdminPayload = {
+type WebBlogPayload = {
   title?: string
   longContent?: string
   image1?: string
@@ -32,12 +32,12 @@ const htmlToPlainText = (html: string) => {
   return (div.textContent || div.innerText || '').trim()
 }
 
-export default function WebAdminScreen() {
+export default function WebBlogScreen() {
   const [title, setTitle] = useState('')
   const [longContent, setLongContent] = useState('')
   const [image1, setImage1] = useState('')
   const [image2, setImage2] = useState('')
-  const [status, setStatus] = useState('Đợi dữ liệu từ ChatGPT để điền WebAdmin.')
+  const [status, setStatus] = useState('Đợi dữ liệu từ ChatGPT để điền WebBlog.')
   const [copiedField, setCopiedField] = useState<'title' | 'content' | null>(null)
   const [showSettings, setShowSettings] = useState(false)
   const [webPathInput, setWebPathInput] = useState('')
@@ -46,7 +46,7 @@ export default function WebAdminScreen() {
   useEffect(() => {
     const loadSettings = async () => {
       try {
-        const settings = await getMySettings()
+        const settings = await getMyWebBlogSetting()
         setWebPathInput(settings?.adminPath || '')
       } catch {
         setWebPathInput('')
@@ -57,16 +57,16 @@ export default function WebAdminScreen() {
 
   useEffect(() => {
     const onFill = (event: Event) => {
-      const custom = event as CustomEvent<WebAdminPayload>
+      const custom = event as CustomEvent<WebBlogPayload>
       const payload = custom.detail || {}
       setTitle((payload.title || '').trim())
       setLongContent((payload.longContent || '').trim())
       setImage1(payload.image1 || '')
       setImage2(payload.image2 || '')
-      setStatus('Đã nhận dữ liệu WebAdmin từ ChatGPT.')
+      setStatus('Đã nhận dữ liệu WebBlog từ ChatGPT.')
     }
-    window.addEventListener('fill-webadmin-from-chatgpt', onFill as EventListener)
-    return () => window.removeEventListener('fill-webadmin-from-chatgpt', onFill as EventListener)
+    window.addEventListener('fill-webblog-from-chatgpt', onFill as EventListener)
+    return () => window.removeEventListener('fill-webblog-from-chatgpt', onFill as EventListener)
   }, [])
 
   const statusLower = status.toLowerCase()
@@ -114,18 +114,18 @@ export default function WebAdminScreen() {
 
   const saveWebPath = async () => {
     try {
-      await updateMySettings({ adminPath: webPathInput.trim() })
-      setStatus('Đã lưu cấu hình đường dẫn WebAdmin.')
+      await updateMyWebBlogSetting({ adminPath: webPathInput.trim() })
+      setStatus('Đã lưu cấu hình đường dẫn WebBlog.')
       setShowSettings(false)
     } catch {
-      setStatus('Không thể lưu cấu hình đường dẫn WebAdmin.')
+      setStatus('Không thể lưu cấu hình đường dẫn WebBlog.')
     }
   }
 
   return (
     <section className="glass-panel flex h-full min-h-0 flex-col rounded-3xl p-3">
       <div className="flex items-center justify-between gap-2">
-        <h2 className="text-sm font-semibold text-white">WebAdmin</h2>
+        <h2 className="text-sm font-semibold text-white">WebBlog</h2>
         <button
           type="button"
           onClick={() => setShowSettings((prev) => !prev)}
@@ -138,13 +138,13 @@ export default function WebAdminScreen() {
       </div>
       {showSettings ? (
         <div className="mt-2 rounded-xl border border-blue-300/30 bg-blue-500/10 p-2">
-          <p className="text-[10px] text-slate-300">Đường dẫn WebAdmin</p>
+          <p className="text-[10px] text-slate-300">Đường dẫn WebBlog</p>
           <div className="mt-1 flex items-center gap-2">
             <input
               type="text"
               value={webPathInput}
               onChange={(event) => setWebPathInput(event.target.value)}
-              placeholder="https://your-webadmin-url.com"
+              placeholder="https://your-webblog-url.com"
               className="w-full rounded-lg bg-slate-900/80 px-2 py-1.5 text-[11px] text-slate-100 outline-none placeholder:text-slate-500"
             />
             <button

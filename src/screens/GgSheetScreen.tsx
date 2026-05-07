@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { FiAlertTriangle, FiCheck, FiDownload, FiInfo, FiSave, FiSend, FiSettings } from 'react-icons/fi'
-import { getMySettings, updateMySettings } from '@/services/SettingsService'
+import { getMyGgSheetSetting, updateMyGgSheetSetting } from '@/services/GgSheetService'
 
 type BrowserTab = { id?: number; url?: string; active?: boolean }
 type ExtensionChrome = {
@@ -57,7 +57,7 @@ export default function GgSheetScreen() {
   useEffect(() => {
     const loadSettings = async () => {
       try {
-        const settings = await getMySettings()
+        const settings = await getMyGgSheetSetting()
         const configured = (settings?.ggSheetPath || '').trim()
         setSheetPathInput(configured)
         if (configured) setSheetUrl(configured)
@@ -72,7 +72,7 @@ export default function GgSheetScreen() {
   const saveSheetPath = async () => {
     try {
       const next = sheetPathInput.trim()
-      await updateMySettings({ ggSheetPath: next })
+      await updateMyGgSheetSetting({ ggSheetPath: next })
       setSheetUrl(next)
       setShowSettings(false)
       setStatus('Đã lưu cấu hình đường dẫn GG Sheet.')

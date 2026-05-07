@@ -1184,25 +1184,25 @@ export default function ChatgptScreen() {
     return out.join('\n\n')
   }
 
-  const pushStep4ToWebAdmin = async () => {
+  const pushStep4ToWebBlog = async () => {
     if (!splitImages?.left || !splitImages?.right) {
-      setStatus('Chưa có ảnh 1/2 từ Tiến trình 3. Hãy cắt ảnh trước khi gửi WebAdmin.')
+      setStatus('Chưa có ảnh 1/2 từ Tiến trình 3. Hãy cắt ảnh trước khi gửi WebBlog.')
       return
     }
 
-    setStatus('Đang lấy tiêu đề thường + nội dung dài và ghép ảnh ngẫu nhiên cho WebAdmin...')
+    setStatus('Đang lấy tiêu đề thường + nội dung dài và ghép ảnh ngẫu nhiên cho WebBlog...')
     const titlePlain = await extractStep4Content('title_plain', { copyToClipboard: false })
     const fullContent = await extractStep4Content('content_full', { copyToClipboard: false })
     if (!titlePlain || !fullContent) {
-      setStatus('Không lấy đủ dữ liệu Tiến trình 4 để gửi WebAdmin.')
+      setStatus('Không lấy đủ dữ liệu Tiến trình 4 để gửi WebBlog.')
       return
     }
 
     const contentWithImages = injectImagesIntoLongContent(fullContent, splitImages.left, splitImages.right)
-    window.dispatchEvent(new CustomEvent('switch-main-tab', { detail: { tabId: 'webadmin' } }))
+    window.dispatchEvent(new CustomEvent('switch-main-tab', { detail: { tabId: 'webblog' } }))
     window.setTimeout(() => {
       window.dispatchEvent(
-        new CustomEvent('fill-webadmin-from-chatgpt', {
+        new CustomEvent('fill-webblog-from-chatgpt', {
           detail: {
             title: titlePlain,
             longContent: contentWithImages,
@@ -1212,7 +1212,7 @@ export default function ChatgptScreen() {
         }),
       )
     }, 120)
-    setStatus('Đã gửi dữ liệu sang WebAdmin (tiêu đề + nội dung dài có chèn ảnh 1/2).')
+    setStatus('Đã gửi dữ liệu sang WebBlog (tiêu đề + nội dung dài có chèn ảnh 1/2).')
   }
 
   const runGgSheetCollectTool = () => {
@@ -1614,9 +1614,9 @@ export default function ChatgptScreen() {
         </button>
         <button
           type="button"
-          onClick={() => void pushStep4ToWebAdmin()}
+          onClick={() => void pushStep4ToWebBlog()}
           className="inline-flex h-8 cursor-pointer items-center justify-center rounded-lg bg-amber-500/20 px-2 text-amber-100 transition hover:bg-amber-500/30"
-          title="Gửi tiêu đề + nội dung dài có chèn ảnh sang WebAdmin"
+          title="Gửi tiêu đề + nội dung dài có chèn ảnh sang WebBlog"
         >
           <span className="relative inline-flex items-center justify-center gap-1">
             <RiAdminFill className="h-3 w-3" />

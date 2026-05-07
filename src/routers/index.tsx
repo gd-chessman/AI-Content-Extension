@@ -4,16 +4,17 @@ import { RiAdminFill } from 'react-icons/ri'
 import { SiGooglesheets, SiOpenai, SiX } from 'react-icons/si'
 import ExtensionLayout from '../layouts/ExtensionLayout'
 import { useAuth } from '../hooks/useAuth'
-import { getCachedSettings } from '../services/SettingsService'
+import { getCachedGgSheetSetting } from '../services/GgSheetService'
+import { getCachedWebBlogSetting } from '../services/WebBlogService'
 import ChatgptScreen from '../screens/ChatgptScreen'
 import FacebookScreen from '../screens/FacebookScreen'
 import GgSheetScreen from '../screens/GgSheetScreen'
 import GrokScreen from '../screens/GrokScreen'
 import LoginScreen from '../screens/LoginScreen'
 import ProfileScreen from '../screens/ProfileScreen'
-import WebAdminScreen from '../screens/WebAdminScreen'
+import WebBlogScreen from '../screens/WebBlogScreen'
 
-type RouteId = 'login' | 'profile' | 'facebook' | 'chatgpt' | 'grok' | 'webadmin' | 'ggsheet'
+type RouteId = 'login' | 'profile' | 'facebook' | 'chatgpt' | 'grok' | 'webblog' | 'ggsheet'
 type BrowserTab = { id?: number; url?: string; active?: boolean }
 type ExtensionChrome = {
   tabs?: {
@@ -35,7 +36,7 @@ const mainTabs: Array<{
   { id: 'facebook', label: 'Facebook', icon: <FaFacebookF />, iconClassName: 'text-blue-500' },
   { id: 'chatgpt', label: 'ChatGPT', icon: <SiOpenai />, iconClassName: 'text-emerald-400' },
   { id: 'grok', label: 'Grok', icon: <SiX />, iconClassName: 'text-white' },
-  { id: 'webadmin', label: 'WebAdmin', icon: <RiAdminFill />, iconClassName: 'text-amber-400' },
+  { id: 'webblog', label: 'WebBlog', icon: <RiAdminFill />, iconClassName: 'text-amber-400' },
   { id: 'ggsheet', label: 'GGSheet', icon: <SiGooglesheets />, iconClassName: 'text-green-500' },
 ]
 
@@ -45,9 +46,10 @@ function AppRouter() {
   const checkAuth = useAuth((state) => state.checkAuth)
 
   const syncBrowserTabByRoute = (routeId: Exclude<RouteId, 'login'>) => {
-    const settings = getCachedSettings()
-    const webadminUrl = (settings.adminPath || '').trim()
-    const ggSheetUrl = (settings.ggSheetPath || '').trim()
+    const webblogSetting = getCachedWebBlogSetting()
+    const ggSheetSetting = getCachedGgSheetSetting()
+    const webblogUrl = (webblogSetting.adminPath || '').trim()
+    const ggSheetUrl = (ggSheetSetting.ggSheetPath || '').trim()
     const toOrigin = (url: string) => {
       try {
         const parsed = new URL(url)
@@ -61,11 +63,11 @@ function AppRouter() {
       facebook: { url: 'https://www.facebook.com', patterns: ['*://*.facebook.com/*'] },
       chatgpt: { url: 'https://chatgpt.com', patterns: ['*://chatgpt.com/*', '*://chat.openai.com/*'] },
       grok: { url: 'https://grok.com', patterns: ['*://grok.com/*'] },
-      ...(webadminUrl
+      ...(webblogUrl
         ? {
-            webadmin: {
-              url: toOrigin(webadminUrl),
-              patterns: [toPattern(webadminUrl)],
+            webblog: {
+              url: toOrigin(webblogUrl),
+              patterns: [toPattern(webblogUrl)],
             },
           }
         : {}),
@@ -130,7 +132,7 @@ function AppRouter() {
     facebook: <FacebookScreen />,
     chatgpt: <ChatgptScreen />,
     grok: <GrokScreen />,
-    webadmin: <WebAdminScreen />,
+    webblog: <WebBlogScreen />,
     ggsheet: <GgSheetScreen />,
   }
 
