@@ -4,6 +4,31 @@ import { IoFlash } from 'react-icons/io5'
 
 type BrowserTab = { id?: number; url?: string; active?: boolean }
 type ExtensionChrome = {
+  runtime?: {
+    id?: string
+    lastError?: { message?: string }
+    sendMessage?: (
+      message: unknown,
+      responseCallback?: (response: { ok?: boolean; error?: string }) => void,
+    ) => void
+  }
+  storage?: {
+    local?: {
+      get?: (keys: string | string[], callback: (items: Record<string, unknown>) => void) => void
+      set?: (items: Record<string, unknown>, callback?: () => void) => void
+    }
+  }
+  downloads?: {
+    download?: (
+      options: {
+        url: string
+        filename?: string
+        conflictAction?: 'uniquify' | 'overwrite' | 'prompt'
+        saveAs?: boolean
+      },
+      callback?: () => void,
+    ) => void
+  }
   tabs?: {
     query?: (
       queryInfo: { url?: string[]; currentWindow?: boolean; active?: boolean },
@@ -28,6 +53,19 @@ type ExtensionChrome = {
 
 const CHATGPT_URL = 'https://chatgpt.com/'
 const CHATGPT_PATTERNS = ['*://chatgpt.com/*', '*://chat.openai.com/*']
+
+const SAVED_SPLIT_IMAGE_HASHES_KEY = 'savedSplitImageCopyHashes'
+const SAVED_SPLIT_IMAGE_HASHES_MAX = 150
+const SPLIT_IMAGE_DOWNLOAD_FOLDER = 'chatgpt-images'
+
+const hashDataUrl = (dataUrl: string) => {
+  let h = 5381
+  const stride = Math.max(1, Math.floor(dataUrl.length / 12000))
+  for (let i = 0; i < dataUrl.length; i += stride) {
+    h = ((h << 5) + h) ^ dataUrl.charCodeAt(i)
+  }
+  return `${(h >>> 0).toString(16)}_${dataUrl.length}`
+}
 
 export const STEP_1_PROMPT_TEMPLATE = `Rewrite the following English story to make it highly engaging, emotionally compelling, and irresistible to readers.
 Requirements:
@@ -416,6 +454,164 @@ export default function ChatgptScreen() {
     return { left, right }
   }
 
+  const saveCopiedSplitImageIfNew = async (dataUrl: string, part: 'left' | 'right', imageBlob: Blob) => {
+    const extensionChrome = getChrome()
+    if (!extensionChrome) {
+      return { saved: false as const, skipped: false as const, reason: 'not_extension' as const }
+    }
+    const runtime = extensionChrome.runtime
+    const sendMessage = runtime?.sendMessage
+    if (!runtime?.id) {
+      return { saved: false as const, skipped: false as const, reason: 'not_extension' as const }
+    }
+    const hashKey = `${part}:${hashDataUrl(dataUrl)}`
+    const storage = extensionChrome?.storage?.local
+    if (!storage?.get || !storage?.set) {
+      return { saved: false as const, skipped: false as const, reason: 'no_storage' as const }
+    }
+
+    const existing = await new Promise<string[]>((resolve) => {
+      storage.get?.([SAVED_SPLIT_IMAGE_HASHES_KEY], (items) => {
+        const raw = items[SAVED_SPLIT_IMAGE_HASHES_KEY]
+        resolve(Array.isArray(raw) ? (raw as string[]) : [])
+      })
+    })
+
+    if (existing.includes(hashKey)) {
+      return { saved: false, skipped: true, reason: 'duplicate' as const }
+    }
+
+    const safeHash = hashKey.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 40)
+    const filename = `${SPLIT_IMAGE_DOWNLOAD_FOLDER}/part-${part === 'left' ? '1' : '2'}-${safeHash}.png`
+    const baseFileName = filename.includes('/') ? filename.split('/').pop() || 'image.png' : filename
+
+    /** Fallback khi `chrome.downloads` không có (một số bản Chrome / side panel): tải qua thẻ `<a download>`. */
+    const tryAnchorDownloadBlob = () => {
+      const objectUrl = URL.createObjectURL(imageBlob)
+      const a = document.createElement('a')
+      a.href = objectUrl
+      a.download = baseFileName
+      a.rel = 'noopener'
+      a.style.display = 'none'
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 5000)
+    }
+
+    const tryAnchorDownloadDataUrl = () => {
+      const a = document.createElement('a')
+      a.href = dataUrl
+      a.download = baseFileName
+      a.rel = 'noopener'
+      a.style.display = 'none'
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+    }
+
+    const tryPageDownloadBlob = () =>
+      new Promise<void>((resolve, reject) => {
+        const d = extensionChrome.downloads?.download
+        if (!d) {
+          reject(new Error('no_downloads_api'))
+          return
+        }
+        const objectUrl = URL.createObjectURL(imageBlob)
+        d({ url: objectUrl, filename, saveAs: false, conflictAction: 'uniquify' }, () => {
+          const err = runtime.lastError
+          window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1500)
+          if (err?.message) reject(new Error(err.message))
+          else resolve()
+        })
+      })
+
+    const tryPageDownloadDataUrl = () =>
+      new Promise<void>((resolve, reject) => {
+        const d = extensionChrome.downloads?.download
+        if (!d) {
+          reject(new Error('no_downloads_api'))
+          return
+        }
+        d({ url: dataUrl, filename, saveAs: false, conflictAction: 'uniquify' }, () => {
+          const err = runtime.lastError
+          if (err?.message) reject(new Error(err.message))
+          else resolve()
+        })
+      })
+
+    const tryBackgroundMessage = (payload: unknown) =>
+      new Promise<{ ok: boolean; error?: string }>((resolve, reject) => {
+        if (!sendMessage) {
+          reject(new Error('no_receiver'))
+          return
+        }
+        sendMessage(payload, (res) => {
+          const le = runtime.lastError
+          if (le?.message) reject(new Error(le.message))
+          else {
+            const body = res as { ok?: boolean; error?: string } | undefined
+            resolve({ ok: Boolean(body?.ok), error: body?.error })
+          }
+        })
+      })
+
+    const runDownload = async () => {
+      const hasDownloadsApi = Boolean(extensionChrome.downloads?.download)
+
+      if (hasDownloadsApi) {
+        try {
+          await tryPageDownloadBlob()
+          return
+        } catch {
+          /* thử anchor + background + data URL */
+        }
+      } else {
+        tryAnchorDownloadBlob()
+        return
+      }
+
+      tryAnchorDownloadBlob()
+
+      if (sendMessage) {
+        try {
+          const buffer = await imageBlob.arrayBuffer()
+          const r = await tryBackgroundMessage({
+            type: 'DOWNLOAD_ARRAY_BUFFER',
+            buffer,
+            filename,
+            mimeType: imageBlob.type || 'image/png',
+          })
+          if (r.ok) return
+        } catch {
+          /* fall through */
+        }
+        try {
+          const r = await tryBackgroundMessage({ type: 'DOWNLOAD_DATA_URL', dataUrl, filename })
+          if (r.ok) return
+        } catch {
+          /* fall through */
+        }
+      }
+
+      try {
+        await tryPageDownloadDataUrl()
+        return
+      } catch {
+        /* fall through */
+      }
+
+      tryAnchorDownloadDataUrl()
+    }
+
+    await runDownload()
+
+    const next = [...existing.filter((k) => k !== hashKey), hashKey].slice(-SAVED_SPLIT_IMAGE_HASHES_MAX)
+    await new Promise<void>((resolve) => storage.set?.({ [SAVED_SPLIT_IMAGE_HASHES_KEY]: next }, () => resolve()))
+
+    return { saved: true, skipped: false, reason: 'ok' as const }
+  }
+
   const copyImageDataUrl = async (dataUrl: string, label: string, part: 'left' | 'right') => {
     try {
       const response = await fetch(dataUrl)
@@ -423,7 +619,24 @@ export default function ChatgptScreen() {
       await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })])
       setCopiedPart(part)
       window.setTimeout(() => setCopiedPart((prev) => (prev === part ? null : prev)), 1200)
-      setStatus(`Đã sao chép ${label} vào clipboard.`)
+
+      let saveNote = ''
+      try {
+        const saveResult = await saveCopiedSplitImageIfNew(dataUrl, part, blob)
+        if (saveResult.skipped) saveNote = ' Ảnh này đã được lưu trước đó, không lưu lại.'
+        else if (saveResult.saved)
+          saveNote = ` Đã lưu file: Downloads/${SPLIT_IMAGE_DOWNLOAD_FOLDER}/… (PNG).`
+        else if (saveResult.reason === 'not_extension')
+          saveNote =
+            ' Lưu file cần mở extension đã cài (icon puzzle → AI Content Extension), không mở giao diện bằng tab localhost. Sau khi thêm quyền Downloads, vào chrome://extensions và bấm Tải lại.'
+        else if (saveResult.reason === 'no_storage')
+          saveNote = ' (Không lưu file: thiếu chrome.storage trong môi trường này.)'
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : 'Lỗi không xác định'
+        saveNote = ` Không lưu được file: ${msg}`
+      }
+
+      setStatus(`Đã sao chép ${label} vào clipboard.${saveNote}`)
     } catch {
       setStatus(`Không thể sao chép ${label}. Hãy thử lại.`)
     }

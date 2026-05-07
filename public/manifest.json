@@ -13,7 +13,7 @@
   "side_panel": {
     "default_path": "index.html"
   },
-  "permissions": ["storage", "activeTab", "scripting", "tabs", "sidePanel"],
+  "permissions": ["storage", "activeTab", "scripting", "tabs", "sidePanel", "downloads"],
   "host_permissions": [
     "https://www.facebook.com/*",
     "https://chatgpt.com/*",
