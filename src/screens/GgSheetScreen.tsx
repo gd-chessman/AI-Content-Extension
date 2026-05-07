@@ -52,6 +52,9 @@ export default function GgSheetScreen() {
   const [sheetUrl, setSheetUrl] = useState('')
   const [showSettings, setShowSettings] = useState(false)
   const [sheetPathInput, setSheetPathInput] = useState('')
+  const [titleColumnInput, setTitleColumnInput] = useState('')
+  const [shortColumnInput, setShortColumnInput] = useState('')
+  const [fullColumnInput, setFullColumnInput] = useState('')
   const [status, setStatus] = useState('Sẵn sàng gom dữ liệu từ ChatGPT và đẩy lên GG Sheet.')
   const statusLower = status.toLowerCase()
   const statusTone = statusLower.includes('không thể') || statusLower.includes('không tìm thấy') || statusLower.includes('thất bại') || statusLower.includes('lỗi')
@@ -74,10 +77,16 @@ export default function GgSheetScreen() {
         const settings = await getMyGgSheetSetting()
         const configured = (settings?.ggSheetPath || '').trim()
         setSheetPathInput(configured)
+        setTitleColumnInput((settings?.titleColumn || '').trim())
+        setShortColumnInput((settings?.shortContentColumn || '').trim())
+        setFullColumnInput((settings?.fullContentColumn || '').trim())
         if (configured) setSheetUrl(configured)
       } catch {
         setSheetUrl('')
         setSheetPathInput('')
+        setTitleColumnInput('')
+        setShortColumnInput('')
+        setFullColumnInput('')
       }
     }
     void loadSettings()
@@ -86,7 +95,19 @@ export default function GgSheetScreen() {
   const saveSheetPath = async () => {
     try {
       const next = sheetPathInput.trim()
-      await updateMyGgSheetSetting({ ggSheetPath: next })
+      const titleColumn = titleColumnInput.trim().toUpperCase()
+      const shortContentColumn = shortColumnInput.trim().toUpperCase()
+      const fullContentColumn = fullColumnInput.trim().toUpperCase()
+      if (next && !titleColumn && !shortContentColumn && !fullContentColumn) {
+        setStatus('Phải cấu hình ít nhất 1 cột trước khi lưu.')
+        return
+      }
+      await updateMyGgSheetSetting({
+        ggSheetPath: next,
+        titleColumn,
+        shortContentColumn,
+        fullContentColumn,
+      })
       setSheetUrl(next)
       setShowSettings(false)
       setStatus('Đã lưu cấu hình đường dẫn GG Sheet.')
@@ -94,6 +115,14 @@ export default function GgSheetScreen() {
       const raw = String(error?.response?.data?.message || '').toLowerCase()
       if (raw.includes('invalid url format') || raw.includes('url must use http or https')) {
         setStatus('Đường dẫn GG Sheet không hợp lệ. Chỉ chấp nhận http/https.')
+        return
+      }
+      if (raw.includes('invalid sheet column format')) {
+        setStatus('Cột không hợp lệ. Chỉ nhập chữ cái cột như A, B, AA hoặc để trống.')
+        return
+      }
+      if (raw.includes('at least one target column is required')) {
+        setStatus('Phải cấu hình ít nhất 1 cột trước khi lưu.')
         return
       }
       setStatus('Không thể lưu cấu hình đường dẫn GG Sheet.')
@@ -114,6 +143,12 @@ export default function GgSheetScreen() {
     }
     if (raw.includes('no data to push')) {
       return 'Không có dữ liệu để đẩy lên GG Sheet.'
+    }
+    if (raw.includes('duplicate title and short content')) {
+      return 'Tiêu đề và nội dung ngắn đã tồn tại trong sheet. Không thể ghi trùng dữ liệu.'
+    }
+    if (raw.includes('no target columns configured')) {
+      return 'Bạn chưa cấu hình cột ghi dữ liệu. Hãy nhập ít nhất 1 cột trong phần cài đặt GG Sheet.'
     }
     return fallback
   }
@@ -382,6 +417,39 @@ export default function GgSheetScreen() {
               <FiSave className="h-3.5 w-3.5" />
             </button>
           </div>
+          <div className="mt-2 grid grid-cols-3 gap-2">
+            <div>
+              <p className="text-[10px] text-slate-300">Cột tiêu đề</p>
+              <input
+                type="text"
+                value={titleColumnInput}
+                onChange={(event) => setTitleColumnInput(event.target.value)}
+                placeholder="B"
+                className="mt-1 w-full rounded-lg bg-slate-900/80 px-2 py-1.5 text-[11px] uppercase text-slate-100 outline-none placeholder:text-slate-500"
+              />
+            </div>
+            <div>
+              <p className="text-[10px] text-slate-300">Cột nội dung ngắn</p>
+              <input
+                type="text"
+                value={shortColumnInput}
+                onChange={(event) => setShortColumnInput(event.target.value)}
+                placeholder="C"
+                className="mt-1 w-full rounded-lg bg-slate-900/80 px-2 py-1.5 text-[11px] uppercase text-slate-100 outline-none placeholder:text-slate-500"
+              />
+            </div>
+            <div>
+              <p className="text-[10px] text-slate-300">Cột nội dung dài</p>
+              <input
+                type="text"
+                value={fullColumnInput}
+                onChange={(event) => setFullColumnInput(event.target.value)}
+                placeholder="G"
+                className="mt-1 w-full rounded-lg bg-slate-900/80 px-2 py-1.5 text-[11px] uppercase text-slate-100 outline-none placeholder:text-slate-500"
+              />
+            </div>
+          </div>
+          <p className="mt-1 text-[10px] text-slate-400">Để trống cột nào thì hệ thống sẽ không ghi vào cột đó.</p>
         </div>
       ) : null}
       <div className="rounded-xl border border-white/10 bg-white/5 p-2">
@@ -465,6 +533,9 @@ export default function GgSheetScreen() {
             <p className="text-sm font-semibold text-white">Xác nhận đẩy GG Sheet</p>
             <p className="mt-2 text-[11px] text-slate-300">
               Dữ liệu sẽ được ghi vào dòng <span className="font-semibold text-emerald-200">{previewData.targetRow}</span> ({previewData.targetRange})
+            </p>
+            <p className="mt-1 text-[10px] text-slate-400">
+              Cột ghi: Tiêu đề {previewData.columns.title || 'bỏ qua'} | Ngắn {previewData.columns.shortContent || 'bỏ qua'} | Dài {previewData.columns.full || 'bỏ qua'}
             </p>
             <div className="mt-2 space-y-1 rounded-xl border border-white/10 bg-black/25 p-2 text-[11px] text-slate-200">
               <p><span className="text-slate-400">Tiêu đề:</span> {previewData.data.title || '...'}</p>

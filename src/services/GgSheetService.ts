@@ -2,6 +2,9 @@ import axiosClient from '@/utils/axiosClient'
 
 export type GgSheetSetting = {
   ggSheetPath?: string
+  titleColumn?: string
+  shortContentColumn?: string
+  fullContentColumn?: string
 }
 
 export type GgSheetPushPayload = {
@@ -15,6 +18,7 @@ export type GgSheetPushPreview = {
   targetRow: number
   targetRange: string
   sheetUrl: string
+  columns: { title?: string; shortContent?: string; full?: string }
   data: Required<GgSheetPushPayload>
 }
 
