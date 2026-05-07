@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { FiAlertTriangle, FiCheck, FiCopy, FiInfo } from 'react-icons/fi'
+import { FiAlertTriangle, FiCheck, FiCopy, FiInfo, FiSave, FiSettings } from 'react-icons/fi'
+import { getMySettings, updateMySettings } from '@/services/SettingsService'
 
 type WebAdminPayload = {
   title?: string
@@ -38,7 +39,21 @@ export default function WebAdminScreen() {
   const [image2, setImage2] = useState('')
   const [status, setStatus] = useState('Đợi dữ liệu từ ChatGPT để điền WebAdmin.')
   const [copiedField, setCopiedField] = useState<'title' | 'content' | null>(null)
+  const [showSettings, setShowSettings] = useState(false)
+  const [webPathInput, setWebPathInput] = useState('')
   const contentEditorRef = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    const loadSettings = async () => {
+      try {
+        const settings = await getMySettings()
+        setWebPathInput(settings?.adminPath || '')
+      } catch {
+        setWebPathInput('')
+      }
+    }
+    void loadSettings()
+  }, [])
 
   useEffect(() => {
     const onFill = (event: Event) => {
@@ -97,9 +112,53 @@ export default function WebAdminScreen() {
     }
   }
 
+  const saveWebPath = async () => {
+    try {
+      await updateMySettings({ adminPath: webPathInput.trim() })
+      setStatus('Đã lưu cấu hình đường dẫn WebAdmin.')
+      setShowSettings(false)
+    } catch {
+      setStatus('Không thể lưu cấu hình đường dẫn WebAdmin.')
+    }
+  }
+
   return (
     <section className="glass-panel flex h-full min-h-0 flex-col rounded-3xl p-3">
-      <h2 className="text-sm font-semibold text-white">WebAdmin</h2>
+      <div className="flex items-center justify-between gap-2">
+        <h2 className="text-sm font-semibold text-white">WebAdmin</h2>
+        <button
+          type="button"
+          onClick={() => setShowSettings((prev) => !prev)}
+          className="inline-flex h-7 w-7 cursor-pointer items-center justify-center rounded-lg bg-blue-500/20 text-blue-100 transition hover:bg-blue-500/30"
+          title="Cài đặt đường dẫn web"
+          aria-label="Cài đặt đường dẫn web"
+        >
+          <FiSettings className="h-3.5 w-3.5" />
+        </button>
+      </div>
+      {showSettings ? (
+        <div className="mt-2 rounded-xl border border-blue-300/30 bg-blue-500/10 p-2">
+          <p className="text-[10px] text-slate-300">Đường dẫn WebAdmin</p>
+          <div className="mt-1 flex items-center gap-2">
+            <input
+              type="text"
+              value={webPathInput}
+              onChange={(event) => setWebPathInput(event.target.value)}
+              placeholder="https://your-webadmin-url.com"
+              className="w-full rounded-lg bg-slate-900/80 px-2 py-1.5 text-[11px] text-slate-100 outline-none placeholder:text-slate-500"
+            />
+            <button
+              type="button"
+              onClick={saveWebPath}
+              className="inline-flex h-7 w-7 cursor-pointer items-center justify-center rounded-lg bg-emerald-500/20 text-emerald-100 transition hover:bg-emerald-500/30"
+              title="Lưu cấu hình"
+              aria-label="Lưu cấu hình"
+            >
+              <FiSave className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        </div>
+      ) : null}
       <p
         className={`mt-2 inline-flex shrink-0 items-center gap-1.5 rounded-xl border px-3 py-2 text-[11px] ${
           statusTone === 'success'

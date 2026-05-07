@@ -3,6 +3,8 @@ import { FaFacebookF } from 'react-icons/fa6'
 import { RiAdminFill } from 'react-icons/ri'
 import { SiGooglesheets, SiOpenai, SiX } from 'react-icons/si'
 import ExtensionLayout from '../layouts/ExtensionLayout'
+import { useAuth } from '../hooks/useAuth'
+import { getCachedSettings } from '../services/SettingsService'
 import ChatgptScreen from '../screens/ChatgptScreen'
 import FacebookScreen from '../screens/FacebookScreen'
 import GgSheetScreen from '../screens/GgSheetScreen'
@@ -38,14 +40,47 @@ const mainTabs: Array<{
 ]
 
 function AppRouter() {
-  const [activeRoute, setActiveRoute] = useState<RouteId>('facebook')
+  const [activeRoute, setActiveRoute] = useState<RouteId>('login')
+  const isAuthenticated = useAuth((state) => state.isAuthenticated)
+  const checkAuth = useAuth((state) => state.checkAuth)
 
   const syncBrowserTabByRoute = (routeId: Exclude<RouteId, 'login'>) => {
+    const settings = getCachedSettings()
+    const webadminUrl = (settings.adminPath || '').trim()
+    const ggSheetUrl = (settings.ggSheetPath || '').trim()
+    const toPattern = (url: string) => {
+      try {
+        const parsed = new URL(url)
+        return `${parsed.origin}/*`
+      } catch {
+        return url
+      }
+    }
+    const normalizeUrl = (url: string) => {
+      const value = (url || '').trim()
+      if (!value) return ''
+      return value.replace(/\/+$/, '')
+    }
     const targetByRoute: Partial<Record<Exclude<RouteId, 'login'>, { url: string; patterns: string[] }>> = {
       facebook: { url: 'https://www.facebook.com/', patterns: ['*://*.facebook.com/*'] },
       chatgpt: { url: 'https://chatgpt.com/', patterns: ['*://chatgpt.com/*', '*://chat.openai.com/*'] },
       grok: { url: 'https://grok.com/imagine/saved', patterns: ['*://grok.com/imagine*'] },
-      ggsheet: { url: 'https://docs.google.com/spreadsheets/', patterns: ['*://docs.google.com/spreadsheets/*'] },
+      ...(webadminUrl
+        ? {
+            webadmin: {
+              url: webadminUrl,
+              patterns: [toPattern(webadminUrl)],
+            },
+          }
+        : {}),
+      ...(ggSheetUrl
+        ? {
+            ggsheet: {
+              url: ggSheetUrl,
+              patterns: [toPattern(ggSheetUrl)],
+            },
+          }
+        : {}),
     }
     const target = targetByRoute[routeId]
     if (!target) return
@@ -56,12 +91,28 @@ function AppRouter() {
     extensionChrome.tabs.query({ url: target.patterns, currentWindow: true }, (tabs) => {
       const existing = tabs.find((tab) => tab.active && tab.id) || tabs.find((tab) => tab.id)
       if (existing?.id) {
-        extensionChrome.tabs?.update?.(existing.id, { active: true })
+        const isSameUrl = normalizeUrl(existing.url || '') === normalizeUrl(target.url)
+        if (isSameUrl) {
+          extensionChrome.tabs?.update?.(existing.id, { active: true })
+          return
+        }
+        extensionChrome.tabs?.update?.(existing.id, { url: target.url, active: true })
         return
       }
       extensionChrome.tabs?.create?.({ url: target.url, active: true })
     })
   }
+
+  useEffect(() => {
+    const bootstrapAuth = async () => {
+      if (isAuthenticated) {
+        setActiveRoute('facebook')
+      }
+      const ok = await checkAuth()
+      setActiveRoute(ok ? 'facebook' : 'login')
+    }
+    void bootstrapAuth()
+  }, [checkAuth, isAuthenticated])
 
   useEffect(() => {
     const handler = (event: Event) => {
@@ -77,14 +128,14 @@ function AppRouter() {
 
   if (activeRoute === 'login') {
     return (
-      <ExtensionLayout>
-        <LoginScreen />
+      <ExtensionLayout showProfileButton={false}>
+        <LoginScreen onLoginSuccess={() => setActiveRoute('facebook')} />
       </ExtensionLayout>
     )
   }
 
   const routeContent: Record<Exclude<RouteId, 'login'>, ReactNode> = {
-    profile: <ProfileScreen />,
+    profile: <ProfileScreen onLogout={() => setActiveRoute('login')} />,
     facebook: <FacebookScreen />,
     chatgpt: <ChatgptScreen />,
     grok: <GrokScreen />,

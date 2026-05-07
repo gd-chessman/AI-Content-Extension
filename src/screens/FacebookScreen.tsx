@@ -1,5 +1,25 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { FiAlertTriangle, FiCheck, FiInfo, FiSearch } from 'react-icons/fi'
+import {
+  FiAlertTriangle,
+  FiCheck,
+  FiCheckCircle,
+  FiEdit2,
+  FiInfo,
+  FiMenu,
+  FiPlus,
+  FiSearch,
+  FiTrash2,
+  FiX,
+  FiXCircle,
+} from 'react-icons/fi'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import {
+  createFanpage,
+  deleteAllFanpages,
+  deleteFanpage,
+  getFanpages,
+  updateFanpage,
+} from '@/services/FanpageService'
 
 type ScannedReel = {
   id: string
@@ -9,6 +29,12 @@ type ScannedReel = {
   url: string
   viewCount: number
   imageUrl: string
+}
+
+type FanpageItem = {
+  _id: string
+  name: string
+  url: string
 }
 
 type ExtensionChrome = {
@@ -28,99 +54,6 @@ type ExtensionChrome = {
     }) => Promise<Array<{ result?: unknown }>>
   }
 }
-
-const fanpages = [
-  {
-    id: 'fp-1',
-    name: 'Profile 61581309613138',
-    url: 'https://www.facebook.com/profile.php?id=61581309613138&sk=reels_tab',
-  },
-  {
-    id: 'fp-2',
-    name: 'ThousandTales68',
-    url: 'https://www.facebook.com/ThousandTales68/reels/',
-  },
-  {
-    id: 'fp-3',
-    name: 'SilentHeroes369',
-    url: 'https://www.facebook.com/SilentHeroes369/reels/',
-  },
-  {
-    id: 'fp-4',
-    name: '3mforlife.offcial',
-    url: 'https://www.facebook.com/3mforlife.offcial/reels/',
-  },
-  {
-    id: 'fp-5',
-    name: 'happyliving88',
-    url: 'https://www.facebook.com/happyliving88/reels/',
-  },
-  {
-    id: 'fp-6',
-    name: 'Profile 61581792626415',
-    url: 'https://www.facebook.com/profile.php?id=61581792626415&sk=reels_tab',
-  },
-  {
-    id: 'fp-7',
-    name: 'LifeShortTales',
-    url: 'https://www.facebook.com/LifeShortTales/reels/',
-  },
-  {
-    id: 'fp-8',
-    name: 'KailasTVOfficial',
-    url: 'https://www.facebook.com/KailasTVOfficial/reels/',
-  },
-  {
-    id: 'fp-9',
-    name: 'Profile 100064211677926',
-    url: 'https://www.facebook.com/profile.php?id=100064211677926&sk=reels_tab',
-  },
-  {
-    id: 'fp-10',
-    name: 'Profile 61581342302835',
-    url: 'https://www.facebook.com/profile.php?id=61581342302835&sk=reels_tab',
-  },
-  {
-    id: 'fp-11',
-    name: 'womenlife88',
-    url: 'https://www.facebook.com/womenlife88/reels/',
-  },
-  {
-    id: 'fp-12',
-    name: 'dramaseriesfb',
-    url: 'https://www.facebook.com/dramaseriesfb/reels/',
-  },
-  {
-    id: 'fp-13',
-    name: 'togethergoodd',
-    url: 'https://www.facebook.com/togethergoodd/reels/',
-  },
-  {
-    id: 'fp-14',
-    name: 'Profile 61579479232452',
-    url: 'https://www.facebook.com/profile.php?id=61579479232452&sk=reels_tab',
-  },
-  {
-    id: 'fp-15',
-    name: 'Profile 61588320100559',
-    url: 'https://www.facebook.com/profile.php?id=61588320100559&sk=reels_tab',
-  },
-  {
-    id: 'fp-16',
-    name: 'betterthoughtstv',
-    url: 'https://www.facebook.com/betterthoughtstv/reels/',
-  },
-  {
-    id: 'fp-17',
-    name: 'themeaningoflife88',
-    url: 'https://www.facebook.com/themeaningoflife88/reels/',
-  },
-  {
-    id: 'fp-18',
-    name: 'Profile 61584657914140',
-    url: 'https://www.facebook.com/profile.php?id=61584657914140&sk=reels_tab',
-  },
-]
 
 const MIN_VIEW_COUNT = 500_000
 const MAX_SCAN_RESULTS = 5
@@ -145,6 +78,29 @@ export default function FacebookScreen() {
   const [copyStatus, setCopyStatus] = useState<'idle' | 'ok' | 'error'>('idle')
   const [isContentDirty, setIsContentDirty] = useState(false)
   const [reelLinkInput, setReelLinkInput] = useState('')
+  const [showAddFanpageForm, setShowAddFanpageForm] = useState(false)
+  const [showEditFanpagesModal, setShowEditFanpagesModal] = useState(false)
+  const [fanpageBulkInput, setFanpageBulkInput] = useState('')
+  const [fanpageStatus, setFanpageStatus] = useState('')
+  const [editingFanpages, setEditingFanpages] = useState<FanpageItem[]>([])
+  const queryClient = useQueryClient()
+  const { data: fanpages = [], isLoading: isLoadingFanpages } = useQuery<FanpageItem[]>({
+    queryKey: ['fanpages'],
+    queryFn: getFanpages,
+  })
+  const createFanpageMutation = useMutation({
+    mutationFn: createFanpage,
+  })
+  const updateFanpageMutation = useMutation({
+    mutationFn: ({ id, payload }: { id: string; payload: { name?: string; url?: string } }) =>
+      updateFanpage(id, payload),
+  })
+  const deleteFanpageMutation = useMutation({
+    mutationFn: deleteFanpage,
+  })
+  const deleteAllFanpagesMutation = useMutation({
+    mutationFn: deleteAllFanpages,
+  })
   const isContentDirtyRef = useRef(false)
   const contentTextareaRef = useRef<HTMLTextAreaElement | null>(null)
   const scanControlRef = useRef<{ token: string; tabId: number } | null>(null)
@@ -156,6 +112,12 @@ export default function FacebookScreen() {
       : scanStatusLower.includes('đã ')
         ? 'success'
         : 'info'
+  const fanpageStatusLower = fanpageStatus.toLowerCase()
+  const fanpageStatusTone = fanpageStatusLower.includes('lỗi') || fanpageStatusLower.includes('thất bại')
+    ? 'error'
+    : fanpageStatusLower.includes('đã ')
+      ? 'success'
+      : 'info'
 
   useEffect(() => {
     isContentDirtyRef.current = isContentDirty
@@ -223,6 +185,90 @@ export default function FacebookScreen() {
   const buildContentText = (reel: ScannedReel) => {
     const desc = reel.description?.trim() ? reel.description.trim() : ''
     return desc
+  }
+
+  const handleAddFanpages = async () => {
+    const rows = fanpageBulkInput
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean)
+
+    if (rows.length === 0) {
+      setFanpageStatus('Hãy nhập dữ liệu fanpage trước khi thêm.')
+      return
+    }
+
+    let successCount = 0
+    let failedCount = 0
+
+    for (const row of rows) {
+      let name = ''
+      let url = ''
+      if (row.includes('|')) {
+        const [nameRaw, ...urlParts] = row.split('|')
+        name = (nameRaw || '').trim()
+        url = urlParts.join('|').trim()
+      } else {
+        url = row
+      }
+      if (!url) {
+        failedCount += 1
+        continue
+      }
+
+      try {
+        await createFanpageMutation.mutateAsync({ name: name || undefined, url })
+        successCount += 1
+      } catch {
+        failedCount += 1
+      }
+    }
+
+    await queryClient.invalidateQueries({ queryKey: ['fanpages'] })
+    setFanpageStatus(`Đã thêm ${successCount} fanpage${failedCount ? `, lỗi ${failedCount}` : ''}.`)
+    if (successCount > 0) {
+      setFanpageBulkInput('')
+      setShowAddFanpageForm(false)
+    }
+  }
+
+  const openEditFanpagesModal = () => {
+    setEditingFanpages(fanpages.map((item) => ({ ...item })))
+    setShowEditFanpagesModal(true)
+    setFanpageStatus('')
+  }
+
+  const handleEditFanpageField = (
+    id: string,
+    field: 'name' | 'url',
+    value: string,
+  ) => {
+    setEditingFanpages((prev) =>
+      prev.map((item) => (item._id === id ? { ...item, [field]: value } : item)),
+    )
+  }
+
+  const handleSaveFanpage = async (item: FanpageItem) => {
+    await updateFanpageMutation.mutateAsync({
+      id: item._id,
+      payload: { name: item.name, url: item.url },
+    })
+    await queryClient.invalidateQueries({ queryKey: ['fanpages'] })
+    setFanpageStatus('Đã cập nhật fanpage.')
+  }
+
+  const handleDeleteFanpage = async (id: string) => {
+    await deleteFanpageMutation.mutateAsync(id)
+    await queryClient.invalidateQueries({ queryKey: ['fanpages'] })
+    setEditingFanpages((prev) => prev.filter((item) => item._id !== id))
+    setFanpageStatus('Đã xóa fanpage.')
+  }
+
+  const handleDeleteAllFanpages = async () => {
+    await deleteAllFanpagesMutation.mutateAsync()
+    await queryClient.invalidateQueries({ queryKey: ['fanpages'] })
+    setEditingFanpages([])
+    setFanpageStatus('Đã xóa toàn bộ fanpage.')
   }
 
   const openReelLinkInFacebookTab = (url: string) => {
@@ -880,14 +926,64 @@ export default function FacebookScreen() {
         </div>
       </section>
 
-      <div className={activeView === 'content' ? 'min-h-0 flex flex-1 pr-1' : 'min-h-0 flex-1 space-y-3 overflow-y-auto pr-1'}>
+      <div className={activeView === 'content' ? 'relative min-h-0 flex flex-1 pr-1' : 'relative min-h-0 flex-1 space-y-3 overflow-y-auto pr-1'}>
         {activeView === 'fanpages' ? (
           <section className="glass-panel rounded-3xl p-3">
-          <h2 className="text-sm font-semibold text-white">Fanpage nguồn</h2>
-          <div className="mt-2 space-y-2">
-            {fanpages.map((page) => (
+          <div className="flex items-center justify-between gap-2">
+            <h2 className="text-sm font-semibold text-white">Fanpage nguồn</h2>
+            <div className="flex items-center gap-1.5">
               <button
-                key={page.id}
+                type="button"
+                onClick={openEditFanpagesModal}
+                className="inline-flex h-6 w-6 cursor-pointer items-center justify-center rounded-full border border-amber-300/70 bg-amber-200 text-amber-800 transition hover:bg-amber-300"
+                title="Sửa nhanh danh sách"
+                aria-label="Sửa nhanh danh sách"
+              >
+                <FiEdit2 className="h-3 w-3" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowAddFanpageForm((prev) => !prev)}
+                className="inline-flex h-6 w-6 cursor-pointer items-center justify-center rounded-full border border-blue-300/70 bg-blue-200 text-blue-800 transition hover:bg-blue-300"
+                title="Thêm fanpage"
+                aria-label="Thêm fanpage"
+              >
+                <FiPlus className="h-3 w-3" />
+              </button>
+            </div>
+          </div>
+          {fanpageStatus ? (
+            <p
+              className={`mt-2 inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11px] ${
+                fanpageStatusTone === 'success'
+                  ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-100'
+                  : fanpageStatusTone === 'error'
+                    ? 'border-rose-500/30 bg-rose-500/10 text-rose-100'
+                    : 'border-white/10 bg-black/25 text-slate-300'
+              }`}
+            >
+              {fanpageStatusTone === 'success' ? (
+                <FiCheck className="h-3.5 w-3.5" />
+              ) : fanpageStatusTone === 'error' ? (
+                <FiAlertTriangle className="h-3.5 w-3.5" />
+              ) : (
+                <FiInfo className="h-3.5 w-3.5" />
+              )}
+              {fanpageStatus}
+            </p>
+          ) : null}
+          <div className="mt-2 space-y-2">
+            {isLoadingFanpages ? (
+              <p className="rounded-xl border border-blue-300/20 bg-blue-400/10 px-3 py-2 text-[11px] text-slate-500">
+                Đang tải danh sách fanpage...
+              </p>
+            ) : fanpages.length === 0 ? (
+              <p className="rounded-xl border border-amber-300/20 bg-amber-400/10 px-3 py-2 text-[11px] text-slate-400">
+                Chưa có fanpage nào. Hãy thêm mới
+              </p>
+            ) : fanpages.map((page) => (
+              <button
+                key={page._id}
                 type="button"
                 onClick={() => openFanpage(page.url)}
                 disabled={openedFacebookUrls.has(normalizeUrl(page.url))}
@@ -914,6 +1010,138 @@ export default function FacebookScreen() {
             ))}
           </div>
           </section>
+        ) : null}
+        {showAddFanpageForm ? (
+          <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/50 px-3">
+            <div className="w-full max-w-lg rounded-2xl border border-blue-300/40 bg-slate-950/95 p-3 shadow-2xl">
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="text-sm font-semibold text-white">Thêm fanpage</h3>
+                <button
+                  type="button"
+                  onClick={() => setShowAddFanpageForm(false)}
+                  className="inline-flex h-6 w-6 cursor-pointer items-center justify-center rounded-md text-slate-300 transition hover:bg-white/10"
+                  title="Đóng"
+                  aria-label="Đóng"
+                >
+                  <FiX className="h-3.5 w-3.5" />
+                </button>
+              </div>
+              <textarea
+                value={fanpageBulkInput}
+                onChange={(event) => setFanpageBulkInput(event.target.value)}
+                placeholder={
+                  'Mỗi dòng nhập URL hoặc Tên|URL\nVí dụ 1: https://www.facebook.com/ThousandTales68/reels/\nVí dụ 2: ThousandTales68|https://www.facebook.com/ThousandTales68/reels/'
+                }
+                className="mt-2 h-36 w-full resize-none rounded-xl bg-slate-900/90 px-3 py-2 text-[11px] text-slate-100 outline-none placeholder:text-slate-500 focus:ring-2 focus:ring-blue-400/30"
+              />
+              <div className="mt-2 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowAddFanpageForm(false)}
+                  className="inline-flex h-7 w-7 cursor-pointer items-center justify-center rounded-lg bg-white/10 text-slate-200 transition hover:bg-white/20"
+                  title="Hủy"
+                  aria-label="Hủy"
+                >
+                  <FiXCircle className="h-3.5 w-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleAddFanpages()}
+                  disabled={createFanpageMutation.isPending}
+                  className="inline-flex h-7 w-7 cursor-pointer items-center justify-center rounded-lg bg-blue-500/25 text-blue-200 transition hover:bg-blue-500/35 disabled:cursor-not-allowed disabled:opacity-50"
+                  title="Thêm danh sách"
+                  aria-label="Thêm danh sách"
+                >
+                  {createFanpageMutation.isPending ? (
+                    <span className="h-3.5 w-3.5 animate-spin rounded-full border border-blue-200/30 border-t-blue-100" />
+                  ) : (
+                    <FiCheckCircle className="h-3.5 w-3.5" />
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
+        {showEditFanpagesModal ? (
+          <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/50 px-3">
+            <div className="w-full max-w-2xl rounded-2xl border border-blue-300/40 bg-slate-950/95 p-3 shadow-2xl">
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="text-sm font-semibold text-white">Sửa nhanh fanpages</h3>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => void handleDeleteAllFanpages()}
+                    disabled={deleteAllFanpagesMutation.isPending || editingFanpages.length === 0}
+                    className="inline-flex h-6 w-6 cursor-pointer items-center justify-center rounded-md bg-rose-500/20 text-rose-200 transition hover:bg-rose-500/30 disabled:cursor-not-allowed disabled:opacity-40"
+                    title="Xóa tất cả"
+                    aria-label="Xóa tất cả"
+                  >
+                    <span className="relative inline-flex h-3.5 w-3.5 items-center justify-center">
+                      <FiTrash2 className="h-3.5 w-3.5" />
+                      <FiMenu className="absolute -right-1.5 -top-1.5 h-2.5 w-2.5 rounded-full bg-rose-500/70 p-[1px] text-white" />
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowEditFanpagesModal(false)}
+                    className="inline-flex h-6 w-6 cursor-pointer items-center justify-center rounded-md text-slate-300 transition hover:bg-white/10"
+                    title="Đóng"
+                    aria-label="Đóng"
+                  >
+                    <FiX className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              </div>
+
+              <div className="mt-2 max-h-[320px] space-y-2 overflow-y-auto pr-1">
+                {editingFanpages.map((item) => (
+                  <div key={item._id} className="rounded-xl border border-white/10 bg-black/20 p-2">
+                    <input
+                      value={item.name}
+                      onChange={(event) =>
+                        handleEditFanpageField(item._id, 'name', event.target.value)
+                      }
+                      placeholder="Tên fanpage"
+                      className="w-full rounded-lg bg-slate-900/90 px-2 py-1.5 text-[11px] text-slate-100 outline-none placeholder:text-slate-500"
+                    />
+                    <input
+                      value={item.url}
+                      onChange={(event) =>
+                        handleEditFanpageField(item._id, 'url', event.target.value)
+                      }
+                      placeholder="URL"
+                      className="mt-1.5 w-full rounded-lg bg-slate-900/90 px-2 py-1.5 text-[11px] text-slate-100 outline-none placeholder:text-slate-500"
+                    />
+                    <div className="mt-1.5 flex justify-end gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => void handleDeleteFanpage(item._id)}
+                        className="inline-flex h-6 w-6 cursor-pointer items-center justify-center rounded-md bg-rose-500/20 text-rose-200 transition hover:bg-rose-500/30"
+                        title="Xóa"
+                        aria-label="Xóa"
+                      >
+                        <FiTrash2 className="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void handleSaveFanpage(item)}
+                        className="inline-flex h-6 w-6 cursor-pointer items-center justify-center rounded-md bg-blue-500/25 text-blue-200 transition hover:bg-blue-500/35"
+                        title="Lưu"
+                        aria-label="Lưu"
+                      >
+                        <FiCheck className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+                {editingFanpages.length === 0 ? (
+                  <p className="rounded-xl border border-amber-300/20 bg-amber-400/10 px-3 py-2 text-[11px] text-slate-400">
+                    Chưa có fanpage nào để chỉnh sửa.
+                  </p>
+                ) : null}
+              </div>
+            </div>
+          </div>
         ) : null}
 
         {activeView === 'reels' ? (

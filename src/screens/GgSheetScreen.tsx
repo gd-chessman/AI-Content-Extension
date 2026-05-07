@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import { FiAlertTriangle, FiCheck, FiDownload, FiInfo, FiSave, FiSend } from 'react-icons/fi'
+import { FiAlertTriangle, FiCheck, FiDownload, FiInfo, FiSave, FiSend, FiSettings } from 'react-icons/fi'
+import { getMySettings, updateMySettings } from '@/services/SettingsService'
 
 type BrowserTab = { id?: number; url?: string; active?: boolean }
 type ExtensionChrome = {
@@ -28,14 +29,16 @@ type CollectedData = {
 
 const CHATGPT_URL = 'https://chatgpt.com/'
 const CHATGPT_PATTERNS = ['*://chatgpt.com/*', '*://chat.openai.com/*']
-const SHEET_ID = '1LqNyZfUm6u9MNet9kGjeqqPem6t_vMMTMyC_8AqIOW4'
-const isValidSheetUrl = (url?: string) => Boolean(url && url.includes(SHEET_ID))
+const extractSheetId = (url: string) => url.match(/\/spreadsheets\/d\/([^/]+)/)?.[1] || ''
 const toTsvRow = (values: CollectedData) =>
   [values.title || '', values.shortContent || '', '', '', '', values.fullContent || '']
     .map((cell) => String(cell).replace(/\r/g, ' ').replace(/\t/g, ' ').trim())
     .join('\t')
 
 export default function GgSheetScreen() {
+  const [sheetUrl, setSheetUrl] = useState('')
+  const [showSettings, setShowSettings] = useState(false)
+  const [sheetPathInput, setSheetPathInput] = useState('')
   const [status, setStatus] = useState('Sẵn sàng gom dữ liệu từ ChatGPT và đẩy lên GG Sheet.')
   const statusLower = status.toLowerCase()
   const statusTone = statusLower.includes('không thể') || statusLower.includes('không tìm thấy') || statusLower.includes('thất bại') || statusLower.includes('lỗi')
@@ -47,6 +50,35 @@ export default function GgSheetScreen() {
         : 'info'
   const [data, setData] = useState<CollectedData>({ title: '', shortContent: '', fullContent: '' })
   const [isSaving, setIsSaving] = useState(false)
+  const sheetId = extractSheetId(sheetUrl)
+  const isValidSheetUrl = (url?: string) => Boolean(sheetId && url && url.includes(sheetId))
+
+  useEffect(() => {
+    const loadSettings = async () => {
+      try {
+        const settings = await getMySettings()
+        const configured = (settings?.ggSheetPath || '').trim()
+        setSheetPathInput(configured)
+        if (configured) setSheetUrl(configured)
+      } catch {
+        setSheetUrl('')
+        setSheetPathInput('')
+      }
+    }
+    void loadSettings()
+  }, [])
+
+  const saveSheetPath = async () => {
+    try {
+      const next = sheetPathInput.trim()
+      await updateMySettings({ ggSheetPath: next })
+      setSheetUrl(next)
+      setShowSettings(false)
+      setStatus('Đã lưu cấu hình đường dẫn GG Sheet.')
+    } catch {
+      setStatus('Không thể lưu cấu hình đường dẫn GG Sheet.')
+    }
+  }
 
   const getChrome = () => (globalThis as { chrome?: ExtensionChrome }).chrome
   const sleep = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms))
@@ -93,6 +125,7 @@ export default function GgSheetScreen() {
   }
 
   const getOrOpenSheetTab = async () => {
+    if (!sheetId) return null
     const allTabs = await queryTabs(undefined)
     let sheetTabs = allTabs.filter((tab) => isValidSheetUrl(tab.url))
     if (sheetTabs.length === 0) {
@@ -237,9 +270,10 @@ export default function GgSheetScreen() {
   }
 
   const getNextRow = async () => {
+    if (!sheetId) return 2
     try {
       const query = encodeURIComponent('select B where B is not null')
-      const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?gid=0&headers=1&tq=${query}`
+      const url = `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?gid=0&headers=1&tq=${query}`
       const response = await fetch(url)
       const text = await response.text()
       const jsonText = text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1)
@@ -347,7 +381,7 @@ export default function GgSheetScreen() {
       return false
     }
 
-    const rawUrl = target.url || `https://docs.google.com/spreadsheets/d/${SHEET_ID}/edit`
+    const rawUrl = target.url || sheetUrl
     const base = rawUrl.split('#')[0] || rawUrl
     const focused = await updateTab(target.id, `${base}#gid=0&range=B${row}`)
     return Boolean(focused?.id)
@@ -380,6 +414,10 @@ export default function GgSheetScreen() {
   }
 
   const pushToSheet = async () => {
+    if (!sheetId) {
+      setStatus('Chưa cấu hình đường dẫn GG Sheet. Hãy vào cài đặt và lưu ggSheetPath trước.')
+      return
+    }
     if (!data.title && !data.shortContent && !data.fullContent) {
       setStatus('Chưa có dữ liệu. Hãy bấm nút gom dữ liệu trước.')
       return
@@ -416,6 +454,10 @@ export default function GgSheetScreen() {
   }
 
   const collectAndPush = async () => {
+    if (!sheetId) {
+      setStatus('Chưa cấu hình đường dẫn GG Sheet. Hãy vào cài đặt và lưu ggSheetPath trước.')
+      return
+    }
     setIsSaving(true)
     const collected = await collectFromChatgpt()
     if (!collected) {
@@ -456,8 +498,43 @@ export default function GgSheetScreen() {
   }, [])
 
   return (
-    <section className="flex h-full flex-col gap-2 rounded-2xl border border-white/10 bg-black/25 p-3">
-      <div className="rounded-xl border border-white/10 bg-white/5 p-2">
+    <section className="glass-panel flex h-full min-h-0 flex-col rounded-3xl p-3">
+      <div className="flex items-center justify-between">
+        <h2 className="text-sm font-semibold text-white">GG Sheet</h2>
+        <button
+          type="button"
+          onClick={() => setShowSettings((prev) => !prev)}
+          className="inline-flex h-7 w-7 cursor-pointer items-center justify-center rounded-lg bg-blue-500/20 text-blue-100 transition hover:bg-blue-500/30"
+          title="Cài đặt đường dẫn GG Sheet"
+          aria-label="Cài đặt đường dẫn GG Sheet"
+        >
+          <FiSettings className="h-3.5 w-3.5" />
+        </button>
+      </div>
+      {showSettings ? (
+        <div className="mt-2 rounded-xl border border-blue-300/30 bg-blue-500/10 p-2">
+          <p className="text-[10px] text-slate-300">Đường dẫn GG Sheet</p>
+          <div className="mt-1 flex items-center gap-2">
+            <input
+              type="text"
+              value={sheetPathInput}
+              onChange={(event) => setSheetPathInput(event.target.value)}
+              placeholder="https://docs.google.com/spreadsheets/d/..."
+              className="w-full rounded-lg bg-slate-900/80 px-2 py-1.5 text-[11px] text-slate-100 outline-none placeholder:text-slate-500"
+            />
+            <button
+              type="button"
+              onClick={() => void saveSheetPath()}
+              className="inline-flex h-7 w-7 cursor-pointer items-center justify-center rounded-lg bg-emerald-500/20 text-emerald-100 transition hover:bg-emerald-500/30"
+              title="Lưu cấu hình"
+              aria-label="Lưu cấu hình"
+            >
+              <FiSave className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        </div>
+      ) : null}
+      <div className="mt-2 rounded-xl border border-white/10 bg-white/5 p-2">
         <p
           className={`inline-flex items-center gap-1.5 rounded-lg border px-2 py-1 text-[11px] ${
             statusTone === 'success'
