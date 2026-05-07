@@ -509,6 +509,7 @@ export default function FacebookScreen() {
     const minViewCount = Number(minViewInput.replace(/[^\d]/g, '')) || MIN_VIEW_COUNT
     const parsedMaxView = Number(maxViewInput.replace(/[^\d]/g, ''))
     const maxViewCount = Number.isFinite(parsedMaxView) && parsedMaxView > 0 ? parsedMaxView : Number.POSITIVE_INFINITY
+    const maxViewArg = Number.isFinite(maxViewCount) && maxViewCount !== Number.POSITIVE_INFINITY ? maxViewCount : -1
 
     if (!extensionChrome?.tabs?.query || !extensionChrome?.scripting?.executeScript) {
       setScanStatus('Không thể quét trong môi trường hiện tại.')
@@ -565,7 +566,8 @@ export default function FacebookScreen() {
       try {
         const result = await extensionChrome.scripting?.executeScript?.({
           target: { tabId: targetTab.id },
-          func: (async (minViews: number, maxViews: number, limit: number) => {
+          func: (async (minViews: number, maxViewsArgInner: number, limit: number) => {
+            const maxViews = maxViewsArgInner > 0 ? maxViewsArgInner : Number.POSITIVE_INFINITY
             const normalizeNumber = (raw: string) => raw.replace(/\./g, '').replace(',', '.')
 
             const parseViewCount = (text: string) => {
@@ -753,8 +755,14 @@ export default function FacebookScreen() {
               .sort((a, b) => b.viewCount - a.viewCount)
               .slice(0, limit)
           }) as (...args: unknown[]) => unknown,
-          args: [minViewCount, maxViewCount, MAX_SCAN_RESULTS],
+          args: [minViewCount, maxViewArg, MAX_SCAN_RESULTS],
         })
+
+        if (!result) {
+          setScanStatus('Quét thất bại: không nhận được kết quả từ executeScript.')
+          setScannedReels([])
+          return
+        }
 
         const reels = (result?.[0]?.result as ScannedReel[] | undefined) || []
         setScannedReels(reels)
@@ -767,8 +775,9 @@ export default function FacebookScreen() {
             ? `Đã quét được ${reels.length} video trong khoảng ${rangeLabel} lượt xem.`
             : `Không tìm thấy video nào trong khoảng ${rangeLabel} lượt xem.`,
         )
-      } catch {
-        setScanStatus('Quét thất bại. Hãy mở đúng trang reels của fanpage rồi thử lại.')
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        setScanStatus(`Quét thất bại: ${message}. Hãy mở đúng trang reels của fanpage rồi thử lại.`)
         setScannedReels([])
       }
     })
