@@ -90,9 +90,32 @@ export default function GgSheetScreen() {
       setSheetUrl(next)
       setShowSettings(false)
       setStatus('Đã lưu cấu hình đường dẫn GG Sheet.')
-    } catch {
+    } catch (error: any) {
+      const raw = String(error?.response?.data?.message || '').toLowerCase()
+      if (raw.includes('invalid url format') || raw.includes('url must use http or https')) {
+        setStatus('Đường dẫn GG Sheet không hợp lệ. Chỉ chấp nhận http/https.')
+        return
+      }
       setStatus('Không thể lưu cấu hình đường dẫn GG Sheet.')
     }
+  }
+
+  const mapGgSheetErrorMessage = (error: any, fallback: string) => {
+    const raw = String(error?.response?.data?.message || '').toLowerCase()
+    if (!raw) return fallback
+    if (raw.includes('permission denied') || raw.includes('does not have permission')) {
+      return 'Google Sheet chưa cấp quyền cho tài khoản service. Hãy share sheet cho GOOGLE_SERVICE_ACCOUNT_EMAIL với quyền Editor.'
+    }
+    if (raw.includes('not found') || raw.includes('check ggsheetpath')) {
+      return 'Không tìm thấy Google Sheet. Hãy kiểm tra lại đường dẫn ggSheetPath.'
+    }
+    if (raw.includes('service account is not configured')) {
+      return 'Backend chưa cấu hình Google Service Account.'
+    }
+    if (raw.includes('no data to push')) {
+      return 'Không có dữ liệu để đẩy lên GG Sheet.'
+    }
+    return fallback
   }
 
   const getChrome = () => (globalThis as { chrome?: ExtensionChrome }).chrome
@@ -268,8 +291,8 @@ export default function GgSheetScreen() {
       setPreviewData(preview)
       setShowPreviewModal(true)
       setStatus(`Sẵn sàng đẩy dữ liệu lên dòng ${preview.targetRow}. Xác nhận để tiếp tục.`)
-    } catch {
-      setStatus('Không thể kiểm tra trước khi đẩy GG Sheet.')
+    } catch (error: any) {
+      setStatus(mapGgSheetErrorMessage(error, 'Không thể kiểm tra trước khi đẩy GG Sheet.'))
     } finally {
       setIsSaving(false)
     }
@@ -284,8 +307,8 @@ export default function GgSheetScreen() {
       setShowPreviewModal(false)
       setPreviewData(null)
       setStatus(`Đã ghi dữ liệu vào GG Sheet tại dòng ${result.targetRow} (B, C, G).`)
-    } catch {
-      setStatus('Đẩy dữ liệu lên GG Sheet thất bại.')
+    } catch (error: any) {
+      setStatus(mapGgSheetErrorMessage(error, 'Đẩy dữ liệu lên GG Sheet thất bại.'))
     } finally {
       setIsSaving(false)
     }
