@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { FiAlignLeft, FiAlertTriangle, FiCheck, FiCopy, FiEdit3, FiFileText, FiFilm, FiImage, FiInfo, FiItalic, FiScissors, FiType } from 'react-icons/fi'
 import { IoFlash } from 'react-icons/io5'
+import { RiAdminFill } from 'react-icons/ri'
 import { SiX } from 'react-icons/si'
 
 type BrowserTab = { id?: number; url?: string; active?: boolean }
@@ -929,7 +930,11 @@ export default function ChatgptScreen() {
     setStatus(`Đã chuyển Grok: dùng ảnh ${part} (Tiến trình 3) + VIDEO ${part} (Tiến trình 2), không Enter.`)
   }
 
-  const extractStep4Content = async (kind: 'title_plain' | 'title_styled' | 'content_short' | 'content_full') => {
+  const extractStep4Content = async (
+    kind: 'title_plain' | 'title_styled' | 'content_short' | 'content_full',
+    options?: { copyToClipboard?: boolean },
+  ) => {
+    const copyToClipboard = options?.copyToClipboard !== false
     const extensionChrome = getChrome()
     if (!extensionChrome?.tabs?.query || !extensionChrome.scripting?.executeScript) {
       const kindLabel =
@@ -940,8 +945,10 @@ export default function ChatgptScreen() {
             : kind === 'content_short'
               ? 'nội dung ngắn'
               : 'nội dung toàn bộ'
-      setStatus(`Môi trường hiện tại không hỗ trợ lấy ${kindLabel} Tiến trình 4.`)
-      return
+      if (copyToClipboard) {
+        setStatus(`Môi trường hiện tại không hỗ trợ lấy ${kindLabel} Tiến trình 4.`)
+      }
+      return ''
     }
 
     const kindLabel =
@@ -953,7 +960,9 @@ export default function ChatgptScreen() {
             ? 'nội dung ngắn'
             : 'nội dung toàn bộ'
 
-    setStatus(`Đang lấy ${kindLabel} từ Tiến trình 4...`)
+    if (copyToClipboard) {
+      setStatus(`Đang lấy ${kindLabel} từ Tiến trình 4...`)
+    }
 
     const currentActive = await queryTabs(undefined, true, true)
     const activeTab = currentActive[0]
@@ -963,16 +972,20 @@ export default function ChatgptScreen() {
     let target: BrowserTab | null | undefined = allTabs[0]
 
     if (!target?.id) {
-      setStatus('Không tìm thấy tab ChatGPT để lấy dữ liệu Tiến trình 4.')
-      return
+      if (copyToClipboard) {
+        setStatus('Không tìm thấy tab ChatGPT để lấy dữ liệu Tiến trình 4.')
+      }
+      return ''
     }
 
     target = await updateTab(target.id)
     await sleep(240)
 
     if (!target?.id) {
-      setStatus('Không thể kích hoạt tab ChatGPT để lấy dữ liệu Tiến trình 4.')
-      return
+      if (copyToClipboard) {
+        setStatus('Không thể kích hoạt tab ChatGPT để lấy dữ liệu Tiến trình 4.')
+      }
+      return ''
     }
 
     const result = await extensionChrome.scripting.executeScript({
@@ -1111,19 +1124,95 @@ export default function ChatgptScreen() {
 
     const extracted = ((result?.[0]?.result as string | undefined) || '').trim()
     if (!extracted) {
-      setStatus(`Không tìm thấy ${kindLabel} từ output Tiến trình 4.`)
+      if (copyToClipboard) {
+        setStatus(`Không tìm thấy ${kindLabel} từ output Tiến trình 4.`)
+      }
+      return ''
+    }
+
+    if (copyToClipboard) {
+      try {
+        await navigator.clipboard.writeText(extracted)
+        const toolId = `step4-${kind}`
+        setCopiedTool(toolId)
+        window.setTimeout(() => setCopiedTool((prev) => (prev === toolId ? null : prev)), 1200)
+        setStatus(`Đã lấy và sao chép ${kindLabel} Tiến trình 4 vào clipboard.`)
+      } catch {
+        setStatus(`Đã lấy ${kindLabel} Tiến trình 4 nhưng sao chép thất bại.`)
+      }
+    }
+    return extracted
+  }
+
+  const injectImagesIntoLongContent = (content: string, image1: string, image2: string) => {
+    const base = (content || '').trim()
+    if (!base) return ''
+
+    const sentenceUnits = base
+      .split(/(?<=[.!?])\s+/)
+      .map((unit) => unit.trim())
+      .filter(Boolean)
+    const units = sentenceUnits.length >= 6 ? sentenceUnits : base.split('\n').map((line) => line.trim()).filter(Boolean)
+    if (units.length < 3) {
+      return `${base}\n\n<p><img src="${image1}" alt="Ảnh 1" /></p>\n\n<p><img src="${image2}" alt="Ảnh 2" /></p>`
+    }
+
+    const n = units.length
+    const start = Math.max(1, Math.floor(n * 0.2))
+    const end = Math.min(n - 2, Math.ceil(n * 0.8))
+    const range = Array.from({ length: Math.max(0, end - start + 1) }, (_, i) => start + i)
+    const minGap = Math.max(2, Math.floor(n * 0.2))
+
+    const pick = (arr: number[]) => arr[Math.floor(Math.random() * arr.length)]
+    let i1 = range.length > 0 ? pick(range) : Math.max(1, Math.floor(n * 0.35))
+    let i2Candidates = range.filter((idx) => Math.abs(idx - i1) >= minGap)
+    if (i2Candidates.length === 0) {
+      i2Candidates = range.filter((idx) => Math.abs(idx - i1) >= 2)
+    }
+    const i2 = i2Candidates.length > 0 ? pick(i2Candidates) : Math.min(n - 2, i1 + minGap)
+    const [firstIdx, secondIdx] = [i1, i2].sort((a, b) => a - b)
+
+    const image1Block = `<p><img src="${image1}" alt="Ảnh 1" /></p>`
+    const image2Block = `<p><img src="${image2}" alt="Ảnh 2" /></p>`
+
+    const out: string[] = []
+    units.forEach((unit, idx) => {
+      out.push(unit)
+      if (idx === firstIdx) out.push(image1Block)
+      if (idx === secondIdx) out.push(image2Block)
+    })
+    return out.join('\n\n')
+  }
+
+  const pushStep4ToWebAdmin = async () => {
+    if (!splitImages?.left || !splitImages?.right) {
+      setStatus('Chưa có ảnh 1/2 từ Tiến trình 3. Hãy cắt ảnh trước khi gửi WebAdmin.')
       return
     }
 
-    try {
-      await navigator.clipboard.writeText(extracted)
-      const toolId = `step4-${kind}`
-      setCopiedTool(toolId)
-      window.setTimeout(() => setCopiedTool((prev) => (prev === toolId ? null : prev)), 1200)
-      setStatus(`Đã lấy và sao chép ${kindLabel} Tiến trình 4 vào clipboard.`)
-    } catch {
-      setStatus(`Đã lấy ${kindLabel} Tiến trình 4 nhưng sao chép thất bại.`)
+    setStatus('Đang lấy tiêu đề thường + nội dung dài và ghép ảnh ngẫu nhiên cho WebAdmin...')
+    const titlePlain = await extractStep4Content('title_plain', { copyToClipboard: false })
+    const fullContent = await extractStep4Content('content_full', { copyToClipboard: false })
+    if (!titlePlain || !fullContent) {
+      setStatus('Không lấy đủ dữ liệu Tiến trình 4 để gửi WebAdmin.')
+      return
     }
+
+    const contentWithImages = injectImagesIntoLongContent(fullContent, splitImages.left, splitImages.right)
+    window.dispatchEvent(new CustomEvent('switch-main-tab', { detail: { tabId: 'webadmin' } }))
+    window.setTimeout(() => {
+      window.dispatchEvent(
+        new CustomEvent('fill-webadmin-from-chatgpt', {
+          detail: {
+            title: titlePlain,
+            longContent: contentWithImages,
+            image1: splitImages.left,
+            image2: splitImages.right,
+          },
+        }),
+      )
+    }, 120)
+    setStatus('Đã gửi dữ liệu sang WebAdmin (tiêu đề + nội dung dài có chèn ảnh 1/2).')
   }
 
   const extractAndSplitLatestImageFromStep3 = async () => {
@@ -1486,7 +1575,7 @@ export default function ChatgptScreen() {
         </aside>
       </div>
       <div className="mt-3 rounded-2xl border border-white/10 bg-black/30 p-2">
-        <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4">
+        <div className="grid grid-cols-3 gap-1.5 sm:grid-cols-6">
         <button
           type="button"
           onClick={() => void fillGrokWithVideoImage(1)}
@@ -1513,6 +1602,17 @@ export default function ChatgptScreen() {
             <span className="absolute -right-2 -top-2 inline-flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-sky-500 px-0.5 text-[8px] font-bold leading-none text-white">
               2
             </span>
+          </span>
+        </button>
+        <button
+          type="button"
+          onClick={() => void pushStep4ToWebAdmin()}
+          className="inline-flex h-8 cursor-pointer items-center justify-center rounded-lg bg-amber-500/20 px-2 text-amber-100 transition hover:bg-amber-500/30"
+          title="Gửi tiêu đề + nội dung dài có chèn ảnh sang WebAdmin"
+        >
+          <span className="relative inline-flex items-center justify-center gap-1">
+            <RiAdminFill className="h-3 w-3" />
+            <FiFileText className="h-3 w-3" />
           </span>
         </button>
         </div>

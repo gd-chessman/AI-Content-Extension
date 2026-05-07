@@ -8,6 +8,7 @@ import FacebookScreen from '../screens/FacebookScreen'
 import GgSheetScreen from '../screens/GgSheetScreen'
 import GrokScreen from '../screens/GrokScreen'
 import LoginScreen from '../screens/LoginScreen'
+import WebAdminScreen from '../screens/WebAdminScreen'
 
 type RouteId = 'login' | 'facebook' | 'chatgpt' | 'grok' | 'webadmin' | 'ggsheet'
 type BrowserTab = { id?: number; url?: string; active?: boolean }
@@ -34,14 +35,6 @@ const mainTabs: Array<{
   { id: 'webadmin', label: 'WebAdmin', icon: <RiAdminFill />, iconClassName: 'text-amber-400' },
   { id: 'ggsheet', label: 'GGSheet', icon: <SiGooglesheets />, iconClassName: 'text-green-500' },
 ]
-
-function PlaceholderScreen({ title }: { title: string }) {
-  return (
-    <section className="flex h-full items-center justify-center rounded-3xl bg-slate-800 p-4 text-center">
-      <p className="text-sm font-semibold text-slate-200">{title} - Đang phát triển</p>
-    </section>
-  )
-}
 
 function AppRouter() {
   const [activeRoute, setActiveRoute] = useState<RouteId>('facebook')
@@ -93,7 +86,7 @@ function AppRouter() {
     facebook: <FacebookScreen />,
     chatgpt: <ChatgptScreen />,
     grok: <GrokScreen />,
-    webadmin: <PlaceholderScreen title="WebAdmin" />,
+    webadmin: <WebAdminScreen />,
     ggsheet: <GgSheetScreen />,
   }
 
