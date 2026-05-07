@@ -692,6 +692,33 @@ export default function ChatgptScreen() {
 
           return tail.slice(0, end).trim()
         }
+        const trimVideoTail = (raw: string) => {
+          const source = (raw || '').trim()
+          if (!source) return ''
+
+          const stopMarkers = [
+            /(?:^|\n)\s*🎯\s*production\s*notes\b/i,
+            /(?:^|\n)\s*(?:🔥\s*)?notes?\s*for\s*ai\s*video\s*tools\b/i,
+            /(?:^|\n)\s*(?:🔁\s*)?continuity\s*notes\b/i,
+            /(?:^|\n)\s*if\s+you\s+want\s+next\b/i,
+            /(?:^|\n)\s*✅\s*/i,
+            /(?:^|\n)\s*i\s+can\s+generate\b/i,
+            /(?:^|\n)\s*or\s+convert\b/i,
+            /(?:^|\n)\s*(?:🎬\s*)?idea\s*\d+\b/i,
+            /(?:^|\n)\s*(?:🖼️\s*)?image\s*\d+\b/i,
+            /(?:^|\n)\s*(?:🎥\s*)?video\s*\d+\b/i,
+          ]
+
+          let end = source.length
+          for (const rg of stopMarkers) {
+            const m = source.match(rg)
+            if (m && m.index !== undefined && m.index > 0) {
+              end = Math.min(end, m.index)
+            }
+          }
+
+          return source.slice(0, end).trim()
+        }
 
         const assistantNodes = Array.from(
           document.querySelectorAll<HTMLElement>('[data-message-author-role="assistant"], article'),
@@ -769,7 +796,7 @@ export default function ChatgptScreen() {
             new RegExp(`(?:^|\\n)\\s*#{0,6}\\s*(?:🎥\\s*)?video\\s*${n}\\b[^\\n]*\\n`, 'i'),
             [...(n === 1 ? headingStopsForVideo1 : headingStopsForVideo2), ...(n === 1 ? plainLineStopsForVideo1 : plainLineStopsForVideo2)],
           )
-          return directVideo || ideaBlock.trim()
+          return trimVideoTail(directVideo || ideaBlock.trim())
         }
 
         // Strategy B: generic video heading fallback.
@@ -789,9 +816,9 @@ export default function ChatgptScreen() {
         )
 
         if (videoPart === 1) {
-          return pickIdeaVideo(idea1Block, 1) || genericVideo
+          return trimVideoTail(pickIdeaVideo(idea1Block, 1) || genericVideo)
         }
-        return pickIdeaVideo(idea2Block, 2) || genericVideo
+        return trimVideoTail(pickIdeaVideo(idea2Block, 2) || genericVideo)
       }) as (...args: unknown[]) => unknown,
       args: [part],
     })
