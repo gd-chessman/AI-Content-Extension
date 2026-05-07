@@ -22,20 +22,67 @@ export class GgSheetService {
     const created = await this.ggSheetModel.create({
       userId: objectId,
       ggSheetPath: '',
+      titleColumn: '',
+      shortContentColumn: '',
+      fullContentColumn: '',
     });
     return created.toObject();
   }
 
   async updateMySetting(userId: string, dto: UpdateGgSheetDto) {
-    if (dto.ggSheetPath === undefined) {
+    if (
+      dto.ggSheetPath === undefined &&
+      dto.titleColumn === undefined &&
+      dto.shortContentColumn === undefined &&
+      dto.fullContentColumn === undefined
+    ) {
       throw new BadRequestException('Nothing to update.');
     }
 
-    const ggSheetPath = this.normalizeHttpUrl(dto.ggSheetPath);
+    const patch: {
+      ggSheetPath?: string;
+      titleColumn?: string;
+      shortContentColumn?: string;
+      fullContentColumn?: string;
+    } = {};
+    if (dto.ggSheetPath !== undefined) {
+      patch.ggSheetPath = this.normalizeHttpUrl(dto.ggSheetPath);
+    }
+    if (dto.titleColumn !== undefined) {
+      patch.titleColumn = this.normalizeSheetColumn(dto.titleColumn);
+    }
+    if (dto.shortContentColumn !== undefined) {
+      patch.shortContentColumn = this.normalizeSheetColumn(dto.shortContentColumn);
+    }
+    if (dto.fullContentColumn !== undefined) {
+      patch.fullContentColumn = this.normalizeSheetColumn(dto.fullContentColumn);
+    }
+
+    const current = await this.getMySetting(userId);
+    const nextSheetPath =
+      patch.ggSheetPath !== undefined
+        ? patch.ggSheetPath
+        : this.normalizeHttpUrl(String(current?.ggSheetPath || ''));
+    const nextTitleColumn =
+      patch.titleColumn !== undefined
+        ? patch.titleColumn
+        : this.normalizeSheetColumn(String(current?.titleColumn || ''));
+    const nextShortColumn =
+      patch.shortContentColumn !== undefined
+        ? patch.shortContentColumn
+        : this.normalizeSheetColumn(String(current?.shortContentColumn || ''));
+    const nextFullColumn =
+      patch.fullContentColumn !== undefined
+        ? patch.fullContentColumn
+        : this.normalizeSheetColumn(String(current?.fullContentColumn || ''));
+
+    if (nextSheetPath && !nextTitleColumn && !nextShortColumn && !nextFullColumn) {
+      throw new BadRequestException('At least one target column is required.');
+    }
 
     const updated = await this.ggSheetModel.findOneAndUpdate(
       { userId: new Types.ObjectId(userId) },
-      { ggSheetPath },
+      patch,
       { upsert: true, new: true, setDefaultsOnInsert: true },
     );
     return updated.toObject();
@@ -46,18 +93,39 @@ export class GgSheetService {
     const setting = await this.getMySetting(userId);
     const ggSheetPath = (setting?.ggSheetPath || '').trim();
     const sheetId = this.extractSheetId(ggSheetPath);
+    const sheetGid = this.extractSheetGid(ggSheetPath);
     if (!sheetId) {
       throw new BadRequestException('Google Sheet path is not configured.');
     }
 
     const sheets = this.createSheetsClient();
-    const nextRow = await this.getNextRow(sheets, sheetId);
+    const sheetTitle = await this.getSheetTitle(sheets, sheetId, sheetGid);
+    const columns = this.resolveColumns(setting);
+    if (!columns.title && !columns.shortContent && !columns.full) {
+      throw new BadRequestException('No target columns configured for push.');
+    }
+    await this.ensureNotDuplicateTitleAndShortContent(
+      sheets,
+      sheetId,
+      sheetTitle,
+      columns,
+      data.title,
+      data.shortContent,
+    );
+    const nextRow = await this.getNextRow(sheets, sheetId, sheetTitle);
+    const targetRange = [columns.title, columns.shortContent, columns.full]
+      .filter(Boolean)
+      .map((column) => `${sheetTitle}!${column}${nextRow}`)
+      .join(', ');
 
     return {
       sheetId,
+      sheetGid,
+      sheetTitle,
       targetRow: nextRow,
-      targetRange: `B${nextRow}:G${nextRow}`,
+      targetRange,
       sheetUrl: ggSheetPath,
+      columns,
       data,
     };
   }
@@ -65,14 +133,27 @@ export class GgSheetService {
   async push(userId: string, dto: PushGgSheetDto) {
     const preview = await this.previewPush(userId, dto);
     const sheets = this.createSheetsClient();
-    const values = [[preview.data.title, preview.data.shortContent, '', '', '', preview.data.fullContent]];
     let updateResult;
     try {
-      updateResult = await sheets.spreadsheets.values.update({
+      updateResult = await sheets.spreadsheets.values.batchUpdate({
         spreadsheetId: preview.sheetId,
-        range: preview.targetRange,
-        valueInputOption: 'RAW',
-        requestBody: { values },
+        requestBody: {
+          valueInputOption: 'RAW',
+          data: [
+            preview.columns.title
+              ? { range: `${preview.sheetTitle}!${preview.columns.title}${preview.targetRow}`, values: [[preview.data.title]] }
+              : null,
+            preview.columns.shortContent
+              ? {
+                  range: `${preview.sheetTitle}!${preview.columns.shortContent}${preview.targetRow}`,
+                  values: [[preview.data.shortContent]],
+                }
+              : null,
+            preview.columns.full
+              ? { range: `${preview.sheetTitle}!${preview.columns.full}${preview.targetRow}`, values: [[preview.data.fullContent]] }
+              : null,
+          ].filter(Boolean) as Array<{ range: string; values: string[][] }>,
+        },
       });
     } catch (error) {
       this.handleGoogleSheetError(error);
@@ -81,8 +162,8 @@ export class GgSheetService {
     return {
       ok: true,
       targetRow: preview.targetRow,
-      updatedRange: updateResult.data.updatedRange || preview.targetRange,
-      updatedCells: updateResult.data.updatedCells || 0,
+      updatedRange: preview.targetRange,
+      updatedCells: updateResult.data.totalUpdatedCells || 0,
     };
   }
 
@@ -101,6 +182,15 @@ export class GgSheetService {
     return parsed.toString();
   }
 
+  private normalizeSheetColumn(raw: string) {
+    const value = (raw || '').trim().toUpperCase();
+    if (!value) return '';
+    if (!/^[A-Z]{1,3}$/.test(value)) {
+      throw new BadRequestException('Invalid sheet column format. Use A-Z letters only.');
+    }
+    return value;
+  }
+
   private normalizePayload(dto: PushGgSheetDto) {
     const title = (dto.title || '').trim();
     const shortContent = (dto.shortContent || '').trim();
@@ -117,6 +207,20 @@ export class GgSheetService {
     const value = (url || '').trim();
     const matched = value.match(/\/spreadsheets\/d\/([^/]+)/);
     return matched?.[1] || '';
+  }
+
+  private extractSheetGid(url: string) {
+    const value = (url || '').trim();
+    if (!value) return 0;
+    try {
+      const parsed = new URL(value);
+      const gid = Number(parsed.searchParams.get('gid') || parsed.hash.match(/gid=(\d+)/)?.[1] || 0);
+      return Number.isFinite(gid) ? gid : 0;
+    } catch {
+      const matched = value.match(/gid=(\d+)/);
+      const gid = Number(matched?.[1] || 0);
+      return Number.isFinite(gid) ? gid : 0;
+    }
   }
 
   private createSheetsClient() {
@@ -139,12 +243,45 @@ export class GgSheetService {
     return google.sheets({ version: 'v4', auth });
   }
 
-  private async getNextRow(sheets: ReturnType<typeof google.sheets>, spreadsheetId: string) {
+  private async getSheetTitle(
+    sheets: ReturnType<typeof google.sheets>,
+    spreadsheetId: string,
+    sheetGid: number,
+  ) {
+    let meta;
+    try {
+      meta = await sheets.spreadsheets.get({
+        spreadsheetId,
+        fields: 'sheets(properties(sheetId,title,index))',
+      });
+    } catch (error) {
+      this.handleGoogleSheetError(error);
+    }
+
+    const tabs = meta.data.sheets || [];
+    if (tabs.length === 0) {
+      throw new BadRequestException('No sheet tab found in this spreadsheet.');
+    }
+    if (!sheetGid) {
+      return tabs[0]?.properties?.title || 'Sheet1';
+    }
+    const found = tabs.find((tab) => Number(tab?.properties?.sheetId || 0) === sheetGid);
+    if (!found?.properties?.title) {
+      throw new BadRequestException('The configured gid does not exist in this spreadsheet.');
+    }
+    return found.properties.title;
+  }
+
+  private async getNextRow(
+    sheets: ReturnType<typeof google.sheets>,
+    spreadsheetId: string,
+    sheetTitle: string,
+  ) {
     let response;
     try {
       response = await sheets.spreadsheets.values.get({
         spreadsheetId,
-        range: 'B:B',
+        range: `${sheetTitle}!B:B`,
       });
     } catch (error) {
       this.handleGoogleSheetError(error);
@@ -152,6 +289,64 @@ export class GgSheetService {
     const rows = response.data.values || [];
     const nonEmptyCount = rows.filter((row) => String(row?.[0] || '').trim().length > 0).length;
     return Math.max(2, nonEmptyCount + 1);
+  }
+
+  private async ensureNotDuplicateTitleAndShortContent(
+    sheets: ReturnType<typeof google.sheets>,
+    spreadsheetId: string,
+    sheetTitle: string,
+    columns: { title: string; shortContent: string; full: string },
+    title: string,
+    shortContent: string,
+  ) {
+    if (!columns.title || !columns.shortContent) return;
+    const normalizedTitle = (title || '').trim();
+    const normalizedShort = (shortContent || '').trim();
+    if (!normalizedTitle && !normalizedShort) return;
+
+    let response;
+    try {
+      response = await sheets.spreadsheets.values.batchGet({
+        spreadsheetId,
+        ranges: [
+          `${sheetTitle}!${columns.title}:${columns.title}`,
+          `${sheetTitle}!${columns.shortContent}:${columns.shortContent}`,
+        ],
+      });
+    } catch (error) {
+      this.handleGoogleSheetError(error);
+    }
+
+    const titleRows = response.data.valueRanges?.[0]?.values || [];
+    const shortRows = response.data.valueRanges?.[1]?.values || [];
+    const maxLen = Math.max(titleRows.length, shortRows.length);
+    let duplicated = false;
+    for (let idx = 0; idx < maxLen; idx += 1) {
+      const rowTitle = String(titleRows[idx]?.[0] || '').trim();
+      const rowShort = String(shortRows[idx]?.[0] || '').trim();
+      if (rowTitle === normalizedTitle && rowShort === normalizedShort) {
+        duplicated = true;
+        break;
+      }
+    }
+
+    if (duplicated) {
+      throw new BadRequestException(
+        'Duplicate title and short content found. Data was not written.',
+      );
+    }
+  }
+
+  private resolveColumns(setting: {
+    titleColumn?: string;
+    shortContentColumn?: string;
+    fullContentColumn?: string;
+  }) {
+    return {
+      title: this.normalizeSheetColumn(setting?.titleColumn ?? ''),
+      shortContent: this.normalizeSheetColumn(setting?.shortContentColumn ?? ''),
+      full: this.normalizeSheetColumn(setting?.fullContentColumn ?? ''),
+    };
   }
 
   private handleGoogleSheetError(error: unknown): never {

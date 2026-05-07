@@ -10,6 +10,15 @@ export class GgSheetSetting {
 
   @Prop({ default: '' })
   ggSheetPath: string;
+
+  @Prop({ default: '' })
+  titleColumn: string;
+
+  @Prop({ default: '' })
+  shortContentColumn: string;
+
+  @Prop({ default: '' })
+  fullContentColumn: string;
 }
 
 export const GgSheetSettingSchema = SchemaFactory.createForClass(GgSheetSetting);
