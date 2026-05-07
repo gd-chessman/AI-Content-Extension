@@ -1,11 +1,11 @@
-import { Body, Controller, Get, Patch, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Patch, Post, Req, UseGuards } from '@nestjs/common';
 import { Request } from 'express';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
 import { JwtPayload } from '../auth/jwt.strategy';
 import { UserRole } from '../users/users.schema';
-import { UpdateGgSheetDto } from './ggsheet.dto';
+import { PushGgSheetDto, UpdateGgSheetDto } from './ggsheet.dto';
 import { GgSheetService } from './ggsheet.service';
 
 @Controller('ggsheet')
@@ -24,5 +24,17 @@ export class GgSheetController {
   updateMySetting(@Req() req: Request, @Body() dto: UpdateGgSheetDto) {
     const user = req.user as JwtPayload;
     return this.ggSheetService.updateMySetting(user.sub, dto);
+  }
+
+  @Post('push/preview')
+  previewPush(@Req() req: Request, @Body() dto: PushGgSheetDto) {
+    const user = req.user as JwtPayload;
+    return this.ggSheetService.previewPush(user.sub, dto);
+  }
+
+  @Post('push')
+  push(@Req() req: Request, @Body() dto: PushGgSheetDto) {
+    const user = req.user as JwtPayload;
+    return this.ggSheetService.push(user.sub, dto);
   }
 }
