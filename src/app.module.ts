@@ -7,6 +7,10 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { appConfig } from './config/app.config';
 import { SharedModule } from './shared/shared.module';
+import { UsersModule } from './modules/users/users.module';
+import { AuthModule } from './modules/auth/auth.module';
+import { FanpagesModule } from './modules/fanpages/fanpages.module';
+import { SettingsModule } from './modules/settings/settings.module';
 
 @Module({
   imports: [
@@ -17,6 +21,10 @@ import { SharedModule } from './shared/shared.module';
       inject: [ConfigService],
     }),
     SharedModule,
+    UsersModule,
+    AuthModule,
+    FanpagesModule,
+    SettingsModule,
   ],
   controllers: [AppController],
   providers: [AppService]
