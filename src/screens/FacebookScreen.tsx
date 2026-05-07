@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { FiSearch } from 'react-icons/fi'
+import { FiAlertTriangle, FiCheck, FiInfo, FiSearch } from 'react-icons/fi'
 
 type ScannedReel = {
   id: string
@@ -148,6 +148,14 @@ export default function FacebookScreen() {
   const isContentDirtyRef = useRef(false)
   const contentTextareaRef = useRef<HTMLTextAreaElement | null>(null)
   const scanControlRef = useRef<{ token: string; tabId: number } | null>(null)
+  const scanStatusLower = scanStatus.toLowerCase()
+  const scanStatusTone = scanStatusLower.includes('thất bại') || scanStatusLower.includes('không thể') || scanStatusLower.includes('không tìm thấy')
+    ? 'error'
+    : scanStatusLower.includes('đang ')
+      ? 'loading'
+      : scanStatusLower.includes('đã ')
+        ? 'success'
+        : 'info'
 
   useEffect(() => {
     isContentDirtyRef.current = isContentDirty
@@ -997,7 +1005,30 @@ export default function FacebookScreen() {
                   Chọn link
                 </button>
               </div>
-              {scanStatus ? <p className="text-[11px] text-slate-400">{scanStatus}</p> : null}
+              {scanStatus ? (
+                <p
+                  className={`inline-flex items-center gap-1.5 rounded-lg border px-2 py-1 text-[11px] ${
+                    scanStatusTone === 'success'
+                      ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-100'
+                      : scanStatusTone === 'error'
+                        ? 'border-rose-500/30 bg-rose-500/10 text-rose-100'
+                        : scanStatusTone === 'loading'
+                          ? 'border-amber-500/30 bg-amber-500/10 text-amber-100'
+                          : 'border-white/10 bg-black/25 text-slate-300'
+                  }`}
+                >
+                  {scanStatusTone === 'success' ? (
+                    <FiCheck className="h-3.5 w-3.5" />
+                  ) : scanStatusTone === 'error' ? (
+                    <FiAlertTriangle className="h-3.5 w-3.5" />
+                  ) : scanStatusTone === 'loading' ? (
+                    <FiSearch className="h-3.5 w-3.5 animate-pulse" />
+                  ) : (
+                    <FiInfo className="h-3.5 w-3.5" />
+                  )}
+                  {scanStatus}
+                </p>
+              ) : null}
             </div>
           </section>
 

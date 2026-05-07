@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { FiAlignLeft, FiCheck, FiCopy, FiEdit3, FiFileText, FiFilm, FiImage, FiItalic, FiScissors, FiType } from 'react-icons/fi'
+import { FiAlignLeft, FiAlertTriangle, FiCheck, FiCopy, FiEdit3, FiFileText, FiFilm, FiImage, FiInfo, FiItalic, FiScissors, FiType } from 'react-icons/fi'
 import { IoFlash } from 'react-icons/io5'
 import { SiX } from 'react-icons/si'
 
@@ -1267,6 +1267,14 @@ export default function ChatgptScreen() {
   }
 
   const selectedStep = PROCESS_STEPS.find((step) => step.id === selectedStepId) || PROCESS_STEPS[0]
+  const statusLower = status.toLowerCase()
+  const statusTone = statusLower.includes('không thể') || statusLower.includes('không tìm thấy') || statusLower.includes('thất bại') || statusLower.includes('lỗi')
+    ? 'error'
+    : statusLower.includes('đang ')
+      ? 'loading'
+      : statusLower.includes('đã ')
+        ? 'success'
+        : 'info'
 
   return (
     <section className="glass-panel flex h-full min-h-0 flex-col rounded-3xl p-4">
@@ -1279,7 +1287,30 @@ export default function ChatgptScreen() {
             value={selectedStep.prompt}
             className="mt-2 min-h-[180px] flex-1 w-full resize-none rounded-xl border border-white/10 bg-slate-900/80 px-3 py-2 text-[11px] text-slate-200 outline-none"
           />
-          <p className="mt-2 shrink-0 rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-[11px] text-slate-300">{status}</p>
+          <p
+            className={`mt-2 shrink-0 rounded-xl border px-3 py-2 text-[11px] ${
+              statusTone === 'success'
+                ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-100'
+                : statusTone === 'error'
+                  ? 'border-rose-500/30 bg-rose-500/10 text-rose-100'
+                  : statusTone === 'loading'
+                    ? 'border-amber-500/30 bg-amber-500/10 text-amber-100'
+                    : 'border-white/10 bg-black/40 text-slate-300'
+            }`}
+          >
+            <span className="inline-flex items-center gap-1.5">
+              {statusTone === 'success' ? (
+                <FiCheck className="h-3.5 w-3.5" />
+              ) : statusTone === 'error' ? (
+                <FiAlertTriangle className="h-3.5 w-3.5" />
+              ) : statusTone === 'loading' ? (
+                <FiScissors className="h-3.5 w-3.5 animate-pulse" />
+              ) : (
+                <FiInfo className="h-3.5 w-3.5" />
+              )}
+              {status}
+            </span>
+          </p>
         </div>
 
         <aside className="flex min-h-0 flex-col rounded-2xl border border-white/10 bg-black/30 p-2">

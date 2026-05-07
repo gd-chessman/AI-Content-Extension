@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { FiAlertTriangle, FiCheck, FiInfo, FiImage } from 'react-icons/fi'
 type BrowserTab = { id?: number; url?: string; active?: boolean }
 type ExtensionChrome = {
   tabs?: {
@@ -291,6 +292,15 @@ async function waitForGrokComposer(tabId: number, options?: { allowPost?: boolea
 export default function GrokScreen() {
   const [status, setStatus] = useState('Đợi dữ liệu từ ChatGPT để điền vào Grok.')
   const [lastPrompt, setLastPrompt] = useState('')
+  const [lastImageDataUrl, setLastImageDataUrl] = useState('')
+  const statusLower = status.toLowerCase()
+  const statusTone = statusLower.includes('không thể') || statusLower.includes('không tìm thấy') || statusLower.includes('thất bại') || statusLower.includes('lỗi')
+    ? 'error'
+    : statusLower.includes('đang ')
+      ? 'loading'
+      : statusLower.includes('đã ')
+        ? 'success'
+        : 'info'
 
   useEffect(() => {
     const onFillFromChatgpt = async (event: Event) => {
@@ -304,6 +314,7 @@ export default function GrokScreen() {
       }
 
       setLastPrompt(prompt)
+      setLastImageDataUrl(imageDataUrl)
       setStatus('Đang mở Grok và điền nội dung...')
 
       const extensionChrome = getChrome()
@@ -380,10 +391,35 @@ export default function GrokScreen() {
     <section className="glass-panel flex h-full min-h-0 flex-col rounded-3xl p-4">
       <h2 className="text-sm font-semibold text-white">Grok</h2>
       <p className="mt-1 text-[11px] text-slate-400">Tự động nhận prompt ảnh từ ChatGPT và điền vào ô nhập Grok.</p>
-      <p className="mt-2 shrink-0 rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-[11px] text-slate-300">
+      <p
+        className={`mt-2 inline-flex shrink-0 items-center gap-1.5 rounded-xl border px-3 py-2 text-[11px] ${
+          statusTone === 'success'
+            ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-100'
+            : statusTone === 'error'
+              ? 'border-rose-500/30 bg-rose-500/10 text-rose-100'
+              : statusTone === 'loading'
+                ? 'border-amber-500/30 bg-amber-500/10 text-amber-100'
+                : 'border-white/10 bg-black/40 text-slate-300'
+        }`}
+      >
+        {statusTone === 'success' ? (
+          <FiCheck className="h-3.5 w-3.5" />
+        ) : statusTone === 'error' ? (
+          <FiAlertTriangle className="h-3.5 w-3.5" />
+        ) : statusTone === 'loading' ? (
+          <FiImage className="h-3.5 w-3.5 animate-pulse" />
+        ) : (
+          <FiInfo className="h-3.5 w-3.5" />
+        )}
         {status}
       </p>
       <div className="mt-2 flex min-h-0 flex-1 flex-col rounded-xl border border-white/10 bg-slate-900/70 p-2">
+        {lastImageDataUrl ? (
+          <div className="mb-2 rounded-lg border border-white/10 bg-black/20 p-1.5">
+            <p className="mb-1 text-[10px] text-slate-500">Ảnh gần nhất</p>
+            <img src={lastImageDataUrl} alt="Ảnh gần nhất từ ChatGPT" className="max-h-36 w-full rounded-md object-contain" />
+          </div>
+        ) : null}
         <p className="shrink-0 text-[10px] text-slate-500">Nội dung gần nhất</p>
         <div className="mt-1 min-h-0 flex-1 overflow-y-auto whitespace-pre-wrap text-[11px] text-slate-200">
           {lastPrompt || 'Chưa có dữ liệu.'}

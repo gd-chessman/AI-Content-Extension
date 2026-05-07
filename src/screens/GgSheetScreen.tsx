@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { FiDownload, FiSave, FiSend } from 'react-icons/fi'
+import { FiAlertTriangle, FiCheck, FiDownload, FiInfo, FiSave, FiSend } from 'react-icons/fi'
 
 type BrowserTab = { id?: number; url?: string; active?: boolean }
 type ExtensionChrome = {
@@ -37,6 +37,14 @@ const toTsvRow = (values: CollectedData) =>
 
 export default function GgSheetScreen() {
   const [status, setStatus] = useState('Sẵn sàng gom dữ liệu từ ChatGPT và đẩy lên GG Sheet.')
+  const statusLower = status.toLowerCase()
+  const statusTone = statusLower.includes('không thể') || statusLower.includes('không tìm thấy') || statusLower.includes('thất bại') || statusLower.includes('lỗi')
+    ? 'error'
+    : statusLower.includes('đang ')
+      ? 'loading'
+      : statusLower.includes('đã ')
+        ? 'success'
+        : 'info'
   const [data, setData] = useState<CollectedData>({ title: '', shortContent: '', fullContent: '' })
   const [isSaving, setIsSaving] = useState(false)
 
@@ -442,7 +450,28 @@ export default function GgSheetScreen() {
   return (
     <section className="flex h-full flex-col gap-2 rounded-2xl border border-white/10 bg-black/25 p-3">
       <div className="rounded-xl border border-white/10 bg-white/5 p-2">
-        <p className="text-[11px] text-slate-300">{status}</p>
+        <p
+          className={`inline-flex items-center gap-1.5 rounded-lg border px-2 py-1 text-[11px] ${
+            statusTone === 'success'
+              ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-100'
+              : statusTone === 'error'
+                ? 'border-rose-500/30 bg-rose-500/10 text-rose-100'
+                : statusTone === 'loading'
+                  ? 'border-amber-500/30 bg-amber-500/10 text-amber-100'
+                  : 'border-white/10 bg-black/25 text-slate-300'
+          }`}
+        >
+          {statusTone === 'success' ? (
+            <FiCheck className="h-3.5 w-3.5" />
+          ) : statusTone === 'error' ? (
+            <FiAlertTriangle className="h-3.5 w-3.5" />
+          ) : statusTone === 'loading' ? (
+            <FiSend className="h-3.5 w-3.5 animate-pulse" />
+          ) : (
+            <FiInfo className="h-3.5 w-3.5" />
+          )}
+          {status}
+        </p>
       </div>
 
       <div className="grid grid-cols-2 gap-1.5">
