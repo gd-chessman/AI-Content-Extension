@@ -66,12 +66,17 @@ export class GgSheetService {
     const preview = await this.previewPush(userId, dto);
     const sheets = this.createSheetsClient();
     const values = [[preview.data.title, preview.data.shortContent, '', '', '', preview.data.fullContent]];
-    const updateResult = await sheets.spreadsheets.values.update({
-      spreadsheetId: preview.sheetId,
-      range: preview.targetRange,
-      valueInputOption: 'RAW',
-      requestBody: { values },
-    });
+    let updateResult;
+    try {
+      updateResult = await sheets.spreadsheets.values.update({
+        spreadsheetId: preview.sheetId,
+        range: preview.targetRange,
+        valueInputOption: 'RAW',
+        requestBody: { values },
+      });
+    } catch (error) {
+      this.handleGoogleSheetError(error);
+    }
 
     return {
       ok: true,
@@ -135,12 +140,36 @@ export class GgSheetService {
   }
 
   private async getNextRow(sheets: ReturnType<typeof google.sheets>, spreadsheetId: string) {
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId,
-      range: 'B:B',
-    });
+    let response;
+    try {
+      response = await sheets.spreadsheets.values.get({
+        spreadsheetId,
+        range: 'B:B',
+      });
+    } catch (error) {
+      this.handleGoogleSheetError(error);
+    }
     const rows = response.data.values || [];
     const nonEmptyCount = rows.filter((row) => String(row?.[0] || '').trim().length > 0).length;
     return Math.max(2, nonEmptyCount + 1);
+  }
+
+  private handleGoogleSheetError(error: unknown): never {
+    const status = Number((error as { status?: number })?.status || (error as { response?: { status?: number } })?.response?.status || 0);
+    const message =
+      (error as { message?: string })?.message ||
+      (error as { response?: { data?: { error?: { message?: string } } } })?.response?.data?.error?.message ||
+      'Google Sheets request failed.';
+
+    if (status === 403) {
+      throw new BadRequestException(
+        'Google Sheets permission denied. Please share this sheet with GOOGLE_SERVICE_ACCOUNT_EMAIL as Editor.',
+      );
+    }
+    if (status === 404) {
+      throw new BadRequestException('Google Sheet not found. Please check ggSheetPath.');
+    }
+
+    throw new BadRequestException(`Google Sheets error: ${message}`);
   }
 }
