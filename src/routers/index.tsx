@@ -5,6 +5,7 @@ import { SiGooglesheets, SiOpenai, SiX } from 'react-icons/si'
 import ExtensionLayout from '../layouts/ExtensionLayout'
 import ChatgptScreen from '../screens/ChatgptScreen'
 import FacebookScreen from '../screens/FacebookScreen'
+import GgSheetScreen from '../screens/GgSheetScreen'
 import LoginScreen from '../screens/LoginScreen'
 
 type RouteId = 'login' | 'facebook' | 'chatgpt' | 'grok' | 'webadmin' | 'ggsheet'
@@ -58,7 +59,7 @@ function AppRouter() {
     chatgpt: <ChatgptScreen />,
     grok: <PlaceholderScreen title="Grok" />,
     webadmin: <PlaceholderScreen title="WebAdmin" />,
-    ggsheet: <PlaceholderScreen title="GGSheet" />,
+    ggsheet: <GgSheetScreen />,
   }
 
   return (
