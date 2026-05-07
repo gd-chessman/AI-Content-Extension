@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { FiAlignLeft, FiCheck, FiCopy, FiEdit3, FiFileText, FiFilm, FiImage, FiItalic, FiScissors, FiType } from 'react-icons/fi'
 import { IoFlash } from 'react-icons/io5'
+import { SiX } from 'react-icons/si'
 
 type BrowserTab = { id?: number; url?: string; active?: boolean }
 type ExtensionChrome = {
@@ -642,14 +643,17 @@ export default function ChatgptScreen() {
     }
   }
 
-  const extractVideoContentFromStep2 = async (part: 1 | 2) => {
+  const extractVideoContentFromStep2 = async (part: 1 | 2, options?: { copyToClipboard?: boolean }) => {
+    const copyToClipboard = options?.copyToClipboard !== false
     const extensionChrome = getChrome()
     if (!extensionChrome?.tabs?.query || !extensionChrome.scripting?.executeScript) {
       setStatus('Môi trường hiện tại không hỗ trợ lấy nội dung VIDEO.')
-      return
+      return ''
     }
 
-    setStatus(`Đang lấy nội dung VIDEO ${part} từ Tiến trình 2...`)
+    if (copyToClipboard) {
+      setStatus(`Đang lấy nội dung VIDEO ${part} từ Tiến trình 2...`)
+    }
 
     const currentActive = await queryTabs(undefined, true, true)
     const activeTab = currentActive[0]
@@ -660,7 +664,7 @@ export default function ChatgptScreen() {
 
     if (!target?.id) {
       setStatus('Không tìm thấy tab ChatGPT để lấy nội dung VIDEO.')
-      return
+      return ''
     }
 
     target = await updateTab(target.id)
@@ -668,7 +672,7 @@ export default function ChatgptScreen() {
 
     if (!target?.id) {
       setStatus('Không thể kích hoạt tab ChatGPT để lấy nội dung VIDEO.')
-      return
+      return ''
     }
 
     const result = await extensionChrome.scripting.executeScript({
@@ -699,8 +703,11 @@ export default function ChatgptScreen() {
           const stopMarkers = [
             /(?:^|\n)\s*🎯\s*production\s*notes\b/i,
             /(?:^|\n)\s*(?:🔥\s*)?notes?\s*for\s*ai\s*video\s*tools\b/i,
+            /(?:^|\n)\s*⚡\s*cinematic\s*rules\b/i,
+            /(?:^|\n)\s*cinematic\s*rules\b/i,
             /(?:^|\n)\s*(?:🔁\s*)?continuity\s*notes\b/i,
             /(?:^|\n)\s*if\s+you\s+want\s+next\b/i,
+            /(?:^|\n)\s*just\s+tell\s+me\b/i,
             /(?:^|\n)\s*✅\s*/i,
             /(?:^|\n)\s*i\s+can\s+generate\b/i,
             /(?:^|\n)\s*or\s+convert\b/i,
@@ -718,6 +725,15 @@ export default function ChatgptScreen() {
           }
 
           return source.slice(0, end).trim()
+        }
+        const compactLines = (raw: string) => {
+          const source = (raw || '').replace(/\r/g, '').trim()
+          if (!source) return ''
+          return source
+            .split('\n')
+            .map((line) => line.replace(/\s+/g, ' ').trim())
+            .filter(Boolean)
+            .join('\n')
         }
 
         const assistantNodes = Array.from(
@@ -816,28 +832,60 @@ export default function ChatgptScreen() {
         )
 
         if (videoPart === 1) {
-          return trimVideoTail(pickIdeaVideo(idea1Block, 1) || genericVideo)
+          return compactLines(trimVideoTail(pickIdeaVideo(idea1Block, 1) || genericVideo))
         }
-        return trimVideoTail(pickIdeaVideo(idea2Block, 2) || genericVideo)
+        return compactLines(trimVideoTail(pickIdeaVideo(idea2Block, 2) || genericVideo))
       }) as (...args: unknown[]) => unknown,
       args: [part],
     })
 
     const extracted = ((result?.[0]?.result as string | undefined) || '').trim()
     if (!extracted) {
-      setStatus(`Không tìm thấy nội dung VIDEO ${part}. Hãy đảm bảo đã có output Tiến trình 2 trong hội thoại.`)
+      if (copyToClipboard) {
+        setStatus(`Không tìm thấy nội dung VIDEO ${part}. Hãy đảm bảo đã có output Tiến trình 2 trong hội thoại.`)
+      }
+      return ''
+    }
+
+    if (copyToClipboard) {
+      try {
+        await navigator.clipboard.writeText(extracted)
+        const toolId = `video-${part}`
+        setCopiedTool(toolId)
+        window.setTimeout(() => setCopiedTool((prev) => (prev === toolId ? null : prev)), 1200)
+        setStatus(`Đã lấy và sao chép nội dung VIDEO ${part} vào clipboard.`)
+      } catch {
+        setStatus(`Đã lấy nội dung VIDEO ${part} nhưng sao chép thất bại.`)
+      }
+    }
+    return extracted
+  }
+
+  const fillGrokWithVideoImage = async (part: 1 | 2) => {
+    setStatus(`Đang lấy ảnh ${part} (Tiến trình 3) và nội dung VIDEO ${part} (Tiến trình 2)...`)
+
+    const imageDataUrl = part === 1 ? splitImages?.left : splitImages?.right
+    if (!imageDataUrl) {
+      setStatus(`Chưa có ảnh ${part} từ Tiến trình 3. Hãy bấm nút cắt ảnh trước.`)
       return
     }
 
-    try {
-      await navigator.clipboard.writeText(extracted)
-      const toolId = `video-${part}`
-      setCopiedTool(toolId)
-      window.setTimeout(() => setCopiedTool((prev) => (prev === toolId ? null : prev)), 1200)
-      setStatus(`Đã lấy và sao chép nội dung VIDEO ${part} vào clipboard.`)
-    } catch {
-      setStatus(`Đã lấy nội dung VIDEO ${part} nhưng sao chép thất bại.`)
+    const prompt = await extractVideoContentFromStep2(part, { copyToClipboard: false })
+    if (!prompt) {
+      setStatus(`Không tìm thấy nội dung VIDEO ${part} trong output Tiến trình 2.`)
+      return
     }
+
+    window.dispatchEvent(new CustomEvent('switch-main-tab', { detail: { tabId: 'grok' } }))
+    window.setTimeout(() => {
+      window.dispatchEvent(
+        new CustomEvent('fill-grok-from-chatgpt-video1-image', {
+          detail: { prompt, imageDataUrl, part },
+        }),
+      )
+    }, 120)
+
+    setStatus(`Đã chuyển Grok: dùng ảnh ${part} (Tiến trình 3) + VIDEO ${part} (Tiến trình 2), không Enter.`)
   }
 
   const extractStep4Content = async (kind: 'title_plain' | 'title_styled' | 'content_short' | 'content_full') => {
@@ -1180,21 +1228,21 @@ export default function ChatgptScreen() {
   const selectedStep = PROCESS_STEPS.find((step) => step.id === selectedStepId) || PROCESS_STEPS[0]
 
   return (
-    <section className="glass-panel rounded-3xl p-4">
-      <div className="grid grid-cols-[minmax(0,1fr)_92px] gap-3">
-        <div className="rounded-2xl border border-white/10 bg-black/30 p-3 min-h-[420px]">
+    <section className="glass-panel flex h-full min-h-0 flex-col rounded-3xl p-4">
+      <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_92px] gap-3">
+        <div className="flex min-h-0 flex-col rounded-2xl border border-white/10 bg-black/30 p-3">
           <h2 className="text-sm font-semibold text-white">{selectedStep.label}</h2>
           <p className="mt-1 text-[11px] text-slate-400">Nội dung chi tiết tiến trình đang chọn.</p>
           <textarea
             readOnly
             value={selectedStep.prompt}
-            className="mt-2 h-[320px] w-full resize-none rounded-xl border border-white/10 bg-slate-900/80 px-3 py-2 text-[11px] text-slate-200 outline-none"
+            className="mt-2 min-h-[180px] flex-1 w-full resize-none rounded-xl border border-white/10 bg-slate-900/80 px-3 py-2 text-[11px] text-slate-200 outline-none"
           />
-          <p className="mt-2 rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-[11px] text-slate-300">{status}</p>
+          <p className="mt-2 shrink-0 rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-[11px] text-slate-300">{status}</p>
         </div>
 
-        <aside className="rounded-2xl border border-white/10 bg-black/30 p-2">
-          <div className="space-y-1.5">
+        <aside className="flex min-h-0 flex-col rounded-2xl border border-white/10 bg-black/30 p-2">
+          <div className="min-h-0 space-y-1.5 overflow-y-auto pr-0.5">
             {PROCESS_STEPS.map((step) => (
               <div key={step.id} className="rounded-xl border border-white/10 bg-white/5 p-1.5">
                 <button
@@ -1234,7 +1282,7 @@ export default function ChatgptScreen() {
             ))}
           </div>
 
-          <div className="mt-2 rounded-xl border border-white/10 bg-white/5 p-2">
+          <div className="mt-2 shrink-0 rounded-xl border border-white/10 bg-white/5 p-2">
             <div className="grid grid-cols-2 gap-1.5">
               <button
                 type="button"
@@ -1365,6 +1413,38 @@ export default function ChatgptScreen() {
             </div>
           </div>
         </aside>
+      </div>
+      <div className="mt-3 rounded-2xl border border-white/10 bg-black/30 p-2">
+        <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4">
+        <button
+          type="button"
+          onClick={() => void fillGrokWithVideoImage(1)}
+          className="inline-flex h-8 cursor-pointer items-center justify-center rounded-lg bg-sky-500/20 px-2 text-sky-100 transition hover:bg-sky-500/30"
+          title="Lấy ảnh 1 (VIDEO 1) và tự điền vào Grok"
+        >
+          <span className="relative inline-flex items-center justify-center gap-1">
+            <SiX className="h-3 w-3" />
+            <FiImage className="h-3 w-3" />
+            <span className="absolute -right-2 -top-2 inline-flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-sky-500 px-0.5 text-[8px] font-bold leading-none text-white">
+              1
+            </span>
+          </span>
+        </button>
+        <button
+          type="button"
+          onClick={() => void fillGrokWithVideoImage(2)}
+          className="inline-flex h-8 cursor-pointer items-center justify-center rounded-lg bg-sky-500/20 px-2 text-sky-100 transition hover:bg-sky-500/30"
+          title="Lấy ảnh 2 (VIDEO 2) và tự điền vào Grok"
+        >
+          <span className="relative inline-flex items-center justify-center gap-1">
+            <SiX className="h-3 w-3" />
+            <FiImage className="h-3 w-3" />
+            <span className="absolute -right-2 -top-2 inline-flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-sky-500 px-0.5 text-[8px] font-bold leading-none text-white">
+              2
+            </span>
+          </span>
+        </button>
+        </div>
       </div>
     </section>
   )

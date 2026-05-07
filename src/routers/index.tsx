@@ -6,6 +6,7 @@ import ExtensionLayout from '../layouts/ExtensionLayout'
 import ChatgptScreen from '../screens/ChatgptScreen'
 import FacebookScreen from '../screens/FacebookScreen'
 import GgSheetScreen from '../screens/GgSheetScreen'
+import GrokScreen from '../screens/GrokScreen'
 import LoginScreen from '../screens/LoginScreen'
 
 type RouteId = 'login' | 'facebook' | 'chatgpt' | 'grok' | 'webadmin' | 'ggsheet'
@@ -57,7 +58,7 @@ function AppRouter() {
   const routeContent: Record<Exclude<RouteId, 'login'>, ReactNode> = {
     facebook: <FacebookScreen />,
     chatgpt: <ChatgptScreen />,
-    grok: <PlaceholderScreen title="Grok" />,
+    grok: <GrokScreen />,
     webadmin: <PlaceholderScreen title="WebAdmin" />,
     ggsheet: <GgSheetScreen />,
   }
