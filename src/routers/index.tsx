@@ -10,6 +10,17 @@ import GrokScreen from '../screens/GrokScreen'
 import LoginScreen from '../screens/LoginScreen'
 
 type RouteId = 'login' | 'facebook' | 'chatgpt' | 'grok' | 'webadmin' | 'ggsheet'
+type BrowserTab = { id?: number; url?: string; active?: boolean }
+type ExtensionChrome = {
+  tabs?: {
+    query?: (
+      queryInfo: { url?: string[]; currentWindow?: boolean; active?: boolean },
+      callback: (tabs: BrowserTab[]) => void,
+    ) => void
+    create?: (createProperties: { url: string; active?: boolean }, callback?: (tab: BrowserTab) => void) => void
+    update?: (tabId: number, updateProperties: { url?: string; active?: boolean }, callback?: (tab: BrowserTab) => void) => void
+  }
+}
 
 const mainTabs: Array<{
   id: Exclude<RouteId, 'login'>
@@ -34,6 +45,29 @@ function PlaceholderScreen({ title }: { title: string }) {
 
 function AppRouter() {
   const [activeRoute, setActiveRoute] = useState<RouteId>('facebook')
+
+  const syncBrowserTabByRoute = (routeId: Exclude<RouteId, 'login'>) => {
+    const targetByRoute: Partial<Record<Exclude<RouteId, 'login'>, { url: string; patterns: string[] }>> = {
+      facebook: { url: 'https://www.facebook.com/', patterns: ['*://*.facebook.com/*'] },
+      chatgpt: { url: 'https://chatgpt.com/', patterns: ['*://chatgpt.com/*', '*://chat.openai.com/*'] },
+      grok: { url: 'https://grok.com/imagine/saved', patterns: ['*://grok.com/imagine*'] },
+      ggsheet: { url: 'https://docs.google.com/spreadsheets/', patterns: ['*://docs.google.com/spreadsheets/*'] },
+    }
+    const target = targetByRoute[routeId]
+    if (!target) return
+
+    const extensionChrome = (globalThis as { chrome?: ExtensionChrome }).chrome
+    if (!extensionChrome?.tabs?.query || !extensionChrome.tabs.update || !extensionChrome.tabs.create) return
+
+    extensionChrome.tabs.query({ url: target.patterns, currentWindow: true }, (tabs) => {
+      const existing = tabs.find((tab) => tab.active && tab.id) || tabs.find((tab) => tab.id)
+      if (existing?.id) {
+        extensionChrome.tabs?.update?.(existing.id, { active: true })
+        return
+      }
+      extensionChrome.tabs?.create?.({ url: target.url, active: true })
+    })
+  }
 
   useEffect(() => {
     const handler = (event: Event) => {
@@ -67,7 +101,11 @@ function AppRouter() {
     <ExtensionLayout
       bottomTabs={mainTabs}
       activeTabId={activeRoute}
-      onTabChange={(tabId) => setActiveRoute(tabId as Exclude<RouteId, 'login'>)}
+      onTabChange={(tabId) => {
+        const routeId = tabId as Exclude<RouteId, 'login'>
+        setActiveRoute(routeId)
+        syncBrowserTabByRoute(routeId)
+      }}
     >
       {(Object.keys(routeContent) as Array<Exclude<RouteId, 'login'>>).map((routeId) => (
         <div key={routeId} className={activeRoute === routeId ? 'h-full' : 'hidden h-full'}>

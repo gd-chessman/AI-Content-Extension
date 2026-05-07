@@ -58,6 +58,7 @@ const CHATGPT_PATTERNS = ['*://chatgpt.com/*', '*://chat.openai.com/*']
 const SAVED_SPLIT_IMAGE_HASHES_KEY = 'savedSplitImageCopyHashes'
 const SAVED_SPLIT_IMAGE_HASHES_MAX = 150
 const SPLIT_IMAGE_DOWNLOAD_FOLDER = 'chatgpt-images'
+const LATEST_TEMP_MEMORY_KEY = 'latestTempMemoryText'
 
 const hashDataUrl = (dataUrl: string) => {
   let h = 5381
@@ -402,6 +403,54 @@ export default function ChatgptScreen() {
           : `${step.label}: Đã điền prompt vào ChatGPT (chưa gửi).`
         : `${step.label}: Không tìm thấy khung chat để xử lý.`,
     )
+  }
+
+  const runFastProcess = async (step: { id: string; label: string; prompt: string }) => {
+    if (step.id !== 'step-1') {
+      await runProcess(step, { autoSend: true, fast: true })
+      return
+    }
+
+    let mergedPrompt = step.prompt
+    try {
+      const fromClipboard = (await navigator.clipboard.readText())?.trim() || ''
+      const fromStorage = localStorage.getItem(LATEST_TEMP_MEMORY_KEY)?.trim() || ''
+      const latestTempMemory = fromClipboard || fromStorage
+      if (latestTempMemory) {
+        mergedPrompt = `${step.prompt}\n\n${latestTempMemory}`
+      }
+    } catch {
+      const fromStorage = localStorage.getItem(LATEST_TEMP_MEMORY_KEY)?.trim() || ''
+      if (fromStorage) {
+        mergedPrompt = `${step.prompt}\n\n${fromStorage}`
+      }
+    }
+
+    await runProcess({ ...step, prompt: mergedPrompt }, { autoSend: true, fast: true })
+  }
+
+  const runFillProcess = async (step: { id: string; label: string; prompt: string }) => {
+    if (step.id !== 'step-1') {
+      await runProcess(step, { autoSend: false, fast: false })
+      return
+    }
+
+    let mergedPrompt = step.prompt
+    try {
+      const fromClipboard = (await navigator.clipboard.readText())?.trim() || ''
+      const fromStorage = localStorage.getItem(LATEST_TEMP_MEMORY_KEY)?.trim() || ''
+      const latestTempMemory = fromClipboard || fromStorage
+      if (latestTempMemory) {
+        mergedPrompt = `${step.prompt}\n\n${latestTempMemory}`
+      }
+    } catch {
+      const fromStorage = localStorage.getItem(LATEST_TEMP_MEMORY_KEY)?.trim() || ''
+      if (fromStorage) {
+        mergedPrompt = `${step.prompt}\n\n${fromStorage}`
+      }
+    }
+
+    await runProcess({ ...step, prompt: mergedPrompt }, { autoSend: false, fast: false })
   }
 
   useEffect(() => {
@@ -1262,18 +1311,17 @@ export default function ChatgptScreen() {
                 <div className="mt-1.5 grid grid-cols-2 gap-1.5">
                   <button
                     type="button"
-                    onClick={() => void runProcess(step, { autoSend: true, fast: true })}
-                    disabled={step.id === 'step-1'}
+                    onClick={() => void runFastProcess(step)}
                     className="inline-flex h-7 w-full cursor-pointer items-center justify-center rounded-md bg-emerald-500/25 text-emerald-100 transition hover:bg-emerald-500/35 disabled:cursor-not-allowed disabled:opacity-40"
-                    title="Chạy nhanh và tự Enter"
+                    title={step.id === 'step-1' ? 'Tiến trình 1 + bản nhớ tạm mới nhất, tự Enter' : 'Chạy nhanh và tự Enter'}
                   >
                     <IoFlash className="h-3.5 w-3.5 text-emerald-300" />
                   </button>
                   <button
                     type="button"
-                    onClick={() => void runProcess(step, { autoSend: false, fast: false })}
+                    onClick={() => void runFillProcess(step)}
                     className="inline-flex h-7 w-full cursor-pointer items-center justify-center rounded-md bg-amber-500/20 text-amber-100 transition hover:bg-amber-500/30"
-                    title="Điền prompt, không Enter"
+                    title={step.id === 'step-1' ? 'Tiến trình 1 + bản nhớ tạm mới nhất, không Enter' : 'Điền prompt, không Enter'}
                   >
                     <FiEdit3 className="h-3.5 w-3.5 text-amber-300" />
                   </button>

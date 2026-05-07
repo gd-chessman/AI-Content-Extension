@@ -125,6 +125,7 @@ const fanpages = [
 
 const MIN_VIEW_COUNT = 500_000
 const MAX_SCAN_RESULTS = 5
+const LATEST_TEMP_MEMORY_KEY = 'latestTempMemoryText'
 const formatViewInput = (value: string) => {
   const digits = value.replace(/[^\d]/g, '')
   if (!digits) return ''
@@ -290,6 +291,7 @@ export default function FacebookScreen() {
   const copyContent = async () => {
     try {
       await navigator.clipboard.writeText(contentText)
+      localStorage.setItem(LATEST_TEMP_MEMORY_KEY, contentText.trim())
       setCopyStatus('ok')
       window.setTimeout(() => setCopyStatus('idle'), 1200)
     } catch {
@@ -303,6 +305,8 @@ export default function FacebookScreen() {
     if (!reelContent) {
       return
     }
+
+    localStorage.setItem(LATEST_TEMP_MEMORY_KEY, reelContent)
 
     window.dispatchEvent(
       new CustomEvent('switch-main-tab', {
