@@ -136,7 +136,7 @@ export default function FacebookScreen() {
   const [openedFacebookUrls, setOpenedFacebookUrls] = useState<Set<string>>(new Set())
   const [scannedReels, setScannedReels] = useState<ScannedReel[]>([])
   const [scanStatus, setScanStatus] = useState('')
-  const [minViewInput, setMinViewInput] = useState(String(MIN_VIEW_COUNT))
+  const [minViewInput, setMinViewInput] = useState(formatViewInput(String(MIN_VIEW_COUNT)))
   const [maxViewInput, setMaxViewInput] = useState('')
   const [selectedReel, setSelectedReel] = useState<ScannedReel | null>(null)
   const [contentText, setContentText] = useState('')
