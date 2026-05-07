@@ -58,7 +58,7 @@ const CHATGPT_PATTERNS = ['*://chatgpt.com/*', '*://chat.openai.com/*']
 const SAVED_SPLIT_IMAGE_HASHES_KEY = 'savedSplitImageCopyHashes'
 const SAVED_SPLIT_IMAGE_HASHES_MAX = 150
 const SPLIT_IMAGE_DOWNLOAD_FOLDER = 'chatgpt-images'
-const LATEST_TEMP_MEMORY_KEY = 'latestTempMemoryText'
+const FACEBOOK_REEL_MEMORY_KEY = 'facebookReelCopiedContent'
 
 const hashDataUrl = (dataUrl: string) => {
   let h = 5381
@@ -406,48 +406,40 @@ export default function ChatgptScreen() {
   }
 
   const runFastProcess = async (step: { id: string; label: string; prompt: string }) => {
+    if (step.id === 'step-2') {
+      setSplitImages(null)
+      setCopiedPart(null)
+    }
+
     if (step.id !== 'step-1') {
       await runProcess(step, { autoSend: true, fast: true })
       return
     }
 
     let mergedPrompt = step.prompt
-    try {
-      const fromClipboard = (await navigator.clipboard.readText())?.trim() || ''
-      const fromStorage = localStorage.getItem(LATEST_TEMP_MEMORY_KEY)?.trim() || ''
-      const latestTempMemory = fromClipboard || fromStorage
-      if (latestTempMemory) {
-        mergedPrompt = `${step.prompt}\n\n${latestTempMemory}`
-      }
-    } catch {
-      const fromStorage = localStorage.getItem(LATEST_TEMP_MEMORY_KEY)?.trim() || ''
-      if (fromStorage) {
-        mergedPrompt = `${step.prompt}\n\n${fromStorage}`
-      }
+    const fromStorage = localStorage.getItem(FACEBOOK_REEL_MEMORY_KEY)?.trim() || ''
+    if (fromStorage) {
+      mergedPrompt = `${step.prompt}\n\n${fromStorage}`
     }
 
     await runProcess({ ...step, prompt: mergedPrompt }, { autoSend: true, fast: true })
   }
 
   const runFillProcess = async (step: { id: string; label: string; prompt: string }) => {
+    if (step.id === 'step-2') {
+      setSplitImages(null)
+      setCopiedPart(null)
+    }
+
     if (step.id !== 'step-1') {
       await runProcess(step, { autoSend: false, fast: false })
       return
     }
 
     let mergedPrompt = step.prompt
-    try {
-      const fromClipboard = (await navigator.clipboard.readText())?.trim() || ''
-      const fromStorage = localStorage.getItem(LATEST_TEMP_MEMORY_KEY)?.trim() || ''
-      const latestTempMemory = fromClipboard || fromStorage
-      if (latestTempMemory) {
-        mergedPrompt = `${step.prompt}\n\n${latestTempMemory}`
-      }
-    } catch {
-      const fromStorage = localStorage.getItem(LATEST_TEMP_MEMORY_KEY)?.trim() || ''
-      if (fromStorage) {
-        mergedPrompt = `${step.prompt}\n\n${fromStorage}`
-      }
+    const fromStorage = localStorage.getItem(FACEBOOK_REEL_MEMORY_KEY)?.trim() || ''
+    if (fromStorage) {
+      mergedPrompt = `${step.prompt}\n\n${fromStorage}`
     }
 
     await runProcess({ ...step, prompt: mergedPrompt }, { autoSend: false, fast: false })

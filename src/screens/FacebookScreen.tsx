@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { FiSearch } from 'react-icons/fi'
-import { SiOpenai } from 'react-icons/si'
 
 type ScannedReel = {
   id: string
@@ -125,7 +124,7 @@ const fanpages = [
 
 const MIN_VIEW_COUNT = 500_000
 const MAX_SCAN_RESULTS = 5
-const LATEST_TEMP_MEMORY_KEY = 'latestTempMemoryText'
+const FACEBOOK_REEL_MEMORY_KEY = 'facebookReelCopiedContent'
 const formatViewInput = (value: string) => {
   const digits = value.replace(/[^\d]/g, '')
   if (!digits) return ''
@@ -136,7 +135,9 @@ export default function FacebookScreen() {
   const [activeView, setActiveView] = useState<'fanpages' | 'reels' | 'content'>('fanpages')
   const [openedFacebookUrls, setOpenedFacebookUrls] = useState<Set<string>>(new Set())
   const [scannedReels, setScannedReels] = useState<ScannedReel[]>([])
+  const [hasMoreReels, setHasMoreReels] = useState(false)
   const [scanStatus, setScanStatus] = useState('')
+  const [isScanning, setIsScanning] = useState(false)
   const [minViewInput, setMinViewInput] = useState(formatViewInput(String(MIN_VIEW_COUNT)))
   const [maxViewInput, setMaxViewInput] = useState('')
   const [selectedReel, setSelectedReel] = useState<ScannedReel | null>(null)
@@ -145,10 +146,18 @@ export default function FacebookScreen() {
   const [isContentDirty, setIsContentDirty] = useState(false)
   const [reelLinkInput, setReelLinkInput] = useState('')
   const isContentDirtyRef = useRef(false)
+  const contentTextareaRef = useRef<HTMLTextAreaElement | null>(null)
+  const scanControlRef = useRef<{ token: string; tabId: number } | null>(null)
 
   useEffect(() => {
     isContentDirtyRef.current = isContentDirty
   }, [isContentDirty])
+
+  useEffect(() => {
+    const textarea = contentTextareaRef.current
+    if (!textarea) return
+    textarea.scrollTo({ top: textarea.scrollHeight, behavior: 'smooth' })
+  }, [contentText])
 
   useEffect(() => {
     if (activeView === 'content' && selectedReel && !contentText.trim()) {
@@ -291,36 +300,13 @@ export default function FacebookScreen() {
   const copyContent = async () => {
     try {
       await navigator.clipboard.writeText(contentText)
-      localStorage.setItem(LATEST_TEMP_MEMORY_KEY, contentText.trim())
+      localStorage.setItem(FACEBOOK_REEL_MEMORY_KEY, contentText.trim())
       setCopyStatus('ok')
       window.setTimeout(() => setCopyStatus('idle'), 1200)
     } catch {
       setCopyStatus('error')
       window.setTimeout(() => setCopyStatus('idle'), 1200)
     }
-  }
-
-  const runStep1OnChatgpt = () => {
-    const reelContent = contentText.trim()
-    if (!reelContent) {
-      return
-    }
-
-    localStorage.setItem(LATEST_TEMP_MEMORY_KEY, reelContent)
-
-    window.dispatchEvent(
-      new CustomEvent('switch-main-tab', {
-        detail: { tabId: 'chatgpt' },
-      }),
-    )
-
-    window.setTimeout(() => {
-      window.dispatchEvent(
-        new CustomEvent('run-chatgpt-step1-from-facebook', {
-          detail: { reelContent },
-        }),
-      )
-    }, 120)
   }
 
   const refreshSelectedReelFromFacebook = (reelOverride?: ScannedReel) => {
@@ -508,7 +494,7 @@ export default function FacebookScreen() {
     }
   }, [activeView, selectedReel])
 
-  const handleScanReels = () => {
+  const handleScanReels = (append = false) => {
     const extensionChrome = (globalThis as { chrome?: ExtensionChrome }).chrome
     const minViewCount = Number(minViewInput.replace(/[^\d]/g, '')) || MIN_VIEW_COUNT
     const parsedMaxView = Number(maxViewInput.replace(/[^\d]/g, ''))
@@ -526,13 +512,24 @@ export default function FacebookScreen() {
       return
     }
 
-    setScanStatus('Đang quét reels theo khoảng lượt xem — extension sẽ cuộn trang để tải thêm video nếu cần...')
+    if (isScanning) {
+      return
+    }
+
+    const existingUrls = append ? scannedReels.map((item) => item.url) : []
+    setIsScanning(true)
+    setScanStatus(
+      append
+        ? 'Đang quét thêm reels theo khoảng lượt xem...'
+        : 'Đang quét reels theo khoảng lượt xem — extension sẽ cuộn trang để tải thêm video nếu cần...',
+    )
     extensionChrome.tabs.query({ url: ['*://*.facebook.com/*'], active: true, currentWindow: true }, async (activeTabs) => {
       const targetTab = activeTabs[0]
 
       if (!targetTab?.id) {
         setScanStatus('Hãy mở fanpage Facebook cần quét trong tab hiện tại trước.')
         setScannedReels([])
+        setIsScanning(false)
         return
       }
 
@@ -564,15 +561,23 @@ export default function FacebookScreen() {
       if (!isAllowedFanpageTab) {
         setScanStatus('Chỉ quét khi tab hiện tại là fanpage có trong danh sách.')
         setScannedReels([])
+        setIsScanning(false)
         return
       }
+
+      const scanToken = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+      scanControlRef.current = { token: scanToken, tabId: targetTab.id }
 
       try {
         const result = await extensionChrome.scripting?.executeScript?.({
           target: { tabId: targetTab.id },
-          func: (async (minViews: number, maxViewsArgInner: number, limit: number) => {
+          func: (async (minViews: number, maxViewsArgInner: number, limit: number, token: string, excludedUrls: string[]) => {
             const maxViews = maxViewsArgInner > 0 ? maxViewsArgInner : Number.POSITIVE_INFINITY
             const normalizeNumber = (raw: string) => raw.replace(/\./g, '').replace(',', '.')
+            ;(window as unknown as { __aiContentScanControl?: Record<string, { stop?: boolean }> }).__aiContentScanControl ??= {}
+            const control = (window as unknown as { __aiContentScanControl: Record<string, { stop?: boolean }> }).__aiContentScanControl
+            control[token] = { stop: false }
+            const excludedSet = new Set(excludedUrls || [])
 
             const parseViewCount = (text: string) => {
               const parseMatch = (match: RegExpMatchArray | null) => {
@@ -665,6 +670,7 @@ export default function FacebookScreen() {
 
                 const url = new URL(href, location.origin).toString()
                 if (uniqueByUrl.has(url)) return
+                if (excludedSet.has(url)) return
 
                 const container = (anchor.closest('div[role="article"]') || anchor.closest('div')) as HTMLElement | null
                 const ariaTexts = Array.from(container?.querySelectorAll<HTMLElement>('[aria-label]') || [])
@@ -729,6 +735,7 @@ export default function FacebookScreen() {
             let stagnantRounds = 0
 
             for (let round = 0; round < MAX_SCROLL_ROUNDS; round += 1) {
+              if (control[token]?.stop) break
               scrapePass(uniqueByUrl)
               if (uniqueByUrl.size >= limit) {
                 break
@@ -755,36 +762,70 @@ export default function FacebookScreen() {
               }
             }
 
-            return Array.from(uniqueByUrl.values())
-              .sort((a, b) => b.viewCount - a.viewCount)
-              .slice(0, limit)
+            const sorted = Array.from(uniqueByUrl.values()).sort((a, b) => b.viewCount - a.viewCount)
+            return {
+              rows: sorted.slice(0, limit),
+              hasMore: sorted.length > limit,
+            }
           }) as (...args: unknown[]) => unknown,
-          args: [minViewCount, maxViewArg, MAX_SCAN_RESULTS],
+          args: [minViewCount, maxViewArg, MAX_SCAN_RESULTS, scanToken, existingUrls],
         })
 
         if (!result) {
           setScanStatus('Quét thất bại: không nhận được kết quả từ executeScript.')
           setScannedReels([])
+          setIsScanning(false)
           return
         }
 
-        const reels = (result?.[0]?.result as ScannedReel[] | undefined) || []
-        setScannedReels(reels)
+        const payload = (result?.[0]?.result as { rows?: ScannedReel[]; hasMore?: boolean } | undefined) || {}
+        const reels = payload.rows || []
+        setHasMoreReels(Boolean(payload.hasMore))
+        setScannedReels((prev) => {
+          if (!append) return reels
+          const map = new Map<string, ScannedReel>()
+          prev.forEach((item) => map.set(item.url, item))
+          reels.forEach((item) => map.set(item.url, item))
+          return Array.from(map.values())
+        })
         const rangeLabel =
           Number.isFinite(maxViewCount) && maxViewCount !== Number.POSITIVE_INFINITY
             ? `${minViewCount.toLocaleString('en-US')} - ${maxViewCount.toLocaleString('en-US')}`
             : `>= ${minViewCount.toLocaleString('en-US')}`
         setScanStatus(
           reels.length > 0
-            ? `Đã quét được ${reels.length} video trong khoảng ${rangeLabel} lượt xem.`
+            ? append
+              ? `Đã quét thêm ${reels.length} video trong khoảng ${rangeLabel} lượt xem.`
+              : `Đã quét được ${reels.length} video trong khoảng ${rangeLabel} lượt xem.`
             : `Không tìm thấy video nào trong khoảng ${rangeLabel} lượt xem.`,
         )
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
         setScanStatus(`Quét thất bại: ${message}. Hãy mở đúng trang reels của fanpage rồi thử lại.`)
         setScannedReels([])
+        setHasMoreReels(false)
+      } finally {
+        setIsScanning(false)
+        scanControlRef.current = null
       }
     })
+  }
+
+  const handleStopScan = () => {
+    const extensionChrome = (globalThis as { chrome?: ExtensionChrome }).chrome
+    const control = scanControlRef.current
+    if (!extensionChrome?.scripting?.executeScript || !control?.tabId) return
+    extensionChrome.scripting.executeScript({
+      target: { tabId: control.tabId },
+      func: ((token: string) => {
+        const controlStore = (window as unknown as { __aiContentScanControl?: Record<string, { stop?: boolean }> }).__aiContentScanControl
+        if (controlStore?.[token]) {
+          controlStore[token].stop = true
+        }
+      }) as (...args: unknown[]) => unknown,
+      args: [control.token],
+    })
+    setScanStatus('Đang dừng quét...')
   }
 
   useEffect(() => {
@@ -800,9 +841,6 @@ export default function FacebookScreen() {
           </div>
           <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Facebook</p>
         </div>
-        <button type="button" className="cursor-pointer rounded-xl border border-white/10 bg-white/10 px-3 py-1.5 text-xs font-medium text-slate-200 backdrop-blur">
-          Hôm nay
-        </button>
       </header>
 
       <section className="mb-3 rounded-2xl border border-white/10 bg-white/5 p-1.5 backdrop-blur">
@@ -843,7 +881,7 @@ export default function FacebookScreen() {
         </div>
       </section>
 
-      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
+      <div className={activeView === 'content' ? 'min-h-0 flex flex-1 pr-1' : 'min-h-0 flex-1 space-y-3 overflow-y-auto pr-1'}>
         {activeView === 'fanpages' ? (
           <section className="glass-panel rounded-3xl p-3">
           <h2 className="text-sm font-semibold text-white">Fanpage nguồn</h2>
@@ -862,10 +900,10 @@ export default function FacebookScreen() {
               >
                 <div>
                   <p className="text-xs font-semibold text-slate-100">{page.name}</p>
-                  <p className="mt-0.5 line-clamp-1 text-[11px] text-slate-500">{page.url}</p>
+                  <p className="mt-0.5 line-clamp-1 break-all text-[11px] text-slate-500">{page.url}</p>
                 </div>
                 {openedFacebookUrls.has(normalizeUrl(page.url)) ? (
-                  <span className="rounded-lg bg-emerald-500/20 px-2 py-1 text-[10px] font-semibold text-emerald-300">
+                  <span className="whitespace-nowrap rounded-lg bg-emerald-500/20 px-2 py-1 text-[10px] font-semibold text-emerald-300">
                     Đang mở
                   </span>
                 ) : (
@@ -905,16 +943,43 @@ export default function FacebookScreen() {
                   className="w-full rounded-2xl bg-slate-900/90 px-3 py-2.5 text-xs text-slate-100 outline-none placeholder:text-slate-500 focus:ring-2 focus:ring-blue-400/30"
                 />
               </div>
-              <button
-                type="button"
-                onClick={handleScanReels}
-                className="primary-blue-btn w-full cursor-pointer rounded-2xl px-3 py-2.5 text-xs font-semibold transition hover:opacity-90"
-              >
-                <span className="inline-flex items-center gap-1.5">
-                  <FiSearch aria-hidden="true" className="h-3.5 w-3.5" />
-                  Quét reels ngay
-                </span>
-              </button>
+              <div className="relative">
+                {isScanning ? (
+                  <>
+                    <span className="pointer-events-none absolute -inset-px rounded-2xl border border-cyan-300/40" />
+                    <svg className="pointer-events-none absolute -inset-px h-[calc(100%+2px)] w-[calc(100%+2px)]" viewBox="0 0 100 36" preserveAspectRatio="none">
+                      <rect x="1" y="1" width="98" height="34" rx="12" ry="12" fill="none" stroke="rgba(34,211,238,0.18)" strokeWidth="1.2" />
+                      <rect
+                        x="1"
+                        y="1"
+                        width="98"
+                        height="34"
+                        rx="12"
+                        ry="12"
+                        fill="none"
+                        stroke="rgba(34,211,238,0.95)"
+                        strokeWidth="1.6"
+                        strokeLinecap="round"
+                        strokeDasharray="24 220"
+                      >
+                        <animate attributeName="stroke-dashoffset" from="0" to="-244" dur="1.15s" repeatCount="indefinite" />
+                      </rect>
+                    </svg>
+                  </>
+                ) : null}
+                <button
+                  type="button"
+                onClick={isScanning ? handleStopScan : () => handleScanReels(false)}
+                  className={`primary-blue-btn relative z-1 w-full cursor-pointer rounded-2xl px-3 py-2.5 text-xs font-semibold transition hover:opacity-90 ${
+                    isScanning ? 'animate-pulse bg-cyan-500/20 shadow-[0_0_14px_rgba(34,211,238,0.35)]' : ''
+                  }`}
+                >
+                  <span className="inline-flex items-center gap-1.5">
+                    <FiSearch aria-hidden="true" className="h-3.5 w-3.5" />
+                    {isScanning ? 'Dừng quét' : 'Quét reels ngay'}
+                  </span>
+                </button>
+              </div>
               <div className="flex gap-2">
                 <input
                   type="text"
@@ -956,11 +1021,11 @@ export default function FacebookScreen() {
                     <div className="min-w-0 flex-1">
                       <p className="line-clamp-2 text-xs font-medium text-slate-100">{reel.title}</p>
                       <p className="mt-1 line-clamp-1 text-[10px] text-slate-500">{reel.description || reel.url}</p>
-                      <p className="mt-1 line-clamp-1 text-[10px] text-slate-500">{reel.url}</p>
+                      <p className="mt-1 line-clamp-1 break-all text-[10px] text-slate-500">{reel.url}</p>
                     </div>
                   </div>
                   <div className="mt-2 flex items-center justify-between">
-                    <span className="text-[11px] text-slate-400">{reel.views} views</span>
+                    <span className="text-[11px] text-slate-400">{reel.views} lượt xem</span>
                     <button
                       type="button"
                       onClick={() => handleSelectReel(reel)}
@@ -976,13 +1041,23 @@ export default function FacebookScreen() {
                   Chưa có dữ liệu. Nhấn "Quét reels ngay" để lấy tối đa {MAX_SCAN_RESULTS} video theo ngưỡng lượt xem hiện tại.
                 </p>
               ) : null}
+              {scannedReels.length > 0 && hasMoreReels ? (
+                <button
+                  type="button"
+                  onClick={() => handleScanReels(true)}
+                  disabled={isScanning}
+                  className="w-full cursor-pointer rounded-xl border border-blue-300/30 bg-blue-500/15 px-3 py-2 text-[11px] font-semibold text-blue-200 transition hover:bg-blue-500/25 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Quét thêm
+                </button>
+              ) : null}
               </div>
             </section>
           </>
         ) : null}
 
         {activeView === 'content' ? (
-          <section className="glass-panel rounded-3xl p-3">
+          <section className="glass-panel flex min-h-0 flex-1 flex-col rounded-3xl p-3">
           <h2 className="text-sm font-semibold text-white">Chi tiết Reels</h2>
           {selectedReel ? (
             <div className="mt-2 rounded-2xl border border-blue-300/20 bg-blue-400/10 p-3">
@@ -1000,12 +1075,12 @@ export default function FacebookScreen() {
                 )}
                 <div className="min-w-0 flex-1">
                   <p className="line-clamp-2 text-xs font-semibold text-slate-100">{selectedReel.title}</p>
-                  <p className="mt-1 text-[11px] text-slate-400">{selectedReel.views} views</p>
+                  <p className="mt-1 text-[11px] text-slate-400">{selectedReel.views} lượt xem</p>
                   <a
                     href={selectedReel.url}
                     target="_blank"
                     rel="noreferrer"
-                    className="mt-1 block truncate text-[10px] text-blue-300"
+                    className="mt-1 block break-all text-[10px] text-blue-300"
                     title={selectedReel.url}
                   >
                     {selectedReel.url}
@@ -1016,15 +1091,16 @@ export default function FacebookScreen() {
           ) : (
             <p className="mt-2 rounded-xl border border-blue-300/20 bg-blue-400/10 px-3 py-2 text-[11px] text-slate-500">Chưa chọn reels nào.</p>
           )}
-          <div className="relative mt-2">
+          <div className="relative mt-2 min-h-0 flex-1 overflow-hidden">
             <textarea
+              ref={contentTextareaRef}
               placeholder="Caption, voice script, hashtag... hiển thị tại đây"
               value={contentText}
               onChange={(event) => {
                 setContentText(event.target.value)
                 setIsContentDirty(true)
               }}
-              className="h-44 w-full resize-none rounded-2xl bg-slate-900/90 px-3 py-2.5 pr-11 text-xs text-slate-100 outline-none placeholder:text-slate-500 focus:ring-2 focus:ring-blue-400/30"
+              className="h-full min-h-[140px] w-full resize-none rounded-2xl bg-slate-900/90 px-3 py-2.5 pr-11 text-xs text-slate-100 outline-none placeholder:text-slate-500 focus:ring-2 focus:ring-blue-400/30"
             />
             <button
               type="button"
@@ -1038,22 +1114,15 @@ export default function FacebookScreen() {
                     ? 'Sao chép lỗi'
                     : 'Sao chép'
               }
-              className="absolute bottom-2 right-2 inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg bg-blue-500 text-sm text-white transition hover:bg-blue-600 disabled:cursor-not-allowed disabled:opacity-40"
+              className={`absolute bottom-2 right-2 inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg text-sm text-white transition disabled:cursor-not-allowed disabled:opacity-40 ${
+                copyStatus === 'ok'
+                  ? 'bg-emerald-500 hover:bg-emerald-600'
+                  : copyStatus === 'error'
+                    ? 'bg-rose-500 hover:bg-rose-600'
+                    : 'bg-blue-500/90 hover:bg-blue-500'
+              }`}
             >
               {copyStatus === 'ok' ? '✓' : '⧉'}
-            </button>
-          </div>
-          <div className="mt-2 flex gap-2">
-            <button
-              type="button"
-              onClick={runStep1OnChatgpt}
-              disabled={!contentText.trim()}
-              className="primary-blue-btn w-full cursor-pointer rounded-2xl px-3 py-2.5 text-xs font-semibold transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              <span className="inline-flex items-center gap-1.5">
-                <SiOpenai aria-hidden="true" className="h-3.5 w-3.5" />
-                Chạy tiến trình 1 trên ChatGPT
-              </span>
             </button>
           </div>
           </section>
