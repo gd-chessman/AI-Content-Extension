@@ -742,31 +742,50 @@ export default function ChatgptScreen() {
           const source = (raw || '').trim()
           if (!source) return ''
 
+          const startMarkers = [
+            /(?:^|\n)\s*🎬\s*scene\s*1\b/i,
+            /(?:^|\n)\s*scene\s*1\b/i,
+          ]
+          let start = 0
+          for (const rg of startMarkers) {
+            const m = source.match(rg)
+            if (m && m.index !== undefined) {
+              start = m.index
+              break
+            }
+          }
+          const normalizedSource = source.slice(start).trim()
+
           const stopMarkers = [
+            /(?:^|\n)\s*structure\s*:\s*3\s*scenes\b/i,
             /(?:^|\n)\s*🎯\s*production\s*notes\b/i,
+            /(?:^|\n)\s*🎯\s*notes?\s*for\s*ai\s*generation\b/i,
             /(?:^|\n)\s*(?:🔥\s*)?notes?\s*for\s*ai\s*video\s*tools\b/i,
             /(?:^|\n)\s*⚡\s*cinematic\s*rules\b/i,
             /(?:^|\n)\s*cinematic\s*rules\b/i,
             /(?:^|\n)\s*(?:🔁\s*)?continuity\s*notes\b/i,
             /(?:^|\n)\s*if\s+you\s+want\s+next\b/i,
+            /(?:^|\n)\s*if\s+you\s+want[, ]+i\s+can\s+next\b/i,
             /(?:^|\n)\s*just\s+tell\s+me\b/i,
             /(?:^|\n)\s*✅\s*/i,
             /(?:^|\n)\s*i\s+can\s+generate\b/i,
             /(?:^|\n)\s*or\s+convert\b/i,
+            /(?:^|\n)\s*facebook\s*$/i,
+            /(?:^|\n)\s*chatgpt\s*$/i,
             /(?:^|\n)\s*(?:🎬\s*)?idea\s*\d+\b/i,
             /(?:^|\n)\s*(?:🖼️\s*)?image\s*\d+\b/i,
             /(?:^|\n)\s*(?:🎥\s*)?video\s*\d+\b/i,
           ]
 
-          let end = source.length
+          let end = normalizedSource.length
           for (const rg of stopMarkers) {
-            const m = source.match(rg)
+            const m = normalizedSource.match(rg)
             if (m && m.index !== undefined && m.index > 0) {
               end = Math.min(end, m.index)
             }
           }
 
-          return source.slice(0, end).trim()
+          return normalizedSource.slice(0, end).trim()
         }
         const compactLines = (raw: string) => {
           const source = (raw || '').replace(/\r/g, '').trim()
