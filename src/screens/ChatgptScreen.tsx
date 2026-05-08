@@ -1108,12 +1108,19 @@ export default function ChatgptScreen() {
           const full = pickContent(text)
           if (!full) return ''
 
-          const MIN_LEN = 1800
-          const MAX_SCAN = 4200
+          const MIN_LEN = 1000
+          const MAX_SCAN = 3600
           const normalized = full.replace(/\r/g, '').trim()
           if (!normalized) return ''
 
           const searchSpace = normalized.slice(0, MAX_SCAN)
+          const questionWindow = searchSpace.slice(MIN_LEN)
+          const lastQuestionAfterMin = questionWindow.lastIndexOf('?')
+
+          if (lastQuestionAfterMin >= 0) {
+            return searchSpace.slice(0, MIN_LEN + lastQuestionAfterMin + 1).trim()
+          }
+
           const questionIndex = searchSpace.indexOf('?')
 
           if (questionIndex >= 0) {
@@ -1157,23 +1164,43 @@ export default function ChatgptScreen() {
             .join('')
         }
 
-        const assistantNodes = Array.from(
-          document.querySelectorAll<HTMLElement>('[data-message-author-role="assistant"], article'),
+        const turns = Array.from(document.querySelectorAll<HTMLElement>('[data-message-author-role]')).filter(
+          (el) => (el.innerText || '').trim().length > 0,
         )
-          .filter((el) => (el.innerText || '').trim().length > 0)
-          .reverse()
+        if (!turns.length) return ''
 
-        const candidateNode =
-          assistantNodes.find((el) => {
-            const text = (el.innerText || '').toLowerCase()
-            return text.length > 1200 || /write a complete|full-length english story|twist ending|title/i.test(text)
-          }) || assistantNodes[0]
+        const step4Hint =
+          /tiến trình\s*4|step\s*4|title|tiêu đề|nội dung ngắn|nội dung dài|full[-\s]*length|twist ending|happy ending|story/i
 
-        if (!candidateNode) return ''
+        let latestUserIndex = -1
+        for (let i = turns.length - 1; i >= 0; i -= 1) {
+          const role = (turns[i].getAttribute('data-message-author-role') || '').toLowerCase()
+          if (role === 'user') {
+            latestUserIndex = i
+            break
+          }
+        }
+        if (latestUserIndex < 0) return ''
 
-        candidateNode.scrollIntoView({ block: 'start', behavior: 'instant' })
-        const raw = normalize(candidateNode.innerText || '')
+        const latestUserText = normalize(turns[latestUserIndex].innerText || '')
+        if (!step4Hint.test(latestUserText)) {
+          return ''
+        }
+
+        let raw = ''
+        let matchedAssistantNode: HTMLElement | null = null
+        for (let i = latestUserIndex + 1; i < turns.length; i += 1) {
+          const role = (turns[i].getAttribute('data-message-author-role') || '').toLowerCase()
+          if (role === 'assistant') {
+            raw = normalize(turns[i].innerText || '')
+            if (raw) {
+              matchedAssistantNode = turns[i]
+              break
+            }
+          }
+        }
         if (!raw) return ''
+        matchedAssistantNode?.scrollIntoView({ block: 'start', behavior: 'instant' })
 
         if (extractKind === 'title_plain') return pickTitle(raw)
         if (extractKind === 'title_styled') return stylizeTitle(pickTitle(raw))
