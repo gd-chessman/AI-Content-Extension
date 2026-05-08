@@ -307,34 +307,58 @@ export default function GgSheetScreen() {
         )
         if (!turns.length) return null
 
-        const step4Hint =
-          /tiến trình\s*4|step\s*4|title|tiêu đề|nội dung ngắn|nội dung dài|full[-\s]*length|twist ending|happy ending|story/i
-
-        let latestUserIndex = -1
-        for (let i = turns.length - 1; i >= 0; i -= 1) {
-          const role = (turns[i].getAttribute('data-message-author-role') || '').toLowerCase()
-          if (role === 'user') {
-            latestUserIndex = i
-            break
-          }
+        const isStep4UserPrompt = (text: string) => {
+          const t = normalize(text).toLowerCase()
+          if (!t) return false
+          if (/tiến trình\s*4|step\s*4/.test(t)) return true
+          const hintCount = [
+            /title|tiêu đề/.test(t),
+            /nội dung ngắn|short content/.test(t),
+            /nội dung dài|full content/.test(t),
+            /full[-\s]*length|twist ending|happy ending|story/.test(t),
+          ].filter(Boolean).length
+          return hintCount >= 2
         }
-        if (latestUserIndex < 0) return null
 
-        const latestUserText = normalize(turns[latestUserIndex].innerText || '')
-        if (!step4Hint.test(latestUserText)) return null
+        const isStep4AssistantOutput = (text: string) => {
+          const t = normalize(text)
+          if (!t) return false
+          const lower = t.toLowerCase()
+          const score = [
+            t.length >= 800,
+            /title\s*[:\-]|tiêu đề\s*[:\-]/i.test(t),
+            /\?\s*$|\?/.test(t),
+            /\n\s*\n/.test(t),
+            /twist ending|happy ending|full[-\s]*length|story/i.test(lower),
+          ].filter(Boolean).length
+          return score >= 2
+        }
 
         let raw = ''
         let matchedAssistantNode: HTMLElement | null = null
-        for (let i = latestUserIndex + 1; i < turns.length; i += 1) {
+
+        for (let i = turns.length - 1; i >= 0; i -= 1) {
           const role = (turns[i].getAttribute('data-message-author-role') || '').toLowerCase()
-          if (role === 'assistant') {
-            raw = normalize(turns[i].innerText || '')
-            if (raw) {
-              matchedAssistantNode = turns[i]
-              break
-            }
+          if (role !== 'user') continue
+
+          const userText = normalize(turns[i].innerText || '')
+          if (!isStep4UserPrompt(userText)) continue
+
+          for (let j = i + 1; j < turns.length; j += 1) {
+            const nextRole = (turns[j].getAttribute('data-message-author-role') || '').toLowerCase()
+            if (nextRole === 'user') break
+            if (nextRole !== 'assistant') continue
+            const assistantText = normalize(turns[j].innerText || '')
+            if (!assistantText) continue
+            if (!isStep4AssistantOutput(assistantText)) continue
+            raw = assistantText
+            matchedAssistantNode = turns[j]
+            break
           }
+
+          if (raw) break
         }
+
         if (!raw) return null
         matchedAssistantNode?.scrollIntoView({ block: 'start', behavior: 'instant' })
         const plainTitle = pickTitle(raw)
