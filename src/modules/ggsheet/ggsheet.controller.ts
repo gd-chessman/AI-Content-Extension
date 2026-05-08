@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Patch, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post, Req, UseGuards } from '@nestjs/common';
 import { Request } from 'express';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { Roles } from '../auth/roles.decorator';
@@ -30,6 +30,12 @@ export class GgSheetController {
   getMyStats(@Req() req: Request) {
     const user = req.user as JwtPayload;
     return this.ggSheetService.getMyStats(user.sub);
+  }
+
+  @Get('extract/:row')
+  extractRow(@Req() req: Request, @Param('row') row: string) {
+    const user = req.user as JwtPayload;
+    return this.ggSheetService.extractRow(user.sub, Number(row));
   }
 
   @Post('push/preview')

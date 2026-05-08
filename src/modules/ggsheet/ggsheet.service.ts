@@ -230,6 +230,62 @@ export class GgSheetService {
     };
   }
 
+  async extractRow(userId: string, row: number) {
+    if (!Number.isFinite(row) || row <= 0) {
+      throw new BadRequestException('Row must be a positive number.');
+    }
+
+    const setting = await this.getMySetting(userId);
+    const ggSheetPath = (setting?.ggSheetPath || '').trim();
+    const sheetId = this.extractSheetId(ggSheetPath);
+    const sheetGid = this.extractSheetGid(ggSheetPath);
+    if (!sheetId) {
+      throw new BadRequestException('Google Sheet path is not configured.');
+    }
+
+    const columns = this.resolveColumns(setting);
+    if (!columns.title && !columns.shortContent && !columns.full) {
+      throw new BadRequestException('No target columns configured for extract.');
+    }
+
+    const sheets = this.createSheetsClient();
+    const sheetTitle = await this.getSheetTitle(sheets, sheetId, sheetGid);
+
+    const ranges = [
+      columns.title ? `${sheetTitle}!${columns.title}${row}` : '',
+      columns.shortContent ? `${sheetTitle}!${columns.shortContent}${row}` : '',
+      columns.full ? `${sheetTitle}!${columns.full}${row}` : '',
+    ].filter(Boolean);
+
+    let response;
+    try {
+      response = await sheets.spreadsheets.values.batchGet({
+        spreadsheetId: sheetId,
+        ranges,
+      });
+    } catch (error) {
+      this.handleGoogleSheetError(error);
+    }
+
+    const valueRanges = response.data.valueRanges || [];
+    let idx = 0;
+    const title = columns.title ? String(valueRanges[idx++]?.values?.[0]?.[0] || '').trim() : '';
+    const shortContent = columns.shortContent ? String(valueRanges[idx++]?.values?.[0]?.[0] || '').trim() : '';
+    const fullContent = columns.full ? String(valueRanges[idx++]?.values?.[0]?.[0] || '').trim() : '';
+
+    return {
+      sheetId,
+      sheetTitle,
+      row,
+      columns,
+      data: {
+        title,
+        shortContent,
+        fullContent,
+      },
+    };
+  }
+
   private normalizeHttpUrl(raw: string) {
     const value = (raw || '').trim();
     if (!value) return '';
