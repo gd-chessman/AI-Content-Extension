@@ -264,8 +264,8 @@ export default function GgSheetScreen() {
         }
         const pickShort = (text: string) => {
           const full = pickFull(text)
-          const MIN_LEN = 260
-          const MAX_SCAN = 1200
+          const MIN_LEN = 1800
+          const MAX_SCAN = 4200
           if (!full) return ''
           const searchSpace = full.slice(0, MAX_SCAN)
           const qIndex = searchSpace.indexOf('?')

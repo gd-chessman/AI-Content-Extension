@@ -1108,8 +1108,8 @@ export default function ChatgptScreen() {
           const full = pickContent(text)
           if (!full) return ''
 
-          const MIN_LEN = 260
-          const MAX_SCAN = 1200
+          const MIN_LEN = 1800
+          const MAX_SCAN = 4200
           const normalized = full.replace(/\r/g, '').trim()
           if (!normalized) return ''
 
