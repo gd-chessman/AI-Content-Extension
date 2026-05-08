@@ -1470,6 +1470,11 @@ tinyglobby@^0.2.15, tinyglobby@^0.2.16:
     fdir "^6.5.0"
     picomatch "^4.0.4"
 
+translate@^3.0.1:
+  version "3.0.1"
+  resolved "https://registry.yarnpkg.com/translate/-/translate-3.0.1.tgz#0bc9a9a67481276685b62d3a8705351d218c5155"
+  integrity sha512-ZePIRh2uuN7ofL6V2KfRh71525pwPCC8CtoWJg29tQcr3vhGTFXzz2nYG+rmRxlZ5PCcMza/GDXqxLFx5omVpQ==
+
 ts-api-utils@^2.5.0:
   version "2.5.0"
   resolved "https://registry.npmjs.org/ts-api-utils/-/ts-api-utils-2.5.0.tgz"

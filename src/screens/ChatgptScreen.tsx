@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
-import { FiAlignLeft, FiAlertTriangle, FiCheck, FiCopy, FiDownload, FiEdit3, FiFileText, FiFilm, FiImage, FiInfo, FiItalic, FiScissors, FiType } from 'react-icons/fi'
+import { FiAlignLeft, FiAlertTriangle, FiCheck, FiCopy, FiDownload, FiEdit3, FiFileText, FiFilm, FiGlobe, FiImage, FiInfo, FiItalic, FiScissors, FiType } from 'react-icons/fi'
 import { IoFlash } from 'react-icons/io5'
 import { RiAdminFill } from 'react-icons/ri'
 import { SiGooglesheets, SiX } from 'react-icons/si'
+import translate from 'translate'
 
-type BrowserTab = { id?: number; url?: string; active?: boolean }
+type BrowserTab = { id?: number; url?: string; active?: boolean; windowId?: number }
 type ExtensionChrome = {
   runtime?: {
     id?: string
@@ -203,7 +204,16 @@ export default function ChatgptScreen() {
     new Promise<string | null>((resolve) => {
       const extensionChrome = getChrome()
       extensionChrome?.tabs?.captureVisibleTab?.(windowId, { format: 'png' }, (dataUrl) => {
-        resolve(dataUrl || null)
+        const maybeError = extensionChrome?.runtime?.lastError?.message || ''
+        if (maybeError) {
+          resolve(null)
+          return
+        }
+        if (!dataUrl || !String(dataUrl).startsWith('data:image/')) {
+          resolve(null)
+          return
+        }
+        resolve(dataUrl)
       })
     })
 
@@ -1196,6 +1206,33 @@ export default function ChatgptScreen() {
     return extracted
   }
 
+  const translateAndCopyStep4Content = async (
+    kind: 'title_plain' | 'content_full',
+    label: string,
+  ) => {
+    setStatus(`Đang dịch ${label} từ Tiến trình 4...`)
+    const source = await extractStep4Content(kind, { copyToClipboard: false })
+    if (!source.trim()) {
+      setStatus(`Không tìm thấy ${label} để dịch.`)
+      return
+    }
+    try {
+      const translated = await translate(source, { to: 'vi' })
+      const next = (translated || '').trim()
+      if (!next) {
+        setStatus(`Dịch ${label} thất bại.`)
+        return
+      }
+      await navigator.clipboard.writeText(next)
+      const toolId = `step4-${kind}-translated`
+      setCopiedTool(toolId)
+      window.setTimeout(() => setCopiedTool((prev) => (prev === toolId ? null : prev)), 1200)
+      setStatus(`Đã dịch và sao chép ${label} sang tiếng Việt.`)
+    } catch {
+      setStatus(`Dịch ${label} thất bại.`)
+    }
+  }
+
   const injectImagesIntoLongContent = (content: string, image1: string, image2: string) => {
     const base = (content || '').trim()
     if (!base) return ''
@@ -1370,7 +1407,25 @@ export default function ChatgptScreen() {
       return
     }
 
-    const screenshotDataUrl = await captureVisibleTab(undefined)
+    const tryWindowIds = Array.from(new Set<number | undefined>([target.windowId, undefined]))
+    let screenshotDataUrl: string | null = null
+    for (let attempt = 0; attempt < 4 && !screenshotDataUrl; attempt += 1) {
+      // Ensure ChatGPT tab stays active before capture, MV3 can occasionally race here.
+      if (target.id) {
+        await updateTab(target.id)
+      }
+      if (attempt > 0) {
+        await sleep(120 + attempt * 120)
+      }
+      for (const windowId of tryWindowIds) {
+        // eslint-disable-next-line no-await-in-loop
+        const shot = await captureVisibleTab(windowId)
+        if (shot) {
+          screenshotDataUrl = shot
+          break
+        }
+      }
+    }
     if (!screenshotDataUrl) {
       setStatus('Không thể chụp ảnh màn hình tab ChatGPT.')
       return
@@ -1593,6 +1648,19 @@ export default function ChatgptScreen() {
               </button>
               <button
                 type="button"
+                onClick={() => void translateAndCopyStep4Content('title_plain', 'tiêu đề thường')}
+                className="inline-flex cursor-pointer items-center justify-center rounded-md bg-violet-500/30 px-2 py-1.5 text-violet-100 transition hover:bg-violet-500/40"
+                title="Dịch + sao chép tiêu đề thường (Tiến trình 4)"
+              >
+                <span className="relative inline-flex items-center justify-center">
+                  <FiGlobe className="h-3.5 w-3.5" />
+                  <span className="absolute -left-2 -bottom-2 inline-flex h-2.5 min-w-2.5 items-center justify-center rounded-full bg-violet-600 px-0 text-[6px] font-bold leading-none text-white">
+                    {copiedTool === 'step4-title_plain-translated' ? <FiCheck className="h-2 w-2" /> : <FiCopy className="h-2 w-2" />}
+                  </span>
+                </span>
+              </button>
+              <button
+                type="button"
                 onClick={() => void extractStep4Content('title_styled')}
                 className="inline-flex cursor-pointer items-center justify-center rounded-md bg-violet-500/20 px-2 py-1.5 text-violet-100 transition hover:bg-violet-500/30"
                 title="Lấy tiêu đề font kiểu (Tiến trình 4)"
@@ -1627,6 +1695,19 @@ export default function ChatgptScreen() {
                   <FiFileText className="h-3.5 w-3.5" />
                   <span className="absolute -left-2 -bottom-2 inline-flex h-2.5 min-w-2.5 items-center justify-center rounded-full bg-fuchsia-600 px-0 text-[6px] font-bold leading-none text-white">
                     {copiedTool === 'step4-content_full' ? <FiCheck className="h-2 w-2" /> : <FiCopy className="h-2 w-2" />}
+                  </span>
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => void translateAndCopyStep4Content('content_full', 'nội dung dài')}
+                className="inline-flex cursor-pointer items-center justify-center rounded-md bg-fuchsia-500/30 px-2 py-1.5 text-fuchsia-100 transition hover:bg-fuchsia-500/40"
+                title="Dịch + sao chép nội dung dài (Tiến trình 4)"
+              >
+                <span className="relative inline-flex items-center justify-center">
+                  <FiGlobe className="h-3.5 w-3.5" />
+                  <span className="absolute -left-2 -bottom-2 inline-flex h-2.5 min-w-2.5 items-center justify-center rounded-full bg-fuchsia-600 px-0 text-[6px] font-bold leading-none text-white">
+                    {copiedTool === 'step4-content_full-translated' ? <FiCheck className="h-2 w-2" /> : <FiCopy className="h-2 w-2" />}
                   </span>
                 </span>
               </button>

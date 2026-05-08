@@ -4,6 +4,7 @@ import {
   FiCheck,
   FiCheckCircle,
   FiEdit2,
+  FiGlobe,
   FiInfo,
   FiMenu,
   FiPlus,
@@ -13,6 +14,7 @@ import {
   FiXCircle,
 } from 'react-icons/fi'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import translate from 'translate'
 import {
   createFanpage,
   deleteAllFanpages,
@@ -76,6 +78,8 @@ export default function FacebookScreen() {
   const [selectedReel, setSelectedReel] = useState<ScannedReel | null>(null)
   const [contentText, setContentText] = useState('')
   const [copyStatus, setCopyStatus] = useState<'idle' | 'ok' | 'error'>('idle')
+  const [isTranslating, setIsTranslating] = useState(false)
+  const [translateStatus, setTranslateStatus] = useState<'idle' | 'loading' | 'ok' | 'error'>('idle')
   const [isContentDirty, setIsContentDirty] = useState(false)
   const [reelLinkInput, setReelLinkInput] = useState('')
   const [showAddFanpageForm, setShowAddFanpageForm] = useState(false)
@@ -360,6 +364,30 @@ export default function FacebookScreen() {
     } catch {
       setCopyStatus('error')
       window.setTimeout(() => setCopyStatus('idle'), 1200)
+    }
+  }
+
+  const translateContent = async () => {
+    const source = contentText.trim()
+    if (!source || isTranslating) return
+    setIsTranslating(true)
+    setTranslateStatus('loading')
+    try {
+      const translated = await translate(source, { to: 'vi' })
+      if ((translated || '').trim()) {
+        const next = translated.trim()
+        setContentText(next)
+        setIsContentDirty(true)
+        setTranslateStatus(next === source ? 'error' : 'ok')
+      } else {
+        setTranslateStatus('error')
+      }
+    } catch {
+      setTranslateStatus('error')
+      setScanStatus('Dịch nội dung thất bại. Hãy thử lại.')
+    } finally {
+      setIsTranslating(false)
+      window.setTimeout(() => setTranslateStatus('idle'), 1500)
     }
   }
 
@@ -1078,7 +1106,7 @@ export default function FacebookScreen() {
                   >
                     <span className="relative inline-flex h-3.5 w-3.5 items-center justify-center">
                       <FiTrash2 className="h-3.5 w-3.5" />
-                      <FiMenu className="absolute -right-1.5 -top-1.5 h-2.5 w-2.5 rounded-full bg-rose-500/70 p-[1px] text-white" />
+                      <FiMenu className="absolute -right-1.5 -top-1.5 h-2.5 w-2.5 rounded-full bg-rose-500/70 p-px text-white" />
                     </span>
                   </button>
                   <button
@@ -1349,9 +1377,37 @@ export default function FacebookScreen() {
               onChange={(event) => {
                 setContentText(event.target.value)
                 setIsContentDirty(true)
+                if (translateStatus !== 'idle') setTranslateStatus('idle')
               }}
-              className="h-full min-h-[140px] w-full resize-none rounded-2xl bg-slate-900/90 px-3 py-2.5 pr-11 text-xs text-slate-100 outline-none placeholder:text-slate-500 focus:ring-2 focus:ring-blue-400/30"
+              className="h-full min-h-[140px] w-full resize-none rounded-2xl bg-slate-900/90 px-3 py-2.5 pr-20 text-xs text-slate-100 outline-none placeholder:text-slate-500 focus:ring-2 focus:ring-blue-400/30"
             />
+            {translateStatus !== 'idle' ? (
+              <span
+                className={`absolute bottom-3 left-3 z-10 rounded-lg border px-2 py-1 text-[10px] font-semibold shadow-lg ${
+                  translateStatus === 'ok'
+                    ? 'border-emerald-400/60 bg-neutral-900/95 text-emerald-300'
+                    : translateStatus === 'error'
+                      ? 'border-rose-400/60 bg-neutral-900/95 text-rose-300'
+                      : 'border-violet-400/60 bg-neutral-900/95 text-violet-200'
+                }`}
+              >
+                {translateStatus === 'ok'
+                  ? 'Đã dịch'
+                  : translateStatus === 'error'
+                    ? 'Dịch lỗi'
+                    : 'Đang dịch...'}
+              </span>
+            ) : null}
+            <button
+              type="button"
+              onClick={() => void translateContent()}
+              disabled={!contentText.trim() || isTranslating}
+              aria-label="Dịch tự động"
+              title={isTranslating ? 'Đang dịch...' : 'Dịch tự động sang tiếng Việt'}
+              className="absolute bottom-2 right-12 inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg bg-violet-500/90 text-white transition hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {isTranslating ? <span className="animate-pulse">…</span> : <FiGlobe className="h-4 w-4" />}
+            </button>
             <button
               type="button"
               onClick={copyContent}
