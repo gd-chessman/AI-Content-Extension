@@ -26,6 +26,12 @@ export class GgSheetController {
     return this.ggSheetService.updateMySetting(user.sub, dto);
   }
 
+  @Get('stats/me')
+  getMyStats(@Req() req: Request) {
+    const user = req.user as JwtPayload;
+    return this.ggSheetService.getMyStats(user.sub);
+  }
+
   @Post('push/preview')
   previewPush(@Req() req: Request, @Body() dto: PushGgSheetDto) {
     const user = req.user as JwtPayload;

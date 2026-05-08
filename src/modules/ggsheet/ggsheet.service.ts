@@ -4,6 +4,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { google } from 'googleapis';
 import { PushGgSheetDto, UpdateGgSheetDto } from './ggsheet.dto';
+import { GgSheetPushLog, GgSheetPushLogDocument } from './ggsheet-push-log.schema';
 import { GgSheet, GgSheetDocument } from './ggsheet.schema';
 
 @Injectable()
@@ -12,6 +13,8 @@ export class GgSheetService {
     private readonly configService: ConfigService,
     @InjectModel(GgSheet.name)
     private readonly ggSheetModel: Model<GgSheetDocument>,
+    @InjectModel(GgSheetPushLog.name)
+    private readonly ggSheetPushLogModel: Model<GgSheetPushLogDocument>,
   ) {}
 
   async getMySetting(userId: string) {
@@ -133,6 +136,7 @@ export class GgSheetService {
   async push(userId: string, dto: PushGgSheetDto) {
     const preview = await this.previewPush(userId, dto);
     const sheets = this.createSheetsClient();
+    const objectId = new Types.ObjectId(userId);
     let updateResult;
     try {
       updateResult = await sheets.spreadsheets.values.batchUpdate({
@@ -156,14 +160,73 @@ export class GgSheetService {
         },
       });
     } catch (error) {
+      await this.logPushAttempt({
+        userId: objectId,
+        sheetId: preview.sheetId,
+        sheetTitle: preview.sheetTitle,
+        targetRow: preview.targetRow,
+        targetRange: preview.targetRange,
+        status: 'failed',
+        updatedCells: 0,
+        titleLength: preview.data.title.length,
+        shortContentLength: preview.data.shortContent.length,
+        fullContentLength: preview.data.fullContent.length,
+        errorMessage: this.extractGoogleErrorMessage(error),
+      });
       this.handleGoogleSheetError(error);
     }
+
+    await this.logPushAttempt({
+      userId: objectId,
+      sheetId: preview.sheetId,
+      sheetTitle: preview.sheetTitle,
+      targetRow: preview.targetRow,
+      targetRange: preview.targetRange,
+      status: 'success',
+      updatedCells: updateResult.data.totalUpdatedCells || 0,
+      titleLength: preview.data.title.length,
+      shortContentLength: preview.data.shortContent.length,
+      fullContentLength: preview.data.fullContent.length,
+      errorMessage: '',
+    });
 
     return {
       ok: true,
       targetRow: preview.targetRow,
       updatedRange: preview.targetRange,
       updatedCells: updateResult.data.totalUpdatedCells || 0,
+    };
+  }
+
+  async getMyStats(userId: string) {
+    const objectId = new Types.ObjectId(userId);
+    const [totalPushes, successPushes, failedPushes] = await Promise.all([
+      this.ggSheetPushLogModel.countDocuments({ userId: objectId }),
+      this.ggSheetPushLogModel.countDocuments({ userId: objectId, status: 'success' }),
+      this.ggSheetPushLogModel.countDocuments({ userId: objectId, status: 'failed' }),
+    ]);
+
+    const now = new Date();
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+
+    const [todayPushes, thisMonthPushes] = await Promise.all([
+      this.ggSheetPushLogModel.countDocuments({
+        userId: objectId,
+        createdAt: { $gte: startOfToday },
+      }),
+      this.ggSheetPushLogModel.countDocuments({
+        userId: objectId,
+        createdAt: { $gte: startOfMonth },
+      }),
+    ]);
+
+    return {
+      totalPushes,
+      successPushes,
+      failedPushes,
+      todayPushes,
+      thisMonthPushes,
     };
   }
 
@@ -347,6 +410,34 @@ export class GgSheetService {
       shortContent: this.normalizeSheetColumn(setting?.shortContentColumn ?? ''),
       full: this.normalizeSheetColumn(setting?.fullContentColumn ?? ''),
     };
+  }
+
+  private async logPushAttempt(payload: {
+    userId: Types.ObjectId;
+    sheetId: string;
+    sheetTitle: string;
+    targetRow: number;
+    targetRange: string;
+    status: 'success' | 'failed';
+    updatedCells: number;
+    titleLength: number;
+    shortContentLength: number;
+    fullContentLength: number;
+    errorMessage: string;
+  }) {
+    try {
+      await this.ggSheetPushLogModel.create(payload);
+    } catch {
+      // Ignore log write errors to avoid breaking push flow.
+    }
+  }
+
+  private extractGoogleErrorMessage(error: unknown) {
+    return (
+      (error as { message?: string })?.message ||
+      (error as { response?: { data?: { error?: { message?: string } } } })?.response?.data?.error?.message ||
+      'Google Sheets request failed.'
+    );
   }
 
   private handleGoogleSheetError(error: unknown): never {
