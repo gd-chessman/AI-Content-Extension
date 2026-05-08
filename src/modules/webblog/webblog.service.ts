@@ -2,13 +2,13 @@ import { BadRequestException, Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { UpdateWebBlogDto } from './webblog.dto';
-import { WebBlogSetting, WebBlogSettingDocument } from './webblog.schema';
+import { WebBlog, WebBlogDocument } from './webblog.schema';
 
 @Injectable()
 export class WebBlogService {
   constructor(
-    @InjectModel(WebBlogSetting.name)
-    private readonly webBlogModel: Model<WebBlogSettingDocument>,
+    @InjectModel(WebBlog.name)
+    private readonly webBlogModel: Model<WebBlogDocument>,
   ) {}
 
   async getMySetting(userId: string) {

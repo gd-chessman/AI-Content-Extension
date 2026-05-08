@@ -1,10 +1,10 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Types } from 'mongoose';
 
-export type GgSheetSettingDocument = HydratedDocument<GgSheetSetting>;
+export type GgSheetDocument = HydratedDocument<GgSheet>;
 
 @Schema({ timestamps: true })
-export class GgSheetSetting {
+export class GgSheet {
   @Prop({ type: Types.ObjectId, required: true, unique: true, index: true })
   userId: Types.ObjectId;
 
@@ -21,4 +21,4 @@ export class GgSheetSetting {
   fullContentColumn: string;
 }
 
-export const GgSheetSettingSchema = SchemaFactory.createForClass(GgSheetSetting);
+export const GgSheetSchema = SchemaFactory.createForClass(GgSheet);

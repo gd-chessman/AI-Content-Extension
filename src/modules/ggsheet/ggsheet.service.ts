@@ -4,14 +4,14 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { google } from 'googleapis';
 import { PushGgSheetDto, UpdateGgSheetDto } from './ggsheet.dto';
-import { GgSheetSetting, GgSheetSettingDocument } from './ggsheet.schema';
+import { GgSheet, GgSheetDocument } from './ggsheet.schema';
 
 @Injectable()
 export class GgSheetService {
   constructor(
     private readonly configService: ConfigService,
-    @InjectModel(GgSheetSetting.name)
-    private readonly ggSheetModel: Model<GgSheetSettingDocument>,
+    @InjectModel(GgSheet.name)
+    private readonly ggSheetModel: Model<GgSheetDocument>,
   ) {}
 
   async getMySetting(userId: string) {

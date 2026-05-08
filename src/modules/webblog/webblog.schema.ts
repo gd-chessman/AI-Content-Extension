@@ -1,10 +1,10 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Types } from 'mongoose';
 
-export type WebBlogSettingDocument = HydratedDocument<WebBlogSetting>;
+export type WebBlogDocument = HydratedDocument<WebBlog>;
 
 @Schema({ timestamps: true })
-export class WebBlogSetting {
+export class WebBlog {
   @Prop({ type: Types.ObjectId, required: true, unique: true, index: true })
   userId: Types.ObjectId;
 
@@ -12,4 +12,4 @@ export class WebBlogSetting {
   adminPath: string;
 }
 
-export const WebBlogSettingSchema = SchemaFactory.createForClass(WebBlogSetting);
+export const WebBlogSchema = SchemaFactory.createForClass(WebBlog);
