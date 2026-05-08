@@ -775,6 +775,8 @@ export default function ChatgptScreen() {
             /(?:^|\n)\s*(?:🎬\s*)?idea\s*\d+\b/i,
             /(?:^|\n)\s*(?:🖼️\s*)?image\s*\d+\b/i,
             /(?:^|\n)\s*(?:🎥\s*)?video\s*\d+\b/i,
+            // Generic fallback: cut at an uppercase heading line (e.g. "NOTES FOR AI GENERATION").
+            /(?:^|\n)\s*[A-Z][A-Z0-9&/,'’()\-]*(?:\s+[A-Z0-9&/,'’()\-]+){1,}\s*$/m,
           ]
 
           let end = normalizedSource.length
