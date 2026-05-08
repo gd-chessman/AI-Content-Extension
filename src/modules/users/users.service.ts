@@ -8,8 +8,8 @@ import { InjectModel } from '@nestjs/mongoose';
 import { ConfigService } from '@nestjs/config';
 import { Model } from 'mongoose';
 import * as bcrypt from 'bcryptjs';
-import { CreateUserDto } from './users.dto';
-import { User, UserDocument } from './users.schema';
+import { CreateUserDto, UpdateMeDto } from './users.dto';
+import { User, UserDocument, UserGender } from './users.schema';
 
 @Injectable()
 export class UsersService {
@@ -33,6 +33,9 @@ export class UsersService {
       username: user.username,
       role: user.role,
       isActive: user.isActive,
+      avatarUrl: user.avatarUrl || '',
+      birthDate: user.birthDate || null,
+      gender: user.gender || UserGender.OTHER,
     };
   }
 
@@ -48,12 +51,19 @@ export class UsersService {
       throw new ConflictException('Username already exists.');
     }
 
+    const avatarUrl = this.normalizeAvatarUrl(dto.avatarUrl);
+    const birthDate = this.normalizeBirthDate(dto.birthDate);
+    const gender = this.normalizeGender(dto.gender);
+
     const passwordHash = await bcrypt.hash(password, 10);
     const created = await this.userModel.create({
       username,
       passwordHash,
       role: 'user',
       isActive: true,
+      avatarUrl,
+      birthDate,
+      gender,
     });
 
     return {
@@ -61,6 +71,51 @@ export class UsersService {
       username: created.username,
       role: created.role,
       isActive: created.isActive,
+      avatarUrl: created.avatarUrl || '',
+      birthDate: created.birthDate || null,
+      gender: created.gender || UserGender.OTHER,
+    };
+  }
+
+  async updateMe(userId: string, dto: UpdateMeDto) {
+    if (
+      dto.avatarUrl === undefined &&
+      dto.birthDate === undefined &&
+      dto.gender === undefined
+    ) {
+      throw new BadRequestException('Nothing to update.');
+    }
+
+    const patch: {
+      avatarUrl?: string;
+      birthDate?: Date | null;
+      gender?: UserGender;
+    } = {};
+    if (dto.avatarUrl !== undefined) {
+      patch.avatarUrl = this.normalizeAvatarUrl(dto.avatarUrl);
+    }
+    if (dto.birthDate !== undefined) {
+      patch.birthDate = this.normalizeBirthDate(dto.birthDate);
+    }
+    if (dto.gender !== undefined) {
+      patch.gender = this.normalizeGender(dto.gender);
+    }
+
+    const updated = await this.userModel.findByIdAndUpdate(userId, patch, {
+      new: true,
+    });
+    if (!updated) {
+      throw new NotFoundException('User not found.');
+    }
+
+    return {
+      id: String(updated._id),
+      username: updated.username,
+      role: updated.role,
+      isActive: updated.isActive,
+      avatarUrl: updated.avatarUrl || '',
+      birthDate: updated.birthDate || null,
+      gender: updated.gender || UserGender.OTHER,
     };
   }
 
@@ -82,6 +137,42 @@ export class UsersService {
       passwordHash,
       role: 'admin',
       isActive: true,
+      avatarUrl: '',
+      birthDate: null,
+      gender: UserGender.OTHER,
     });
+  }
+
+  private normalizeAvatarUrl(raw?: string) {
+    const value = (raw || '').trim();
+    if (!value) return '';
+    try {
+      const parsed = new URL(value);
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+        throw new BadRequestException('Avatar URL must use http or https.');
+      }
+      return parsed.toString();
+    } catch {
+      throw new BadRequestException('Invalid avatar URL format.');
+    }
+  }
+
+  private normalizeBirthDate(raw?: string) {
+    const value = (raw || '').trim();
+    if (!value) return null;
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) {
+      throw new BadRequestException('Invalid birth date format.');
+    }
+    return date;
+  }
+
+  private normalizeGender(raw?: string): UserGender {
+    const value = (raw || '').trim().toLowerCase();
+    if (!value) return UserGender.OTHER;
+    if (value === UserGender.MALE) return UserGender.MALE;
+    if (value === UserGender.FEMALE) return UserGender.FEMALE;
+    if (value === UserGender.OTHER) return UserGender.OTHER;
+    throw new BadRequestException('Invalid gender.');
   }
 }

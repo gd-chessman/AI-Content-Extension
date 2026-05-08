@@ -8,6 +8,12 @@ export enum UserRole {
   ADMIN = 'admin',
 }
 
+export enum UserGender {
+  MALE = 'male',
+  FEMALE = 'female',
+  OTHER = 'other',
+}
+
 @Schema({ timestamps: true })
 export class User {
   @Prop({ required: true, unique: true, trim: true, lowercase: true })
@@ -21,6 +27,15 @@ export class User {
 
   @Prop({ default: 'user' })
   role: UserRole;
+
+  @Prop({ default: '' })
+  avatarUrl: string;
+
+  @Prop({ default: null })
+  birthDate: Date | null;
+
+  @Prop({ default: 'other', enum: ['male', 'female', 'other'] })
+  gender: UserGender;
 }
 
 export const UserSchema = SchemaFactory.createForClass(User);

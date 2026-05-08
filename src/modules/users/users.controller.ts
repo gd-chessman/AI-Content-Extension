@@ -2,12 +2,13 @@ import {
   Body,
   Controller,
   Get,
+  Patch,
   Post,
   Req,
   UseGuards,
 } from '@nestjs/common';
 import { Request } from 'express';
-import { CreateUserDto } from './users.dto';
+import { CreateUserDto, UpdateMeDto } from './users.dto';
 import { UsersService } from './users.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { JwtPayload } from '../auth/jwt.strategy';
@@ -24,6 +25,13 @@ export class UsersController {
   me(@Req() req: Request) {
     const user = req.user as JwtPayload;
     return this.usersService.getMe(user.sub);
+  }
+
+  @Patch('me')
+  @UseGuards(JwtAuthGuard)
+  updateMe(@Req() req: Request, @Body() dto: UpdateMeDto) {
+    const user = req.user as JwtPayload;
+    return this.usersService.updateMe(user.sub, dto);
   }
 
   @Post()
