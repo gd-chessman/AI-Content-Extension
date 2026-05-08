@@ -1,6 +1,13 @@
 import { useEffect, useState } from 'react'
-import { FiAlertTriangle, FiCheck, FiDownload, FiInfo, FiSave, FiSend, FiSettings, FiX } from 'react-icons/fi'
-import { getMyGgSheetSetting, previewPushGgSheet, pushGgSheet, updateMyGgSheetSetting, type GgSheetPushPreview } from '@/services/GgSheetService'
+import { FiAlertTriangle, FiCheck, FiCopy, FiDownload, FiInfo, FiSave, FiSend, FiSettings, FiX } from 'react-icons/fi'
+import {
+  extractGgSheetRow,
+  getMyGgSheetSetting,
+  previewPushGgSheet,
+  pushGgSheet,
+  updateMyGgSheetSetting,
+  type GgSheetPushPreview,
+} from '@/services/GgSheetService'
 
 type BrowserTab = { id?: number; url?: string; active?: boolean }
 type ExtensionChrome = {
@@ -49,6 +56,7 @@ const CHATGPT_PATTERNS = ['*://chatgpt.com/*', '*://chat.openai.com/*']
 const extractSheetId = (url: string) => url.match(/\/spreadsheets\/d\/([^/]+)/)?.[1] || ''
 
 export default function GgSheetScreen() {
+  const [activeTab, setActiveTab] = useState<'collect' | 'extract'>('collect')
   const [sheetUrl, setSheetUrl] = useState('')
   const [showSettings, setShowSettings] = useState(false)
   const [sheetPathInput, setSheetPathInput] = useState('')
@@ -68,6 +76,8 @@ export default function GgSheetScreen() {
   const [isSaving, setIsSaving] = useState(false)
   const [previewData, setPreviewData] = useState<GgSheetPushPreview | null>(null)
   const [showPreviewModal, setShowPreviewModal] = useState(false)
+  const [extractRowInput, setExtractRowInput] = useState('')
+  const [isExtracting, setIsExtracting] = useState(false)
   const sheetId = extractSheetId(sheetUrl)
   const isSheetConfigured = Boolean(sheetId)
 
@@ -391,16 +401,53 @@ export default function GgSheetScreen() {
     await openPushPreview(data)
   }
 
-  const collectAndPush = async () => {
-    if (!sheetId) {
-      setStatus('Chưa cấu hình đường dẫn GG Sheet. Hãy vào cài đặt và lưu ggSheetPath trước.')
+  const extractFromSheetRow = async () => {
+    const row = Number(extractRowInput.trim())
+    if (!Number.isFinite(row) || row <= 0) {
+      setStatus('Hàng trích xuất không hợp lệ. Vui lòng nhập số dương.')
       return
     }
-    const collected = await collectFromChatgpt()
-    if (!collected) {
+    setIsExtracting(true)
+    setStatus(`Đang trích xuất dữ liệu từ hàng ${row}...`)
+    try {
+      const extracted = await extractGgSheetRow(row)
+      setData({
+        title: extracted?.data?.title || '',
+        shortContent: extracted?.data?.shortContent || '',
+        fullContent: extracted?.data?.fullContent || '',
+      })
+      setStatus(`Đã trích xuất dữ liệu từ hàng ${row}.`)
+    } catch (error: any) {
+      const raw = String(error?.response?.data?.message || '').toLowerCase()
+      if (raw.includes('row must be a positive number')) {
+        setStatus('Hàng trích xuất không hợp lệ. Vui lòng nhập số dương.')
+        return
+      }
+      if (raw.includes('no target columns configured for extract')) {
+        setStatus('Bạn chưa cấu hình cột để trích xuất. Hãy nhập ít nhất 1 cột trong cài đặt.')
+        return
+      }
+      setStatus(mapGgSheetErrorMessage(error, 'Không thể trích xuất dữ liệu từ GG Sheet.'))
+    } finally {
+      setIsExtracting(false)
+    }
+  }
+
+  const copyExtractedContentForFacebookReel = async () => {
+    const title = (data.title || '').trim()
+    const shortContent = (data.shortContent || '').trim()
+    const cta = 'SAY YES IF YOU WANT TO READ THE FULL STORY 👇👇👇'
+    if (!title && !shortContent) {
+      setStatus('Chưa có nội dung để sao chép cho Facebook Reel.')
       return
     }
-    await openPushPreview(collected)
+    const value = [title, shortContent, cta].filter(Boolean).join('\n\n')
+    try {
+      await navigator.clipboard.writeText(value)
+      setStatus('Đã sao chép nội dung cho Facebook Reel.')
+    } catch {
+      setStatus('Không thể sao chép nội dung cho Facebook Reel.')
+    }
   }
 
   useEffect(() => {
@@ -506,35 +553,82 @@ export default function GgSheetScreen() {
         </p>
       </div>
 
-      <div className="grid grid-cols-2 gap-2">
-        <button
-          type="button"
-          disabled={!isSheetConfigured || isSaving}
-          onClick={() => void collectFromChatgpt()}
-          className="inline-flex cursor-pointer items-center justify-center gap-1 rounded-lg bg-blue-500/20 px-2 py-1.5 text-xs text-blue-100 transition hover:bg-blue-500/30 disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          <FiDownload className="h-3.5 w-3.5" />
-          Gom dữ liệu
-        </button>
-        <button
-          type="button"
-          disabled={!isSheetConfigured || isSaving}
-          onClick={() => void pushToSheet()}
-          className="inline-flex cursor-pointer items-center justify-center gap-1 rounded-lg bg-emerald-500/20 px-2 py-1.5 text-xs text-emerald-100 transition hover:bg-emerald-500/30 disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          <FiSave className="h-3.5 w-3.5" />
-          Đẩy sheet
-        </button>
-        <button
-          type="button"
-          disabled={!isSheetConfigured || isSaving}
-          onClick={() => void collectAndPush()}
-          className="col-span-2 inline-flex cursor-pointer items-center justify-center gap-1 rounded-lg bg-violet-500/20 px-2 py-1.5 text-xs text-violet-100 transition hover:bg-violet-500/30 disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          <FiSend className="h-3.5 w-3.5" />
-          Gom + đẩy tự động
-        </button>
-      </div>
+      <section className="rounded-2xl border border-white/10 bg-white/5 p-1.5 backdrop-blur">
+        <div className="grid grid-cols-2 gap-1.5">
+          <button
+            type="button"
+            onClick={() => setActiveTab('collect')}
+            className={`cursor-pointer rounded-xl px-2 py-2 text-xs font-semibold transition ${
+              activeTab === 'collect' ? 'primary-blue-btn' : 'bg-transparent text-slate-400 hover:bg-white/10'
+            }`}
+          >
+            Gom
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('extract')}
+            className={`cursor-pointer rounded-xl px-2 py-2 text-xs font-semibold transition ${
+              activeTab === 'extract' ? 'primary-blue-btn' : 'bg-transparent text-slate-400 hover:bg-white/10'
+            }`}
+          >
+            Trích xuất
+          </button>
+        </div>
+      </section>
+
+      {activeTab === 'collect' ? (
+        <div className="grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            disabled={!isSheetConfigured || isSaving}
+            onClick={() => void collectFromChatgpt()}
+            className="inline-flex cursor-pointer items-center justify-center gap-1 rounded-lg bg-blue-500/20 px-2 py-1.5 text-xs text-blue-100 transition hover:bg-blue-500/30 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <FiDownload className="h-3.5 w-3.5" />
+            Gom dữ liệu
+          </button>
+          <button
+            type="button"
+            disabled={!isSheetConfigured || isSaving}
+            onClick={() => void pushToSheet()}
+            className="inline-flex cursor-pointer items-center justify-center gap-1 rounded-lg bg-emerald-500/20 px-2 py-1.5 text-xs text-emerald-100 transition hover:bg-emerald-500/30 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <FiSave className="h-3.5 w-3.5" />
+            Đẩy sheet
+          </button>
+        </div>
+      ) : (
+        <div className="rounded-xl border border-white/10 bg-white/5 p-2">
+          <p className="text-[10px] text-slate-400">Nhập số hàng cần trích xuất</p>
+          <div className="mt-1 flex items-center gap-2">
+            <input
+              type="number"
+              min={1}
+              value={extractRowInput}
+              onChange={(event) => setExtractRowInput(event.target.value)}
+              placeholder="Ví dụ: 12"
+              className="w-full rounded-lg bg-slate-900/80 px-2 py-1.5 text-[11px] text-slate-100 outline-none placeholder:text-slate-500"
+            />
+            <button
+              type="button"
+              disabled={!isSheetConfigured || isExtracting}
+              onClick={() => void extractFromSheetRow()}
+              className="inline-flex h-7 cursor-pointer items-center justify-center gap-1 rounded-lg bg-violet-500/20 px-2 text-[11px] text-violet-100 transition hover:bg-violet-500/30 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <FiDownload className="h-3.5 w-3.5" />
+              Lấy
+            </button>
+          </div>
+          <button
+            type="button"
+            onClick={() => void copyExtractedContentForFacebookReel()}
+            className="mt-2 inline-flex h-7 cursor-pointer items-center justify-center gap-1 rounded-lg bg-blue-500/20 px-2 text-[11px] text-blue-100 transition hover:bg-blue-500/30"
+          >
+            <FiCopy className="h-3.5 w-3.5" />
+            Sao chép nội dung cho Facebook Reel
+          </button>
+        </div>
+      )}
 
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-2 overflow-auto rounded-xl border border-white/10 bg-white/5 p-2.5">
         <div>

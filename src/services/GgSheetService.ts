@@ -22,6 +22,14 @@ export type GgSheetPushPreview = {
   data: Required<GgSheetPushPayload>
 }
 
+export type GgSheetExtractRowResult = {
+  sheetId: string
+  sheetTitle: string
+  row: number
+  columns: { title?: string; shortContent?: string; full?: string }
+  data: Required<GgSheetPushPayload>
+}
+
 const GGSHEET_CACHE_KEY = 'ggSheetSettingCache'
 
 const cacheGgSheetSetting = (setting: GgSheetSetting) => {
@@ -65,4 +73,9 @@ export const previewPushGgSheet = async (payload: GgSheetPushPayload) => {
 export const pushGgSheet = async (payload: GgSheetPushPayload) => {
   const response = await axiosClient.post('/ggsheet/push', payload)
   return response.data as { ok: boolean; targetRow: number; updatedRange: string; updatedCells: number }
+}
+
+export const extractGgSheetRow = async (row: number) => {
+  const response = await axiosClient.get(`/ggsheet/extract/${row}`)
+  return response.data as GgSheetExtractRowResult
 }
