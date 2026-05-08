@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react'
+import { getMe } from '@/services/AuthService'
 
 type ChromeWindow = { id?: number }
 type RuntimeContext = { contextType?: string; windowId?: number }
@@ -41,6 +42,7 @@ export default function ExtensionLayout({
   showProfileButton = true,
 }: ExtensionLayoutProps) {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false)
+  const [profileAvatarUrl, setProfileAvatarUrl] = useState('')
 
   useEffect(() => {
     const extensionChrome = (globalThis as { chrome?: ExtensionChrome }).chrome
@@ -65,6 +67,24 @@ export default function ExtensionLayout({
       })
     })
   }, [])
+
+  useEffect(() => {
+    if (!showProfileButton) {
+      setProfileAvatarUrl('')
+      return
+    }
+
+    const loadProfileAvatar = async () => {
+      try {
+        const me = await getMe()
+        setProfileAvatarUrl((me?.avatarUrl || '').trim())
+      } catch {
+        setProfileAvatarUrl('')
+      }
+    }
+
+    void loadProfileAvatar()
+  }, [showProfileButton, activeTabId])
 
   const openSidebar = () => {
     const extensionChrome = (globalThis as { chrome?: ExtensionChrome }).chrome
@@ -101,17 +121,21 @@ export default function ExtensionLayout({
           onClick={onProfileClick}
           className="absolute left-4 top-4 z-10 inline-flex h-9 w-9 cursor-pointer items-center justify-center rounded-full border border-[var(--app-border)] bg-white/10 text-slate-300 backdrop-blur transition hover:bg-white/20 active:border-blue-400 active:shadow-[0_0_0_2px_rgba(59,130,246,0.35)]"
         >
-          <svg
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.8"
-            className="h-4 w-4"
-            aria-hidden="true"
-          >
-            <circle cx="12" cy="8" r="3.2" />
-            <path d="M5.5 19c1.8-3 4-4.3 6.5-4.3S16.7 16 18.5 19" />
-          </svg>
+          {profileAvatarUrl ? (
+            <img src={profileAvatarUrl} alt="Ảnh hồ sơ" className="h-8 w-8 rounded-full object-cover" />
+          ) : (
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              className="h-4 w-4"
+              aria-hidden="true"
+            >
+              <circle cx="12" cy="8" r="3.2" />
+              <path d="M5.5 19c1.8-3 4-4.3 6.5-4.3S16.7 16 18.5 19" />
+            </svg>
+          )}
         </button>
       ) : null}
 

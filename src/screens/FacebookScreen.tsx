@@ -8,6 +8,7 @@ import {
   FiInfo,
   FiMenu,
   FiPlus,
+  FiRotateCcw,
   FiSearch,
   FiTrash2,
   FiX,
@@ -77,6 +78,8 @@ export default function FacebookScreen() {
   const [maxViewInput, setMaxViewInput] = useState('')
   const [selectedReel, setSelectedReel] = useState<ScannedReel | null>(null)
   const [contentText, setContentText] = useState('')
+  const [originalContentText, setOriginalContentText] = useState('')
+  const [isContentTranslated, setIsContentTranslated] = useState(false)
   const [copyStatus, setCopyStatus] = useState<'idle' | 'ok' | 'error'>('idle')
   const [isTranslating, setIsTranslating] = useState(false)
   const [translateStatus, setTranslateStatus] = useState<'idle' | 'loading' | 'ok' | 'error'>('idle')
@@ -135,7 +138,10 @@ export default function FacebookScreen() {
 
   useEffect(() => {
     if (activeView === 'content' && selectedReel && !contentText.trim()) {
-      setContentText(buildContentText(selectedReel))
+      const next = buildContentText(selectedReel)
+      setContentText(next)
+      setOriginalContentText(next)
+      setIsContentTranslated(false)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeView, selectedReel])
@@ -307,7 +313,10 @@ export default function FacebookScreen() {
   const handleSelectReel = (reel: ScannedReel) => {
     setSelectedReel(reel)
     setActiveView('content')
-    setContentText(buildContentText(reel))
+    const next = buildContentText(reel)
+    setContentText(next)
+    setOriginalContentText(next)
+    setIsContentTranslated(false)
     setIsContentDirty(false)
     setCopyStatus('idle')
     openReelLinkInFacebookTab(reel.url)
@@ -368,8 +377,26 @@ export default function FacebookScreen() {
   }
 
   const translateContent = async () => {
+    if (isContentTranslated) {
+      setContentText(originalContentText || buildContentText(selectedReel || {
+        id: '',
+        title: '',
+        description: '',
+        views: '',
+        url: '',
+        viewCount: 0,
+        imageUrl: '',
+      }))
+      setIsContentTranslated(false)
+      setTranslateStatus('ok')
+      window.setTimeout(() => setTranslateStatus('idle'), 1200)
+      return
+    }
     const source = contentText.trim()
     if (!source || isTranslating) return
+    if (!originalContentText.trim()) {
+      setOriginalContentText(source)
+    }
     setIsTranslating(true)
     setTranslateStatus('loading')
     try {
@@ -378,6 +405,7 @@ export default function FacebookScreen() {
         const next = translated.trim()
         setContentText(next)
         setIsContentDirty(true)
+        setIsContentTranslated(true)
         setTranslateStatus(next === source ? 'error' : 'ok')
       } else {
         setTranslateStatus('error')
@@ -552,7 +580,10 @@ export default function FacebookScreen() {
         }
         setSelectedReel(next)
         if (!isContentDirtyRef.current) {
-          setContentText(buildContentText(next))
+          const content = buildContentText(next)
+          setContentText(content)
+          setOriginalContentText(content)
+          setIsContentTranslated(false)
         }
       } catch {
         // ignore
@@ -1185,14 +1216,14 @@ export default function FacebookScreen() {
               <div className="grid grid-cols-2 gap-2">
                 <input
                   type="text"
-                  placeholder="Tối thiểu: 100,000"
+                  placeholder="Tối thiểu:"
                   value={minViewInput}
                   onChange={(event) => setMinViewInput(formatViewInput(event.target.value))}
                   className="w-full rounded-2xl bg-slate-900/90 px-3 py-2.5 text-xs text-slate-100 outline-none placeholder:text-slate-500 focus:ring-2 focus:ring-blue-400/30"
                 />
                 <input
                   type="text"
-                  placeholder="Tối đa: 5,000,000"
+                  placeholder="Tối đa:"
                   value={maxViewInput}
                   onChange={(event) => setMaxViewInput(formatViewInput(event.target.value))}
                   className="w-full rounded-2xl bg-slate-900/90 px-3 py-2.5 text-xs text-slate-100 outline-none placeholder:text-slate-500 focus:ring-2 focus:ring-blue-400/30"
@@ -1377,6 +1408,7 @@ export default function FacebookScreen() {
               onChange={(event) => {
                 setContentText(event.target.value)
                 setIsContentDirty(true)
+                setIsContentTranslated(false)
                 if (translateStatus !== 'idle') setTranslateStatus('idle')
               }}
               className="h-full min-h-[140px] w-full resize-none rounded-2xl bg-slate-900/90 px-3 py-2.5 pr-20 text-xs text-slate-100 outline-none placeholder:text-slate-500 focus:ring-2 focus:ring-blue-400/30"
@@ -1403,10 +1435,27 @@ export default function FacebookScreen() {
               onClick={() => void translateContent()}
               disabled={!contentText.trim() || isTranslating}
               aria-label="Dịch tự động"
-              title={isTranslating ? 'Đang dịch...' : 'Dịch tự động sang tiếng Việt'}
-              className="absolute bottom-2 right-12 inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg bg-violet-500/90 text-white transition hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-40"
+              title={
+                isTranslating
+                  ? 'Đang dịch...'
+                  : isContentTranslated
+                    ? 'Quay về nội dung gốc'
+                    : 'Dịch tự động sang tiếng Việt'
+              }
+              className="absolute bottom-2 right-12 inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg bg-violet-500/20 text-violet-100 transition hover:bg-violet-500/30 disabled:cursor-not-allowed disabled:opacity-40"
             >
-              {isTranslating ? <span className="animate-pulse">…</span> : <FiGlobe className="h-4 w-4" />}
+              {isTranslating ? (
+                <span className="animate-pulse">…</span>
+              ) : isContentTranslated ? (
+                <FiRotateCcw className="h-4 w-4" />
+              ) : (
+                <FiGlobe className="h-4 w-4" />
+              )}
+              {isContentTranslated ? (
+                <span className="absolute -right-1 -top-1 rounded-full bg-violet-500 px-1 text-[7px] leading-none text-white">
+                  VI
+                </span>
+              ) : null}
             </button>
             <button
               type="button"

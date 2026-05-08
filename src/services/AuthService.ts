@@ -25,4 +25,14 @@ export const getMe = async () => {
   const response = await axiosClient.get('/users/me');
   return response.data;
 }
+
+export const updateMe = async (payload: {
+  name?: string
+  avatarUrl?: string
+  birthDate?: string
+  gender?: 'male' | 'female' | 'other'
+}) => {
+  const response = await axiosClient.patch('/users/me', payload)
+  return response.data
+}
   

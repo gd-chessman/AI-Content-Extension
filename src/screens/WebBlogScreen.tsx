@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
-import { FiAlertTriangle, FiCheck, FiCopy, FiInfo, FiSave, FiSettings } from 'react-icons/fi'
+import { FiAlertTriangle, FiCheck, FiCopy, FiGlobe, FiInfo, FiRotateCcw, FiSave, FiSettings } from 'react-icons/fi'
 import { getMyWebBlogSetting, updateMyWebBlogSetting } from '@/services/WebBlogService'
+import translate from 'translate'
 
 type WebBlogPayload = {
   title?: string
@@ -32,13 +33,57 @@ const htmlToPlainText = (html: string) => {
   return (div.textContent || div.innerText || '').trim()
 }
 
+const translateInChunks = async (source: string) => {
+  const value = (source || '').trim()
+  if (!value) return ''
+
+  // Keep request size small to avoid translator payload limits.
+  const MAX_CHUNK = 1800
+  const blocks = value
+    .split(/\n\s*\n/)
+    .map((b) => b.trim())
+    .filter(Boolean)
+
+  const chunks: string[] = []
+  let current = ''
+  for (const block of blocks) {
+    if (!current) {
+      current = block
+      continue
+    }
+    const next = `${current}\n\n${block}`
+    if (next.length <= MAX_CHUNK) {
+      current = next
+    } else {
+      chunks.push(current)
+      current = block
+    }
+  }
+  if (current) chunks.push(current)
+  if (chunks.length === 0) chunks.push(value.slice(0, MAX_CHUNK))
+
+  const out: string[] = []
+  for (const chunk of chunks) {
+    // eslint-disable-next-line no-await-in-loop
+    const translated = await translate(chunk, { to: 'vi' })
+    out.push((translated || '').trim())
+  }
+  return out.join('\n\n').trim()
+}
+
 export default function WebBlogScreen() {
   const [title, setTitle] = useState('')
   const [longContent, setLongContent] = useState('')
+  const [originalTitle, setOriginalTitle] = useState('')
+  const [originalLongContent, setOriginalLongContent] = useState('')
   const [image1, setImage1] = useState('')
   const [image2, setImage2] = useState('')
   const [status, setStatus] = useState('Đợi dữ liệu từ ChatGPT để điền WebBlog.')
   const [copiedField, setCopiedField] = useState<'title' | 'content' | null>(null)
+  const [isTranslatingTitle, setIsTranslatingTitle] = useState(false)
+  const [isTranslatingContent, setIsTranslatingContent] = useState(false)
+  const [isTitleTranslated, setIsTitleTranslated] = useState(false)
+  const [isContentTranslated, setIsContentTranslated] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
   const [webPathInput, setWebPathInput] = useState('')
   const contentEditorRef = useRef<HTMLDivElement | null>(null)
@@ -59,8 +104,14 @@ export default function WebBlogScreen() {
     const onFill = (event: Event) => {
       const custom = event as CustomEvent<WebBlogPayload>
       const payload = custom.detail || {}
-      setTitle((payload.title || '').trim())
-      setLongContent((payload.longContent || '').trim())
+      const nextTitle = (payload.title || '').trim()
+      const nextLongContent = (payload.longContent || '').trim()
+      setTitle(nextTitle)
+      setLongContent(nextLongContent)
+      setOriginalTitle(nextTitle)
+      setOriginalLongContent(nextLongContent)
+      setIsTitleTranslated(false)
+      setIsContentTranslated(false)
       setImage1(payload.image1 || '')
       setImage2(payload.image2 || '')
       setStatus('Đã nhận dữ liệu WebBlog từ ChatGPT.')
@@ -119,6 +170,52 @@ export default function WebBlogScreen() {
       setShowSettings(false)
     } catch {
       setStatus('Không thể lưu cấu hình đường dẫn WebBlog.')
+    }
+  }
+
+  const translateField = async (field: 'title' | 'content') => {
+    if (field === 'title' && isTitleTranslated) {
+      setTitle(originalTitle)
+      setIsTitleTranslated(false)
+      setStatus('Đã quay về tiêu đề gốc.')
+      return
+    }
+    if (field === 'content' && isContentTranslated) {
+      setLongContent(originalLongContent)
+      setIsContentTranslated(false)
+      setStatus('Đã quay về nội dung gốc.')
+      return
+    }
+
+    const source = field === 'title' ? title.trim() : longContent.trim()
+    if (!source) return
+    if (field === 'title') setIsTranslatingTitle(true)
+    else setIsTranslatingContent(true)
+    try {
+      let next = ''
+      if (field === 'title') {
+        next = await translateInChunks(source)
+      } else {
+        // Long content may include HTML/images; translate text only to avoid payload overflow.
+        const editorEl = contentEditorRef.current
+        const htmlSource = editorEl?.innerHTML?.trim() || toEditorHtml(source)
+        const plainText = htmlToPlainText(htmlSource)
+        next = await translateInChunks(plainText)
+      }
+      if (!next) {
+        setStatus('Không nhận được bản dịch.')
+        return
+      }
+      if (field === 'title') setTitle(next)
+      else setLongContent(next)
+      if (field === 'title') setIsTitleTranslated(true)
+      else setIsContentTranslated(true)
+      setStatus(field === 'title' ? 'Đã dịch tiêu đề thường.' : 'Đã dịch nội dung dài.')
+    } catch {
+      setStatus(field === 'title' ? 'Dịch tiêu đề thất bại.' : 'Dịch nội dung dài thất bại.')
+    } finally {
+      if (field === 'title') setIsTranslatingTitle(false)
+      else setIsTranslatingContent(false)
     }
   }
 
@@ -182,16 +279,45 @@ export default function WebBlogScreen() {
         <div className="rounded-2xl border border-white/10 bg-black/25 p-2">
           <div className="flex items-center justify-between">
             <p className="text-[10px] text-slate-500">Tiêu đề thường</p>
-            <button
-              type="button"
-              onClick={() => void copyText('title')}
-              disabled={!title.trim()}
-              title="Sao chép tiêu đề"
-              aria-label="Sao chép tiêu đề"
-              className="inline-flex cursor-pointer items-center rounded-md bg-blue-500/20 px-2 py-1 text-[10px] font-semibold text-blue-100 transition hover:bg-blue-500/30 disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              {copiedField === 'title' ? <FiCheck className="h-3.5 w-3.5" /> : <FiCopy className="h-3.5 w-3.5" />}
-            </button>
+            <div className="inline-flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => void translateField('title')}
+                disabled={!title.trim() || isTranslatingTitle}
+                title={
+                  isTranslatingTitle
+                    ? 'Đang xử lý...'
+                    : isTitleTranslated
+                      ? 'Quay về tiêu đề gốc'
+                      : 'Dịch tiêu đề'
+                }
+                aria-label="Dịch tiêu đề"
+                className="relative inline-flex cursor-pointer items-center rounded-md bg-violet-500/20 px-2 py-1 text-[10px] font-semibold text-violet-100 transition hover:bg-violet-500/30 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {isTranslatingTitle ? (
+                  <span className="animate-pulse">…</span>
+                ) : isTitleTranslated ? (
+                  <FiRotateCcw className="h-3.5 w-3.5" />
+                ) : (
+                  <FiGlobe className="h-3.5 w-3.5" />
+                )}
+                {isTitleTranslated ? (
+                  <span className="absolute -right-1 -top-1 rounded-full bg-violet-500 px-1 text-[7px] leading-none text-white">
+                    VI
+                  </span>
+                ) : null}
+              </button>
+              <button
+                type="button"
+                onClick={() => void copyText('title')}
+                disabled={!title.trim()}
+                title="Sao chép tiêu đề"
+                aria-label="Sao chép tiêu đề"
+                className="inline-flex cursor-pointer items-center rounded-md bg-blue-500/20 px-2 py-1 text-[10px] font-semibold text-blue-100 transition hover:bg-blue-500/30 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {copiedField === 'title' ? <FiCheck className="h-3.5 w-3.5" /> : <FiCopy className="h-3.5 w-3.5" />}
+              </button>
+            </div>
           </div>
           <textarea
             readOnly
@@ -204,16 +330,45 @@ export default function WebBlogScreen() {
           <div className="rounded-2xl border border-white/10 bg-black/25 p-2 min-h-0">
             <div className="flex items-center justify-between gap-2">
               <p className="text-[10px] text-slate-500">Nội dung dài (đã chèn ảnh 1/2 ngẫu nhiên)</p>
-              <button
-                type="button"
-                onClick={() => void copyText('content')}
-                disabled={!longContent.trim()}
-                title="Sao chép nội dung"
-                aria-label="Sao chép nội dung"
-                className="inline-flex cursor-pointer items-center rounded-md bg-blue-500/20 px-2 py-1 text-[10px] font-semibold text-blue-100 transition hover:bg-blue-500/30 disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                {copiedField === 'content' ? <FiCheck className="h-3.5 w-3.5" /> : <FiCopy className="h-3.5 w-3.5" />}
-              </button>
+              <div className="inline-flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => void translateField('content')}
+                  disabled={!longContent.trim() || isTranslatingContent}
+                  title={
+                    isTranslatingContent
+                      ? 'Đang xử lý...'
+                      : isContentTranslated
+                        ? 'Quay về nội dung gốc'
+                        : 'Dịch nội dung dài'
+                  }
+                  aria-label="Dịch nội dung dài"
+                  className="relative inline-flex cursor-pointer items-center rounded-md bg-violet-500/20 px-2 py-1 text-[10px] font-semibold text-violet-100 transition hover:bg-violet-500/30 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {isTranslatingContent ? (
+                    <span className="animate-pulse">…</span>
+                  ) : isContentTranslated ? (
+                    <FiRotateCcw className="h-3.5 w-3.5" />
+                  ) : (
+                    <FiGlobe className="h-3.5 w-3.5" />
+                  )}
+                  {isContentTranslated ? (
+                    <span className="absolute -right-1 -top-1 rounded-full bg-violet-500 px-1 text-[7px] leading-none text-white">
+                      VI
+                    </span>
+                  ) : null}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void copyText('content')}
+                  disabled={!longContent.trim()}
+                  title="Sao chép nội dung"
+                  aria-label="Sao chép nội dung"
+                  className="inline-flex cursor-pointer items-center rounded-md bg-blue-500/20 px-2 py-1 text-[10px] font-semibold text-blue-100 transition hover:bg-blue-500/30 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {copiedField === 'content' ? <FiCheck className="h-3.5 w-3.5" /> : <FiCopy className="h-3.5 w-3.5" />}
+                </button>
+              </div>
             </div>
             <div
               ref={contentEditorRef}
