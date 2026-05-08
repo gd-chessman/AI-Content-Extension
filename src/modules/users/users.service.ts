@@ -31,6 +31,7 @@ export class UsersService {
     return {
       id: String(user._id),
       username: user.username,
+      name: user.name || '',
       role: user.role,
       isActive: user.isActive,
       avatarUrl: user.avatarUrl || '',
@@ -54,6 +55,7 @@ export class UsersService {
     const avatarUrl = this.normalizeAvatarUrl(dto.avatarUrl);
     const birthDate = this.normalizeBirthDate(dto.birthDate);
     const gender = this.normalizeGender(dto.gender);
+    const name = this.normalizeName(dto.name);
 
     const passwordHash = await bcrypt.hash(password, 10);
     const created = await this.userModel.create({
@@ -61,6 +63,7 @@ export class UsersService {
       passwordHash,
       role: 'user',
       isActive: true,
+      name,
       avatarUrl,
       birthDate,
       gender,
@@ -69,6 +72,7 @@ export class UsersService {
     return {
       id: String(created._id),
       username: created.username,
+      name: created.name || '',
       role: created.role,
       isActive: created.isActive,
       avatarUrl: created.avatarUrl || '',
@@ -81,16 +85,21 @@ export class UsersService {
     if (
       dto.avatarUrl === undefined &&
       dto.birthDate === undefined &&
-      dto.gender === undefined
+      dto.gender === undefined &&
+      dto.name === undefined
     ) {
       throw new BadRequestException('Nothing to update.');
     }
 
     const patch: {
+      name?: string;
       avatarUrl?: string;
       birthDate?: Date | null;
       gender?: UserGender;
     } = {};
+    if (dto.name !== undefined) {
+      patch.name = this.normalizeName(dto.name);
+    }
     if (dto.avatarUrl !== undefined) {
       patch.avatarUrl = this.normalizeAvatarUrl(dto.avatarUrl);
     }
@@ -111,6 +120,7 @@ export class UsersService {
     return {
       id: String(updated._id),
       username: updated.username,
+      name: updated.name || '',
       role: updated.role,
       isActive: updated.isActive,
       avatarUrl: updated.avatarUrl || '',
@@ -137,6 +147,7 @@ export class UsersService {
       passwordHash,
       role: 'admin',
       isActive: true,
+      name: 'Admin',
       avatarUrl: '',
       birthDate: null,
       gender: UserGender.OTHER,
@@ -155,6 +166,12 @@ export class UsersService {
     } catch {
       throw new BadRequestException('Invalid avatar URL format.');
     }
+  }
+
+  private normalizeName(raw?: string) {
+    const value = (raw || '').trim();
+    if (!value) return '';
+    return value.slice(0, 80);
   }
 
   private normalizeBirthDate(raw?: string) {

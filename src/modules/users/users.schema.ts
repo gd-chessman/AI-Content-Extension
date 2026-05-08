@@ -19,6 +19,9 @@ export class User {
   @Prop({ required: true, unique: true, trim: true, lowercase: true })
   username: string;
 
+  @Prop({ default: '', trim: true })
+  name: string;
+
   @Prop({ required: true })
   passwordHash: string;
 
