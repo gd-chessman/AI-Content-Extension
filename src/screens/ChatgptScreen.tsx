@@ -798,6 +798,37 @@ export default function ChatgptScreen() {
             .filter(Boolean)
             .join('\n')
         }
+        const trimToSceneScript = (raw: string) => {
+          const source = (raw || '').replace(/\r/g, '').trim()
+          if (!source) return ''
+          const lines = source.split('\n')
+          const out: string[] = []
+          let started = false
+          const isSceneLine = (line: string) => /^(?:🎬\s*)?scene\b/i.test(line)
+          const isHardStop = (line: string) =>
+            /^(?:🎯|🔥|⚡|✅|🔁)/.test(line) ||
+            /^(?:notes?|production\s+notes?|cinematic\s+rules?)\b/i.test(line) ||
+            /^if\s+you\s+want\b/i.test(line) ||
+            /^i\s+can\s+generate\b/i.test(line) ||
+            /^or\s+convert\b/i.test(line) ||
+            /^(?:idea|image|video)\s*\d+\b/i.test(line) ||
+            /^(?:facebook|chatgpt)\s*$/i.test(line) ||
+            /^[A-Z][A-Z0-9&/,'’()\-]*(?:\s+[A-Z0-9&/,'’()\-]+){1,}\s*$/.test(line)
+
+          for (const lineRaw of lines) {
+            const line = lineRaw.trim()
+            if (!line) continue
+            if (!started) {
+              if (!isSceneLine(line)) continue
+              started = true
+              out.push(line)
+              continue
+            }
+            if (isHardStop(line)) break
+            out.push(line)
+          }
+          return out.join('\n').trim()
+        }
 
         const assistantNodes = Array.from(
           document.querySelectorAll<HTMLElement>('[data-message-author-role="assistant"], article'),
@@ -895,9 +926,9 @@ export default function ChatgptScreen() {
         )
 
         if (videoPart === 1) {
-          return compactLines(trimVideoTail(pickIdeaVideo(idea1Block, 1) || genericVideo))
+          return compactLines(trimToSceneScript(trimVideoTail(pickIdeaVideo(idea1Block, 1) || genericVideo)))
         }
-        return compactLines(trimVideoTail(pickIdeaVideo(idea2Block, 2) || genericVideo))
+        return compactLines(trimToSceneScript(trimVideoTail(pickIdeaVideo(idea2Block, 2) || genericVideo)))
       }) as (...args: unknown[]) => unknown,
       args: [part],
     })
