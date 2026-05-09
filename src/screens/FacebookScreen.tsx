@@ -4,11 +4,13 @@ import {
   FiCheck,
   FiCheckCircle,
   FiEdit2,
+  FiFilm,
   FiGlobe,
   FiInfo,
   FiMenu,
   FiPlus,
   FiRotateCcw,
+  FiSave,
   FiSearch,
   FiTrash2,
   FiX,
@@ -23,6 +25,7 @@ import {
   getFanpages,
   updateFanpage,
 } from '@/services/FanpageService'
+import { checkStoryReelSaved, createStoryFromReel } from '@/services/StoryService'
 
 type ScannedReel = {
   id: string
@@ -43,7 +46,7 @@ type FanpageItem = {
 type ExtensionChrome = {
   tabs?: {
     query?: (
-      queryInfo: { url?: string[]; active?: boolean; currentWindow?: boolean },
+      queryInfo: { url?: string | string[]; active?: boolean; currentWindow?: boolean },
       callback: (tabs: Array<{ id?: number; url?: string; active?: boolean; title?: string }>) => void,
     ) => void
     create?: (createProperties: { url: string; active?: boolean }) => void
@@ -61,6 +64,31 @@ type ExtensionChrome = {
 const MIN_VIEW_COUNT = 500_000
 const MAX_SCAN_RESULTS = 5
 const FACEBOOK_REEL_MEMORY_KEY = 'facebookReelCopiedContent'
+
+/** URL tab đang mở là trang reel (facebook.com/reel/, reel_id=, fb.watch). */
+function isFacebookReelPageUrl(urlString: string): boolean {
+  try {
+    const normalizedLink = new URL(urlString.trim()).toString()
+    const u = new URL(normalizedLink)
+    const host = u.hostname.replace(/^www\./i, '').toLowerCase()
+    const fullLower = normalizedLink.toLowerCase()
+    const isFb =
+      host === 'facebook.com' ||
+      host.endsWith('.facebook.com') ||
+      host === 'm.facebook.com' ||
+      host === 'fb.watch' ||
+      host.endsWith('.fb.watch')
+    const hasReelSegment =
+      fullLower.includes('facebook.com/reel/') ||
+      fullLower.includes('m.facebook.com/reel/') ||
+      /[?&]reel_id=/i.test(fullLower) ||
+      host === 'fb.watch' ||
+      fullLower.includes('fb.watch/')
+    return isFb && hasReelSegment
+  } catch {
+    return false
+  }
+}
 const formatViewInput = (value: string) => {
   const digits = value.replace(/[^\d]/g, '')
   if (!digits) return ''
@@ -83,7 +111,9 @@ export default function FacebookScreen() {
   const [copyStatus, setCopyStatus] = useState<'idle' | 'ok' | 'error'>('idle')
   const [isTranslating, setIsTranslating] = useState(false)
   const [translateStatus, setTranslateStatus] = useState<'idle' | 'loading' | 'ok' | 'error'>('idle')
+  const [storySaveStatus, setStorySaveStatus] = useState<'idle' | 'saving' | 'ok' | 'error'>('idle')
   const [isContentDirty, setIsContentDirty] = useState(false)
+  const [contentReelLoadStatus, setContentReelLoadStatus] = useState('')
   const [reelLinkInput, setReelLinkInput] = useState('')
   const [showAddFanpageForm, setShowAddFanpageForm] = useState(false)
   const [showEditFanpagesModal, setShowEditFanpagesModal] = useState(false)
@@ -95,6 +125,13 @@ export default function FacebookScreen() {
     queryKey: ['fanpages'],
     queryFn: getFanpages,
   })
+  const { data: reelSavedCheck } = useQuery({
+    queryKey: ['stories', 'check-reel', selectedReel?.url],
+    queryFn: () => checkStoryReelSaved(selectedReel!.url),
+    enabled: Boolean(selectedReel?.url?.trim()),
+    staleTime: 20_000,
+  })
+  const reelAlreadySaved = reelSavedCheck?.saved === true
   const createFanpageMutation = useMutation({
     mutationFn: createFanpage,
   })
@@ -146,7 +183,26 @@ export default function FacebookScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeView, selectedReel])
 
+  useEffect(() => {
+    setStorySaveStatus('idle')
+  }, [selectedReel?.id])
+
+  useEffect(() => {
+    if (selectedReel) setContentReelLoadStatus('')
+  }, [selectedReel])
+
   const normalizeUrl = (value: string) => (value.endsWith('/') ? value.slice(0, -1) : value)
+
+  /** Cùng reel dù Facebook thêm/khác query trên thanh địa chỉ */
+  const isSameReelTabUrl = (tabUrl: string | undefined, targetUrl: string) => {
+    if (!tabUrl) return false
+    if (normalizeUrl(tabUrl) === normalizeUrl(targetUrl)) return true
+    const reelIdFrom = (u: string) =>
+      u.match(/\/reel\/(\d+)/)?.[1] || u.match(/[?&]reel_id=(\d+)/)?.[1] || ''
+    const a = reelIdFrom(tabUrl)
+    const b = reelIdFrom(targetUrl)
+    return Boolean(a && b && a === b)
+  }
 
   const syncOpenedFacebookTabs = useCallback(() => {
     const extensionChrome = (globalThis as { chrome?: ExtensionChrome }).chrome
@@ -288,14 +344,11 @@ export default function FacebookScreen() {
       return
     }
 
-    const normalizedTarget = normalizeUrl(url)
-
     extensionChrome.tabs.query({ url: ['*://*.facebook.com/*'] }, (tabs) => {
-      const normalizeTabUrl = (value?: string) => (value ? normalizeUrl(value) : '')
-
-      const existing = tabs.find((t) => normalizeTabUrl(t.url) === normalizedTarget && t.id)
+      const existing = tabs.find((t) => t.id && isSameReelTabUrl(t.url, url))
       if (existing?.id) {
-        extensionChrome.tabs?.update?.(existing.id, { url, active: true })
+        // Chỉ focus tab — không set lại url để tránh Chrome reload trang Facebook
+        extensionChrome.tabs?.update?.(existing.id, { active: true })
         return
       }
 
@@ -325,29 +378,36 @@ export default function FacebookScreen() {
     }, 1300)
   }
 
-  const handleSelectReelByLink = () => {
-    const raw = reelLinkInput.trim()
-    if (!raw) return
+  type ApplyReelUrlResult =
+    | { ok: true; fromList: boolean }
+    | { ok: false; reason: 'empty' | 'bad-url' | 'not-reel' }
 
-    let normalizedLink = raw
+  /** Chọn reel chỉ từ URL (facebook.com/reel/…, reel_id=, fb.watch). Dùng chung tab Reels & Chi tiết. */
+  const applyReelFromUrlString = (raw: string): ApplyReelUrlResult => {
+    const trimmed = raw.trim()
+    if (!trimmed) return { ok: false, reason: 'empty' }
+    let normalizedLink: string
     try {
-      normalizedLink = new URL(raw).toString()
+      normalizedLink = new URL(trimmed).toString()
     } catch {
-      setScanStatus('Link chưa hợp lệ. Hãy dán đúng URL reel Facebook.')
-      return
+      return { ok: false, reason: 'bad-url' }
+    }
+    if (!isFacebookReelPageUrl(normalizedLink)) {
+      return { ok: false, reason: 'not-reel' }
     }
 
     const normalizedTarget = normalizeUrl(normalizedLink)
-    const reelId = normalizedTarget.match(/\/reel\/(\d+)/)?.[1] || normalizedTarget.match(/[?&]reel_id=(\d+)/)?.[1] || ''
-
+    const reelId =
+      normalizedTarget.match(/\/reel\/(\d+)/)?.[1] ||
+      normalizedTarget.match(/[?&]reel_id=(\d+)/)?.[1] ||
+      ''
     const matchByUrl = scannedReels.find((item) => normalizeUrl(item.url) === normalizedTarget)
     const matchById = !matchByUrl && reelId ? scannedReels.find((item) => item.url.includes(reelId)) : null
     const matched = matchByUrl || matchById
 
     if (matched) {
       handleSelectReel(matched)
-      setScanStatus('Đã chọn reel theo link từ danh sách đã quét.')
-      return
+      return { ok: true, fromList: true }
     }
 
     const fallbackReel: ScannedReel = {
@@ -361,7 +421,86 @@ export default function FacebookScreen() {
     }
 
     handleSelectReel(fallbackReel)
-    setScanStatus('Đã chọn reel theo link (không nằm trong danh sách đã quét).')
+    return { ok: true, fromList: false }
+  }
+
+  const handleSelectReelByLink = () => {
+    const res = applyReelFromUrlString(reelLinkInput)
+    if (!res.ok) {
+      if (res.reason === 'empty') return
+      if (res.reason === 'bad-url') {
+        setScanStatus('Link chưa hợp lệ. Hãy dán đúng URL reel Facebook.')
+      } else {
+        setScanStatus('Cần link chứa facebook.com/reel/… (hoặc fb.watch / reel_id=).')
+      }
+      return
+    }
+    setScanStatus(
+      res.fromList
+        ? 'Đã chọn reel theo link từ danh sách đã quét.'
+        : 'Đã chọn reel theo link (không nằm trong danh sách đã quét).',
+    )
+  }
+
+  const handleLoadReelFromOpenFacebookTab = () => {
+    const extensionChrome = (globalThis as { chrome?: ExtensionChrome }).chrome
+    const tabsQuery = extensionChrome?.tabs?.query
+    if (!tabsQuery) {
+      setContentReelLoadStatus('Chỉ hoạt động trong extension Chrome (cần quyền tabs).')
+      return
+    }
+
+    setContentReelLoadStatus('')
+
+    const finishWithUrl = (url: string | null) => {
+      if (!url) {
+        setContentReelLoadStatus(
+          'Không thấy tab nào đang mở reel Facebook. Hãy mở reel trong một tab (facebook.com/reel/…).',
+        )
+        return
+      }
+      const res = applyReelFromUrlString(url)
+      if (!res.ok) {
+        if (res.reason === 'bad-url') {
+          setContentReelLoadStatus('URL tab không hợp lệ.')
+        } else {
+          setContentReelLoadStatus('Tab đang mở không phải trang reel.')
+        }
+      }
+    }
+
+    const reelTabsIn = (tabs: Array<{ id?: number; url?: string; active?: boolean }>) =>
+      tabs.filter((t) => t.url && isFacebookReelPageUrl(t.url))
+
+    tabsQuery({ currentWindow: true }, (windowTabs) => {
+      const list = windowTabs || []
+      const activeTab = list.find((t) => t.active)
+      if (activeTab?.url && isFacebookReelPageUrl(activeTab.url)) {
+        finishWithUrl(activeTab.url)
+        return
+      }
+      const firstReel = reelTabsIn(list)[0]
+      if (firstReel?.url) {
+        finishWithUrl(firstReel.url)
+        return
+      }
+
+      tabsQuery(
+        {
+          url: [
+            '*://*.facebook.com/*',
+            '*://facebook.com/*',
+            '*://m.facebook.com/*',
+            '*://fb.watch/*',
+            '*://*.fb.watch/*',
+          ],
+        },
+        (allFbTabs) => {
+          const reelTabs = reelTabsIn(allFbTabs || [])
+          finishWithUrl(reelTabs[0]?.url ?? null)
+        },
+      )
+    })
   }
 
   const copyContent = async () => {
@@ -373,6 +512,31 @@ export default function FacebookScreen() {
     } catch {
       setCopyStatus('error')
       window.setTimeout(() => setCopyStatus('idle'), 1200)
+    }
+  }
+
+  const saveStoryToServer = async () => {
+    if (
+      !selectedReel?.url?.trim() ||
+      !contentText.trim() ||
+      storySaveStatus === 'saving' ||
+      reelAlreadySaved
+    ) {
+      return
+    }
+    setStorySaveStatus('saving')
+    try {
+      await createStoryFromReel({
+        sourceContent: contentText.trim(),
+        sourceReelUrl: selectedReel.url.trim(),
+        name: (selectedReel.title || '').trim().slice(0, 200),
+      })
+      setStorySaveStatus('ok')
+      void queryClient.invalidateQueries({ queryKey: ['stories', 'check-reel'] })
+      window.setTimeout(() => setStorySaveStatus('idle'), 2800)
+    } catch {
+      setStorySaveStatus('error')
+      window.setTimeout(() => setStorySaveStatus('idle'), 4000)
     }
   }
 
@@ -1367,7 +1531,21 @@ export default function FacebookScreen() {
 
         {activeView === 'content' ? (
           <section className="glass-panel flex min-h-0 flex-1 flex-col rounded-3xl p-3">
-          <h2 className="text-sm font-semibold text-white">Chi tiết Reels</h2>
+          <div className="flex items-center justify-between gap-2">
+            <h2 className="text-sm font-semibold text-white">Chi tiết Reels</h2>
+            <button
+              type="button"
+              onClick={() => handleLoadReelFromOpenFacebookTab()}
+              title="Lấy reel từ tab đang mở"
+              aria-label="Lấy reel từ tab đang mở"
+              className="shrink-0 cursor-pointer rounded-lg p-1.5 text-blue-300 transition hover:bg-blue-500/20"
+            >
+              <FiFilm className="h-4 w-4" aria-hidden />
+            </button>
+          </div>
+          {contentReelLoadStatus ? (
+            <p className="mt-1 text-[10px] text-slate-400">{contentReelLoadStatus}</p>
+          ) : null}
           {selectedReel ? (
             <div className="mt-2 rounded-2xl border border-blue-300/20 bg-blue-400/10 p-3">
               <div className="flex gap-3">
@@ -1398,7 +1576,9 @@ export default function FacebookScreen() {
               </div>
             </div>
           ) : (
-            <p className="mt-2 rounded-xl border border-blue-300/20 bg-blue-400/10 px-3 py-2 text-[11px] text-slate-500">Chưa chọn reels nào.</p>
+            <p className="mt-2 rounded-xl border border-blue-300/20 bg-blue-400/10 px-3 py-2 text-[11px] text-slate-500">
+              Chưa chọn reel. Mở reel trong một tab Chrome (facebook.com/reel/…), rồi bấm icon film góc phải — extension đọc tab đang xem (ưu tiên tab đang chọn trong cửa sổ hiện tại).
+            </p>
           )}
           <div className="relative mt-2 min-h-0 flex-1 overflow-hidden">
             <textarea
@@ -1409,9 +1589,10 @@ export default function FacebookScreen() {
                 setContentText(event.target.value)
                 setIsContentDirty(true)
                 setIsContentTranslated(false)
+                setStorySaveStatus('idle')
                 if (translateStatus !== 'idle') setTranslateStatus('idle')
               }}
-              className="h-full min-h-[140px] w-full resize-none rounded-2xl bg-slate-900/90 px-3 py-2.5 pr-20 text-xs text-slate-100 outline-none placeholder:text-slate-500 focus:ring-2 focus:ring-blue-400/30"
+              className="h-full min-h-[140px] w-full resize-none rounded-2xl bg-slate-900/90 px-3 py-2.5 pr-29 text-xs text-slate-100 outline-none placeholder:text-slate-500 focus:ring-2 focus:ring-blue-400/30"
             />
             {translateStatus !== 'idle' ? (
               <span
@@ -1430,55 +1611,101 @@ export default function FacebookScreen() {
                     : 'Đang dịch...'}
               </span>
             ) : null}
-            <button
-              type="button"
-              onClick={() => void translateContent()}
-              disabled={!contentText.trim() || isTranslating}
-              aria-label="Dịch tự động"
-              title={
-                isTranslating
-                  ? 'Đang dịch...'
-                  : isContentTranslated
-                    ? 'Quay về nội dung gốc'
-                    : 'Dịch tự động sang tiếng Việt'
-              }
-              className="absolute bottom-2 right-12 inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg bg-violet-500/20 text-violet-100 transition hover:bg-violet-500/30 disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              {isTranslating ? (
-                <span className="animate-pulse">…</span>
-              ) : isContentTranslated ? (
-                <FiRotateCcw className="h-4 w-4" />
-              ) : (
-                <FiGlobe className="h-4 w-4" />
-              )}
-              {isContentTranslated ? (
-                <span className="absolute -right-1 -top-1 rounded-full bg-violet-500 px-1 text-[7px] leading-none text-white">
-                  VI
-                </span>
-              ) : null}
-            </button>
-            <button
-              type="button"
-              onClick={copyContent}
-              disabled={!contentText.trim()}
-              aria-label="Sao chép nội dung"
-              title={
-                copyStatus === 'ok'
-                  ? 'Đã sao chép'
-                  : copyStatus === 'error'
-                    ? 'Sao chép lỗi'
-                    : 'Sao chép'
-              }
-              className={`absolute bottom-2 right-2 inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg text-sm text-white transition disabled:cursor-not-allowed disabled:opacity-40 ${
-                copyStatus === 'ok'
-                  ? 'bg-emerald-500 hover:bg-emerald-600'
-                  : copyStatus === 'error'
-                    ? 'bg-rose-500 hover:bg-rose-600'
-                    : 'bg-blue-500/90 hover:bg-blue-500'
-              }`}
-            >
-              {copyStatus === 'ok' ? '✓' : '⧉'}
-            </button>
+            <div className="absolute bottom-2 right-2 z-10 flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => void translateContent()}
+                disabled={!contentText.trim() || isTranslating}
+                aria-label="Dịch tự động"
+                title={
+                  isTranslating
+                    ? 'Đang dịch...'
+                    : isContentTranslated
+                      ? 'Quay về nội dung gốc'
+                      : 'Dịch tự động sang tiếng Việt'
+                }
+                className="relative inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg bg-violet-500/20 text-violet-100 transition hover:bg-violet-500/30 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {isTranslating ? (
+                  <span className="animate-pulse">…</span>
+                ) : isContentTranslated ? (
+                  <FiRotateCcw className="h-4 w-4" />
+                ) : (
+                  <FiGlobe className="h-4 w-4" />
+                )}
+                {isContentTranslated ? (
+                  <span className="absolute -right-1 -top-1 rounded-full bg-violet-500 px-1 text-[7px] leading-none text-white">
+                    VI
+                  </span>
+                ) : null}
+              </button>
+              <button
+                type="button"
+                onClick={() => void saveStoryToServer()}
+                disabled={
+                  !selectedReel ||
+                  !contentText.trim() ||
+                  storySaveStatus === 'saving' ||
+                  reelAlreadySaved
+                }
+                aria-label={
+                  reelAlreadySaved
+                    ? 'Reel đã được lưu vào máy chủ'
+                    : 'Lưu nội dung và link reel vào máy chủ'
+                }
+                title={
+                  reelAlreadySaved
+                    ? 'Đã lưu nội dung nguồn và đường dẫn reel'
+                    : 'Lưu nội dung nguồn và đường dẫn reel vào database'
+                }
+                className={`relative inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg transition disabled:cursor-not-allowed ${
+                  reelAlreadySaved
+                    ? 'bg-amber-500/20 text-amber-100 opacity-90'
+                    : storySaveStatus === 'ok'
+                      ? 'bg-amber-500/25 text-amber-100 disabled:opacity-40'
+                      : storySaveStatus === 'error'
+                        ? 'bg-rose-500/80 text-white disabled:opacity-40'
+                        : 'bg-amber-500/25 text-amber-100 hover:bg-amber-500/35 disabled:opacity-40'
+                }`}
+              >
+                {storySaveStatus === 'saving' ? (
+                  <span className="text-[10px]">…</span>
+                ) : (
+                  <FiSave className="h-4 w-4" aria-hidden />
+                )}
+                {storySaveStatus !== 'saving' &&
+                (reelAlreadySaved || storySaveStatus === 'ok') ? (
+                  <span
+                    className="pointer-events-none absolute -right-0.5 -top-0.5 flex h-3.5 w-3.5 items-center justify-center rounded-full border border-neutral-900/90 bg-emerald-500 text-white shadow-sm"
+                    aria-hidden
+                  >
+                    <FiCheck className="h-2 w-2 stroke-3" />
+                  </span>
+                ) : null}
+              </button>
+              <button
+                type="button"
+                onClick={copyContent}
+                disabled={!contentText.trim()}
+                aria-label="Sao chép nội dung"
+                title={
+                  copyStatus === 'ok'
+                    ? 'Đã sao chép'
+                    : copyStatus === 'error'
+                      ? 'Sao chép lỗi'
+                      : 'Sao chép'
+                }
+                className={`inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg text-sm text-white transition disabled:cursor-not-allowed disabled:opacity-40 ${
+                  copyStatus === 'ok'
+                    ? 'bg-emerald-500 hover:bg-emerald-600'
+                    : copyStatus === 'error'
+                      ? 'bg-rose-500 hover:bg-rose-600'
+                      : 'bg-blue-500/90 hover:bg-blue-500'
+                }`}
+              >
+                {copyStatus === 'ok' ? '✓' : '⧉'}
+              </button>
+            </div>
           </div>
           </section>
         ) : null}
