@@ -9,7 +9,7 @@ export default function LoginScreen({ onLoginSuccess }: { onLoginSuccess: () => 
   const [showPassword, setShowPassword] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [errorMessage, setErrorMessage] = useState('')
-  const setAuthenticated = useAuth((state) => state.setAuthenticated)
+  const checkAuth = useAuth((state) => state.checkAuth)
   const mapLoginError = (message?: string, status?: number) => {
     if (status === 401) return 'Sai tên đăng nhập hoặc mật khẩu.'
     if (status === 403) return 'Không có quyền truy cập.'
@@ -35,7 +35,7 @@ export default function LoginScreen({ onLoginSuccess }: { onLoginSuccess: () => 
     setIsSubmitting(true)
     try {
       await loginPassword(username, password)
-      setAuthenticated(true)
+      await checkAuth()
       onLoginSuccess()
     } catch (error: any) {
       const message = error?.response?.data?.message

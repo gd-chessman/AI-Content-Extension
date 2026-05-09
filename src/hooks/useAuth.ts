@@ -21,24 +21,40 @@ const setAuthStorage = (value: boolean) => {
 
 export const useAuth = create<{
   isAuthenticated: boolean
+  /** Role từ GET /users/me — `null` khi chưa hydrate hoặc đã đăng xuất */
+  role: string | null
   setAuthenticated: (value: boolean) => void
   checkAuth: () => Promise<boolean>
+  refreshRoleOnly: () => Promise<void>
 }>((set) => ({
   isAuthenticated: getInitialAuth(),
+  role: null,
   setAuthenticated: (value) => {
     setAuthStorage(value)
-    set({ isAuthenticated: value })
+    if (!value) {
+      set({ isAuthenticated: false, role: null })
+      return
+    }
+    set({ isAuthenticated: true })
   },
   checkAuth: async () => {
     try {
-      await getMe()
+      const me = await getMe()
       setAuthStorage(true)
-      set({ isAuthenticated: true })
+      set({ isAuthenticated: true, role: (me?.role as string) || 'user' })
       return true
     } catch {
       setAuthStorage(false)
-      set({ isAuthenticated: false })
+      set({ isAuthenticated: false, role: null })
       return false
+    }
+  },
+  refreshRoleOnly: async () => {
+    try {
+      const me = await getMe()
+      set({ role: (me?.role as string) || 'user' })
+    } catch {
+      // giữ nguyên role hiện tại nếu lỗi mạng
     }
   },
 }))

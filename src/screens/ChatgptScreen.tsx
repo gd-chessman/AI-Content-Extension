@@ -1,9 +1,27 @@
 import { useEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { FiAlignLeft, FiAlertTriangle, FiCheck, FiCopy, FiDownload, FiEdit3, FiFileText, FiFilm, FiImage, FiInfo, FiItalic, FiPlay, FiScissors, FiSquare, FiType } from 'react-icons/fi'
+import {
+  FiAlignLeft,
+  FiAlertTriangle,
+  FiCheck,
+  FiCopy,
+  FiDownload,
+  FiEdit3,
+  FiFileText,
+  FiFilm,
+  FiImage,
+  FiInfo,
+  FiItalic,
+  FiPlay,
+  FiRefreshCw,
+  FiScissors,
+  FiSquare,
+  FiType,
+} from 'react-icons/fi'
 import { IoFlash } from 'react-icons/io5'
 import { RiAdminFill } from 'react-icons/ri'
 import { SiGooglesheets, SiX } from 'react-icons/si'
+import { useAuth } from '@/hooks/useAuth'
 import {
   createWorkflowRunEventSource,
   createStepRun,
@@ -94,6 +112,14 @@ type ProcessStep = {
 }
 
 export default function ChatgptScreen() {
+  const refreshRoleOnly = useAuth((s) => s.refreshRoleOnly)
+  const role = useAuth((s) => s.role)
+  const canUseWorkflow = role === 'user-vip' || role === 'admin'
+
+  useEffect(() => {
+    void refreshRoleOnly()
+  }, [refreshRoleOnly])
+
   const [status, setStatus] = useState('Chọn một tiến trình để gửi prompt tự động vào ChatGPT.')
   const [selectedStepId, setSelectedStepId] = useState('')
   const [splitImages, setSplitImages] = useState<{ left: string; right: string } | null>(null)
@@ -824,6 +850,10 @@ export default function ChatgptScreen() {
   }
 
   const runWorkflow = async (options?: { runId?: string; workflowId?: string; source?: string }) => {
+    if (!canUseWorkflow) {
+      setStatus('Workflow chỉ dành cho tài khoản VIP hoặc quản trị viên.')
+      return
+    }
     if (!processSteps.length || isWorkflowRunning) return
     const extensionChrome = getChrome()
     if (!extensionChrome?.tabs?.query || !extensionChrome?.scripting?.executeScript) {
@@ -982,7 +1012,7 @@ export default function ChatgptScreen() {
   }, [processSteps])
 
   useEffect(() => {
-    if (!processSteps.length) return
+    if (!canUseWorkflow || !processSteps.length) return
     const eventSource = createWorkflowRunEventSource()
 
     eventSource.onmessage = (event) => {
@@ -1009,7 +1039,7 @@ export default function ChatgptScreen() {
     return () => {
       eventSource.close()
     }
-  }, [processSteps, isWorkflowRunning])
+  }, [canUseWorkflow, processSteps, isWorkflowRunning])
 
   const splitCapturedImage = async (
     screenshotDataUrl: string,
@@ -2027,6 +2057,11 @@ export default function ChatgptScreen() {
         <div className="flex min-h-0 flex-col rounded-2xl border border-white/10 bg-black/30 p-3">
           <h2 className="text-sm font-semibold text-white">{selectedStep?.label || 'Tiến trình'}</h2>
           <p className="mt-1 text-[11px] text-slate-400">Nội dung chi tiết tiến trình đang chọn.</p>
+          {!canUseWorkflow && !isLoadingProcessSteps && processSteps.length > 0 ? (
+            <p className="mt-1 rounded-xl border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-[10px] text-amber-100">
+              Bạn có thể dùng ⚡ và ✏️ để chạy thủ công từng bước. Chạy workflow tự động liên tiếp mọi bước chỉ có với VIP.
+            </p>
+          ) : null}
           <textarea
             readOnly
             value={
@@ -2063,31 +2098,37 @@ export default function ChatgptScreen() {
         </div>
 
         <aside className="flex min-h-0 flex-col rounded-2xl border border-white/10 bg-black/30 p-2">
-          <div className="mb-2 shrink-0 rounded-xl border border-white/10 bg-white/5 p-1.5">
-            {isWorkflowRunning ? (
-              <button
-                type="button"
-                onClick={stopWorkflowRun}
-                disabled={isWorkflowStopping}
-                className="inline-flex h-8 w-full cursor-pointer items-center justify-center gap-1 rounded-lg bg-rose-500/20 text-[11px] font-semibold text-rose-100 transition hover:bg-rose-500/30 disabled:cursor-not-allowed disabled:opacity-50"
-                title="Dừng workflow"
-              >
-                <FiSquare className="h-3.5 w-3.5" />
-                {isWorkflowStopping ? 'Đang dừng...' : 'Dừng workflow'}
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={() => void runWorkflow()}
-                disabled={!processSteps.length || isLoadingProcessSteps}
-                className="inline-flex h-8 w-full cursor-pointer items-center justify-center gap-1 rounded-lg bg-violet-500/20 text-[11px] font-semibold text-violet-100 transition hover:bg-violet-500/30 disabled:cursor-not-allowed disabled:opacity-50"
-                title="Chạy toàn bộ workflow"
-              >
-                <FiPlay className="h-3.5 w-3.5" />
-                Chạy workflow
-              </button>
-            )}
-          </div>
+          {canUseWorkflow ? (
+            <div className="mb-2 shrink-0 rounded-xl border border-white/10 bg-white/5 p-1.5">
+              {isWorkflowRunning ? (
+                <button
+                  type="button"
+                  onClick={stopWorkflowRun}
+                  disabled={isWorkflowStopping}
+                  className="inline-flex h-8 w-full cursor-pointer items-center justify-center rounded-lg bg-rose-500/20 text-rose-100 transition hover:bg-rose-500/30 disabled:cursor-not-allowed disabled:opacity-50"
+                  title={isWorkflowStopping ? 'Đang dừng…' : 'Dừng workflow'}
+                  aria-label={isWorkflowStopping ? 'Đang dừng workflow' : 'Dừng workflow'}
+                >
+                  {isWorkflowStopping ? (
+                    <FiRefreshCw className="h-4 w-4 animate-spin" aria-hidden />
+                  ) : (
+                    <FiSquare className="h-4 w-4" aria-hidden />
+                  )}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => void runWorkflow()}
+                  disabled={!processSteps.length || isLoadingProcessSteps}
+                  className="inline-flex h-8 w-full cursor-pointer items-center justify-center rounded-lg bg-violet-500/20 text-violet-100 transition hover:bg-violet-500/30 disabled:cursor-not-allowed disabled:opacity-50"
+                  title="Chạy toàn bộ workflow"
+                  aria-label="Chạy workflow"
+                >
+                  <FiPlay className="h-4 w-4" aria-hidden />
+                </button>
+              )}
+            </div>
+          ) : null}
           <div className="min-h-0 space-y-1.5 overflow-y-auto pr-0.5">
             {processSteps.map((step) => (
               <div key={step.id} className="rounded-xl border border-white/10 bg-white/5 p-1.5">
@@ -2112,6 +2153,7 @@ export default function ChatgptScreen() {
                       setSelectedStepId(step.id)
                       void runFastProcess(step)
                     }}
+                    disabled={isLoadingProcessSteps || !step.prompt}
                     className="inline-flex h-7 w-full cursor-pointer items-center justify-center rounded-md bg-emerald-500/25 text-emerald-100 transition hover:bg-emerald-500/35 disabled:cursor-not-allowed disabled:opacity-40"
                     title={step.id === 'step-1' ? 'Tiến trình 1 + bản nhớ tạm mới nhất, tự Enter' : 'Chạy nhanh và tự Enter'}
                   >
@@ -2123,7 +2165,8 @@ export default function ChatgptScreen() {
                       setSelectedStepId(step.id)
                       void runFillProcess(step)
                     }}
-                    className="inline-flex h-7 w-full cursor-pointer items-center justify-center rounded-md bg-amber-500/20 text-amber-100 transition hover:bg-amber-500/30"
+                    disabled={isLoadingProcessSteps || !step.prompt}
+                    className="inline-flex h-7 w-full cursor-pointer items-center justify-center rounded-md bg-amber-500/20 text-amber-100 transition hover:bg-amber-500/30 disabled:cursor-not-allowed disabled:opacity-40"
                     title={step.id === 'step-1' ? 'Tiến trình 1 + bản nhớ tạm mới nhất, không Enter' : 'Điền prompt, không Enter'}
                   >
                     <FiEdit3 className="h-3.5 w-3.5 text-amber-300" />

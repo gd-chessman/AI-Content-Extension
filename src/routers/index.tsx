@@ -42,7 +42,6 @@ const mainTabs: Array<{
 
 function AppRouter() {
   const [activeRoute, setActiveRoute] = useState<RouteId>('login')
-  const isAuthenticated = useAuth((state) => state.isAuthenticated)
   const checkAuth = useAuth((state) => state.checkAuth)
 
   const syncBrowserTabByRoute = (routeId: Exclude<RouteId, 'login'>) => {
@@ -98,14 +97,11 @@ function AppRouter() {
 
   useEffect(() => {
     const bootstrapAuth = async () => {
-      if (isAuthenticated) {
-        setActiveRoute('facebook')
-      }
       const ok = await checkAuth()
       setActiveRoute(ok ? 'facebook' : 'login')
     }
     void bootstrapAuth()
-  }, [checkAuth, isAuthenticated])
+  }, [checkAuth])
 
   useEffect(() => {
     const handler = (event: Event) => {

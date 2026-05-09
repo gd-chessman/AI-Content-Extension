@@ -28,6 +28,7 @@ export default function ProfileScreen({ onLogout }: { onLogout: () => void }) {
   const setAuthenticated = useAuth((state) => state.setAuthenticated)
   const getRoleLabel = (role: string) => {
     if (role === 'admin') return 'Quản trị viên'
+    if (role === 'user-vip') return 'Người dùng VIP'
     if (role === 'user') return 'Người dùng'
     return role
   }
