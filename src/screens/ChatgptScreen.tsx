@@ -375,11 +375,12 @@ export default function ChatgptScreen() {
 
   const runProcess = async (
     step: { label: string; prompt: string },
-    options?: { autoSend?: boolean; fast?: boolean; preferredTabId?: number },
+    options?: { autoSend?: boolean; fast?: boolean; preferredTabId?: number; forceNewChat?: boolean },
   ) => {
     const autoSend = Boolean(options?.autoSend)
     const fastMode = Boolean(options?.fast)
     const preferredTabId = options?.preferredTabId
+    const forceNewChat = Boolean(options?.forceNewChat)
     const extensionChrome = getChrome()
     if (!extensionChrome?.tabs?.query || !extensionChrome.tabs.create || !extensionChrome.tabs.update || !extensionChrome.scripting?.executeScript) {
       setStatus('Môi trường hiện tại không hỗ trợ tự động gửi vào ChatGPT.')
@@ -392,6 +393,63 @@ export default function ChatgptScreen() {
     if (!target?.id) {
       setStatus(`${step.label}: Không thể mở tab ChatGPT.`)
       return false
+    }
+
+    if (forceNewChat) {
+      setStatus(`${step.label}: Đang tạo đoạn chat mới...`)
+      const switched = await extensionChrome.scripting.executeScript({
+        target: { tabId: target.id },
+        func: (async () => {
+          const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
+          const isVisible = (el: Element | null): el is HTMLElement => {
+            if (!(el instanceof HTMLElement)) return false
+            const rect = el.getBoundingClientRect()
+            const style = window.getComputedStyle(el)
+            return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden'
+          }
+
+          const clickNewChatButton = () => {
+            const candidates = Array.from(document.querySelectorAll<HTMLElement>('button, a, [role="button"]'))
+              .filter((el) => isVisible(el))
+              .sort((a, b) => {
+                const ra = a.getBoundingClientRect()
+                const rb = b.getBoundingClientRect()
+                return ra.top - rb.top
+              })
+            const isMatch = (el: HTMLElement) => {
+              const text = (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase()
+              const aria = (el.getAttribute('aria-label') || '').toLowerCase()
+              const title = (el.getAttribute('title') || '').toLowerCase()
+              const href = (el.getAttribute('href') || '').toLowerCase()
+              return (
+                /new chat|chat mới|cuộc trò chuyện mới/.test(text) ||
+                /new chat|chat mới|cuộc trò chuyện mới/.test(aria) ||
+                /new chat|chat mới|cuộc trò chuyện mới/.test(title) ||
+                href === '/' ||
+                href.startsWith('/?')
+              )
+            }
+            const target = candidates.find((el) => isMatch(el))
+            if (!target) return false
+            target.click()
+            return true
+          }
+
+          if (!clickNewChatButton()) {
+            // Fallback: try navigate to root and wait a bit
+            window.location.href = 'https://chatgpt.com/'
+            return false
+          }
+          await sleep(250)
+          return true
+        }) as (...args: unknown[]) => unknown,
+      })
+      const ok = Boolean(switched?.[0]?.result)
+      if (!ok) {
+        await sleep(800)
+      } else {
+        await sleep(320)
+      }
     }
 
     setStatus(`${step.label}: Đã mở ChatGPT, đang điền prompt...`)
@@ -439,7 +497,7 @@ export default function ChatgptScreen() {
 
     return await runProcess(
       { ...step, prompt: mergedPrompt },
-      { autoSend: true, fast: true, preferredTabId: lockedWorkflowTabIdRef.current || undefined },
+      { autoSend: true, fast: true, preferredTabId: lockedWorkflowTabIdRef.current || undefined, forceNewChat: true },
     )
   }
 
@@ -459,7 +517,7 @@ export default function ChatgptScreen() {
       mergedPrompt = `${step.prompt}\n\n${fromStorage}`
     }
 
-    return await runProcess({ ...step, prompt: mergedPrompt }, { autoSend: false, fast: false })
+    return await runProcess({ ...step, prompt: mergedPrompt }, { autoSend: false, fast: false, forceNewChat: true })
   }
 
   const waitForChatgptResponseDone = async (stepLabel: string, timeoutMs = 240_000, preferredTabId?: number) => {
@@ -917,7 +975,7 @@ export default function ChatgptScreen() {
         return
       }
       const mergedPrompt = `${step1Prompt}\n\nStory:\n${reelContent}`
-      void runProcess({ label: 'Tiến trình 1', prompt: mergedPrompt }, { autoSend: false, fast: false })
+      void runProcess({ label: 'Tiến trình 1', prompt: mergedPrompt }, { autoSend: false, fast: false, forceNewChat: true })
     }
 
     window.addEventListener('run-chatgpt-step1-from-facebook', onRunStep1FromFacebook as EventListener)
