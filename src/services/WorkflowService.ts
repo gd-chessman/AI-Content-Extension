@@ -43,6 +43,14 @@ export type WorkflowRunItem = {
   status: WorkflowRunStatus
   progress: number
   currentStepNo: number
+  payload?: Record<string, unknown>
+}
+
+export type WorkflowRunStreamEvent = {
+  type: 'workflow_run_stream_connected' | 'workflow_run_created' | 'workflow_run_updated' | 'heartbeat'
+  userId?: string
+  ts?: number
+  run?: WorkflowRunItem & Record<string, unknown>
 }
 
 export type StepRunItem = {
@@ -107,4 +115,11 @@ export const updateStepRun = async (
 ) => {
   const response = await axiosClient.patch(`/step-runs/${stepRunId}`, payload)
   return response.data as StepRunItem
+}
+
+export const createWorkflowRunEventSource = () => {
+  const apiUrl = import.meta.env.VITE_API_URL ?? 'http://localhost:8080'
+  return new EventSource(`${apiUrl}/api/v1/workflow-runs/stream`, {
+    withCredentials: true,
+  })
 }

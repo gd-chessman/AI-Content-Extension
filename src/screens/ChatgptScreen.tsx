@@ -5,10 +5,12 @@ import { IoFlash } from 'react-icons/io5'
 import { RiAdminFill } from 'react-icons/ri'
 import { SiGooglesheets, SiX } from 'react-icons/si'
 import {
+  createWorkflowRunEventSource,
   createStepRun,
   createWorkflowRun,
   getUserWorkflowDetail,
   getUserWorkflows,
+  type WorkflowRunStreamEvent,
   updateStepRun,
   updateWorkflowRun,
 } from '@/services/WorkflowService'
@@ -101,6 +103,7 @@ export default function ChatgptScreen() {
   const [isWorkflowStopping, setIsWorkflowStopping] = useState(false)
   const workflowStopRef = useRef(false)
   const lockedWorkflowTabIdRef = useRef<number>(0)
+  const runningWorkflowRunIdRef = useRef('')
   const { data: processSteps = [], isLoading: isLoadingProcessSteps } = useQuery<ProcessStep[]>({
     queryKey: ['chatgpt-process-steps'],
     queryFn: async () => {
@@ -728,13 +731,6 @@ export default function ChatgptScreen() {
     return false
   }
 
-  const parseDelayMs = (inputSchema: Record<string, unknown>) => {
-    const raw = inputSchema?.delayMs ?? inputSchema?.ms ?? inputSchema?.delay
-    const value = Number(raw)
-    if (!Number.isFinite(value) || value < 0) return 1200
-    return Math.max(100, Math.floor(value))
-  }
-
   const executeWorkflowStep = async (step: ProcessStep) => {
     // User-required behavior: every workflow step in ChatGPT screen
     // runs exactly like "Chạy nhanh", then waits for response completion.
@@ -772,7 +768,7 @@ export default function ChatgptScreen() {
     setStatus('Đang dừng workflow sau khi hoàn tất bước hiện tại...')
   }
 
-  const runWorkflow = async () => {
+  const runWorkflow = async (options?: { runId?: string; workflowId?: string; source?: string }) => {
     if (!processSteps.length || isWorkflowRunning) return
     const extensionChrome = getChrome()
     if (!extensionChrome?.tabs?.query || !extensionChrome?.scripting?.executeScript) {
@@ -784,12 +780,17 @@ export default function ChatgptScreen() {
       setStatus('Chưa tìm thấy workflowId để bắt đầu chạy workflow.')
       return
     }
+    if (options?.workflowId && options.workflowId !== firstStep.workflowId) {
+      setStatus('Workflow từ SSE không khớp workflow đang load ở màn hình ChatGPT.')
+      return
+    }
 
     setIsWorkflowRunning(true)
     setIsWorkflowStopping(false)
     workflowStopRef.current = false
 
-    let workflowRunId = ''
+    let workflowRunId = options?.runId || ''
+    runningWorkflowRunIdRef.current = workflowRunId
     try {
       const lockedTab = await pickChatgptTab()
       lockedWorkflowTabIdRef.current = lockedTab?.id || 0
@@ -798,12 +799,25 @@ export default function ChatgptScreen() {
         return
       }
 
-      setStatus(`Đang tạo workflow run (${processSteps.length} bước)...`)
-      const run = await createWorkflowRun({
-        workflowId: firstStep.workflowId,
-        payload: { source: 'chatgpt_screen', totalSteps: processSteps.length },
-      })
-      workflowRunId = run._id
+      if (!workflowRunId) {
+        setStatus(`Đang tạo workflow run (${processSteps.length} bước)...`)
+        const run = await createWorkflowRun({
+          workflowId: firstStep.workflowId,
+          payload: { source: options?.source || 'chatgpt_screen', totalSteps: processSteps.length },
+        })
+        workflowRunId = run._id
+        runningWorkflowRunIdRef.current = workflowRunId
+      } else {
+        await updateWorkflowRun(workflowRunId, {
+          status: 'running',
+          progress: 0,
+          currentStepNo: 0,
+          startedAt: new Date().toISOString(),
+          finishedAt: null,
+          result: {},
+          error: { code: '', message: '', details: {} },
+        })
+      }
 
       for (let index = 0; index < processSteps.length; index += 1) {
         const step = processSteps[index]
@@ -887,6 +901,7 @@ export default function ChatgptScreen() {
     } finally {
       workflowStopRef.current = false
       lockedWorkflowTabIdRef.current = 0
+      runningWorkflowRunIdRef.current = ''
       setIsWorkflowRunning(false)
       setIsWorkflowStopping(false)
     }
@@ -910,6 +925,36 @@ export default function ChatgptScreen() {
       window.removeEventListener('run-chatgpt-step1-from-facebook', onRunStep1FromFacebook as EventListener)
     }
   }, [processSteps])
+
+  useEffect(() => {
+    if (!processSteps.length) return
+    const eventSource = createWorkflowRunEventSource()
+
+    eventSource.onmessage = (event) => {
+      try {
+        const payload = JSON.parse(String(event.data || '{}')) as WorkflowRunStreamEvent
+        if (payload?.type !== 'workflow_run_created') return
+        const run = payload.run
+        if (!run?._id || !run?.workflowId) return
+        if ((run.status || '').toLowerCase() !== 'queued') return
+        if (run.workflowId !== processSteps[0]?.workflowId) return
+        if (isWorkflowRunning) return
+        if (runningWorkflowRunIdRef.current === run._id) return
+        setStatus(`SSE: nhận lệnh chạy workflow từ backend (${run._id}).`)
+        void runWorkflow({ runId: run._id, workflowId: run.workflowId, source: 'sse' })
+      } catch {
+        // ignore malformed SSE payload
+      }
+    }
+
+    eventSource.onerror = () => {
+      // keep silent to avoid noisy UI when stream reconnects
+    }
+
+    return () => {
+      eventSource.close()
+    }
+  }, [processSteps, isWorkflowRunning])
 
   const splitCapturedImage = async (
     screenshotDataUrl: string,
