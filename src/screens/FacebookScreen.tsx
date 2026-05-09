@@ -213,6 +213,8 @@ export default function FacebookScreen() {
   const [showEditFanpagesModal, setShowEditFanpagesModal] = useState(false)
   const [fanpageBulkInput, setFanpageBulkInput] = useState('')
   const [fanpageStatus, setFanpageStatus] = useState('')
+  /** Fanpage dùng cho workflow (nút Play) — ưu tiên hơn `pickIndex` mặc định trên backend. */
+  const [selectedFanpageId, setSelectedFanpageId] = useState<string | null>(null)
   const [editingFanpages, setEditingFanpages] = useState<FanpageItem[]>([])
   const queryClient = useQueryClient()
   const refreshRoleOnly = useAuth((s) => s.refreshRoleOnly)
@@ -227,6 +229,16 @@ export default function FacebookScreen() {
     queryKey: ['fanpages'],
     queryFn: getFanpages,
   })
+
+  useEffect(() => {
+    if (!fanpages.length) {
+      setSelectedFanpageId(null)
+      return
+    }
+    setSelectedFanpageId((prev) =>
+      prev && fanpages.some((p) => p._id === prev) ? prev : fanpages[0]._id,
+    )
+  }, [fanpages])
   const { data: reelSavedCheck } = useQuery({
     queryKey: ['stories', 'check-reel', selectedReel?.url],
     queryFn: () => checkStoryReelSaved(selectedReel!.url),
@@ -1349,6 +1361,7 @@ export default function FacebookScreen() {
 
   const executeFacebookWorkflowStep = async (
     step: FacebookProcessStep,
+    facebookCriteria?: Record<string, unknown>,
   ): Promise<Record<string, unknown>> => {
     const schema = step.inputSchema || {}
     switch (step.actionType) {
@@ -1357,10 +1370,18 @@ export default function FacebookScreen() {
         const pickRaw = schema.pickIndex
         const pickIndex = pickRaw !== undefined && pickRaw !== null ? Number(pickRaw) : NaN
         const nameContains = (schema.nameContains as string | undefined)?.trim().toLowerCase()
+        const criteriaPickIndexExplicit =
+          facebookCriteria != null && Object.prototype.hasOwnProperty.call(facebookCriteria, 'pickIndex')
+
         if (!url && nameContains) {
           const fp = fanpages.find((p) => p.name.toLowerCase().includes(nameContains))
           if (!fp) throw new Error(`Không tìm thấy fanpage chứa "${nameContains}"`)
           url = fp.url
+        }
+        if (!url && !criteriaPickIndexExplicit && selectedFanpageId) {
+          const fp = fanpages.find((p) => p._id === selectedFanpageId)
+          const u = fp?.url?.trim()
+          if (u) url = u
         }
         if (!url && Number.isFinite(pickIndex) && pickIndex >= 0) {
           const fp = fanpages[pickIndex]
@@ -1370,17 +1391,17 @@ export default function FacebookScreen() {
         if (!url) throw new Error('facebook_open_fanpage: thêm fanpageUrl, nameContains hoặc pickIndex trong inputSchema')
 
         let openedListIndex: number | null = null
-        if (Number.isFinite(pickIndex) && pickIndex >= 0) {
+        const idxByUrl = fanpages.findIndex((p) => {
+          try {
+            return tabMatchesFanpageUrl(url, p.url)
+          } catch {
+            return false
+          }
+        })
+        if (idxByUrl >= 0) {
+          openedListIndex = idxByUrl
+        } else if (Number.isFinite(pickIndex) && pickIndex >= 0) {
           openedListIndex = Math.floor(pickIndex)
-        } else {
-          const idx = fanpages.findIndex((p) => {
-            try {
-              return tabMatchesFanpageUrl(url, p.url)
-            } catch {
-              return false
-            }
-          })
-          openedListIndex = idx >= 0 ? idx : null
         }
         workflowOpenedFanpageIndexRef.current = openedListIndex
 
@@ -1669,7 +1690,7 @@ export default function FacebookScreen() {
         })
 
         try {
-          const output = await executeFacebookWorkflowStep(effectiveStep)
+          const output = await executeFacebookWorkflowStep(effectiveStep, facebookCriteria)
           await updateStepRun(stepRun._id, {
             status: 'completed',
             output: output as Record<string, unknown>,
@@ -1906,12 +1927,16 @@ export default function FacebookScreen() {
               <button
                 key={page._id}
                 type="button"
-                onClick={() => openFanpage(page.url)}
-                disabled={openedFacebookUrls.has(normalizeUrl(page.url))}
-                className={`flex w-full cursor-pointer items-center justify-between rounded-2xl px-3 py-3 text-left disabled:cursor-default ${
-                  openedFacebookUrls.has(normalizeUrl(page.url))
-                    ? 'border border-emerald-500/40 bg-emerald-500/10'
-                    : 'border border-blue-300/20 bg-blue-400/10 hover:bg-blue-400/15'
+                onClick={() => {
+                  setSelectedFanpageId(page._id)
+                  openFanpage(page.url)
+                }}
+                className={`flex w-full cursor-pointer items-center justify-between rounded-2xl px-3 py-3 text-left transition ${
+                  page._id === selectedFanpageId
+                    ? 'border border-violet-400/70 bg-violet-500/15 ring-1 ring-violet-400/40'
+                    : openedFacebookUrls.has(normalizeUrl(page.url))
+                      ? 'border border-emerald-500/40 bg-emerald-500/10'
+                      : 'border border-blue-300/20 bg-blue-400/10 hover:bg-blue-400/15'
                 }`}
               >
                 <div>

@@ -28,10 +28,12 @@ import {
   createWorkflowRun,
   getUserWorkflowDetail,
   getUserWorkflows,
+  getWorkflowRunById,
   type WorkflowRunStreamEvent,
   updateStepRun,
   updateWorkflowRun,
 } from '@/services/WorkflowService'
+import { getMyStories, type StoryItem } from '@/services/StoryService'
 
 type BrowserTab = { id?: number; url?: string; active?: boolean; windowId?: number }
 type ExtensionChrome = {
@@ -90,6 +92,49 @@ const SAVED_SPLIT_IMAGE_HASHES_MAX = 150
 const SPLIT_IMAGE_DOWNLOAD_FOLDER = 'chatgpt-images'
 const FACEBOOK_REEL_MEMORY_KEY = 'facebookReelCopiedContent'
 
+/** Story “chưa đủ” để pipeline: có caption, chưa có blog, longContent chưa đạt ngưỡng. */
+const STEP1_STORY_MIN_LONG = 80
+
+/**
+ * Mặc định **story DB** — ghép `sourceContent`. Ép **localStorage** (`facebookReelCopiedContent`) bằng
+ * `chatgptStep1Source` trên payload run hoặc khi gọi `runWorkflow({ chatgptStep1Source: 'localstorage' })`.
+ */
+async function resolveChatgptStep1SourceMode(
+  runId: string,
+  options?: {
+    chatgptStep1Source?: 'localstorage' | 'stories'
+    source?: string
+  },
+): Promise<'localstorage' | 'stories'> {
+  const o = options?.chatgptStep1Source
+  if (o === 'stories') return 'stories'
+  if (o === 'localstorage') return 'localstorage'
+
+  if (runId) {
+    try {
+      const r = await getWorkflowRunById(runId)
+      const payload = (r.payload || {}) as {
+        chatgptStep1Source?: string
+      }
+      const rawStep = String(payload.chatgptStep1Source || '').trim().toLowerCase()
+      if (rawStep === 'localstorage') return 'localstorage'
+      if (rawStep === 'stories') return 'stories'
+    } catch {
+      /* ignore */
+    }
+  }
+
+  return 'stories'
+}
+
+function isStoryIncompleteForChatgptPipeline(s: StoryItem): boolean {
+  const src = (s.sourceContent || '').trim()
+  if (!src) return false
+  if ((s.blogPostUrl || '').trim()) return false
+  if ((s.longContent || '').trim().length >= STEP1_STORY_MIN_LONG) return false
+  return true
+}
+
 const hashDataUrl = (dataUrl: string) => {
   let h = 5381
   const stride = Math.max(1, Math.floor(dataUrl.length / 12000))
@@ -130,6 +175,8 @@ export default function ChatgptScreen() {
   const workflowStopRef = useRef(false)
   const lockedWorkflowTabIdRef = useRef<number>(0)
   const runningWorkflowRunIdRef = useRef('')
+  /** Tiến trình 1: gán lúc bắt đầu workflow — mặc định story (`sourceContent`). */
+  const step1ContentSourceRef = useRef<'localstorage' | 'stories'>('stories')
   const { data: processSteps = [], isLoading: isLoadingProcessSteps } = useQuery<ProcessStep[]>({
     queryKey: ['chatgpt-process-steps'],
     queryFn: async () => {
@@ -512,16 +559,30 @@ export default function ChatgptScreen() {
       return await runProcess(step, { autoSend: true, fast: true, preferredTabId: lockedWorkflowTabIdRef.current || undefined })
     }
 
-    let mergedPrompt = step.prompt
-    const fromStorage = localStorage.getItem(FACEBOOK_REEL_MEMORY_KEY)?.trim() || ''
-    if (fromStorage) {
-      mergedPrompt = `${step.prompt}\n\n${fromStorage}`
+    let mergedStep = step
+    if (step1ContentSourceRef.current === 'localstorage') {
+      let mergedPrompt = step.prompt
+      const fromStorage = localStorage.getItem(FACEBOOK_REEL_MEMORY_KEY)?.trim() || ''
+      if (fromStorage) mergedPrompt = `${step.prompt}\n\n${fromStorage}`
+      mergedStep = { ...step, prompt: mergedPrompt }
+    } else {
+      const stories = await getMyStories()
+      const picked = stories.find(isStoryIncompleteForChatgptPipeline)
+      if (!picked) {
+        throw new Error(
+          'Không có story thiếu thông tin (cần caption gốc, chưa có blog, longContent chưa đủ).',
+        )
+      }
+      const extra = (picked.sourceContent || '').trim()
+      mergedStep = { ...step, prompt: extra ? `${step.prompt}\n\n${extra}` : step.prompt }
     }
 
-    return await runProcess(
-      { ...step, prompt: mergedPrompt },
-      { autoSend: true, fast: true, preferredTabId: lockedWorkflowTabIdRef.current || undefined, forceNewChat: true },
-    )
+    return await runProcess(mergedStep, {
+      autoSend: true,
+      fast: true,
+      preferredTabId: lockedWorkflowTabIdRef.current || undefined,
+      forceNewChat: true,
+    })
   }
 
   const runFillProcess = async (step: ProcessStep) => {
@@ -534,13 +595,25 @@ export default function ChatgptScreen() {
       return await runProcess(step, { autoSend: false, fast: false })
     }
 
-    let mergedPrompt = step.prompt
-    const fromStorage = localStorage.getItem(FACEBOOK_REEL_MEMORY_KEY)?.trim() || ''
-    if (fromStorage) {
-      mergedPrompt = `${step.prompt}\n\n${fromStorage}`
+    let mergedStep = step
+    if (step1ContentSourceRef.current === 'localstorage') {
+      let mergedPrompt = step.prompt
+      const fromStorage = localStorage.getItem(FACEBOOK_REEL_MEMORY_KEY)?.trim() || ''
+      if (fromStorage) mergedPrompt = `${step.prompt}\n\n${fromStorage}`
+      mergedStep = { ...step, prompt: mergedPrompt }
+    } else {
+      const stories = await getMyStories()
+      const picked = stories.find(isStoryIncompleteForChatgptPipeline)
+      if (!picked) {
+        throw new Error(
+          'Không có story thiếu thông tin (cần caption gốc, chưa có blog, longContent chưa đủ).',
+        )
+      }
+      const extra = (picked.sourceContent || '').trim()
+      mergedStep = { ...step, prompt: extra ? `${step.prompt}\n\n${extra}` : step.prompt }
     }
 
-    return await runProcess({ ...step, prompt: mergedPrompt }, { autoSend: false, fast: false, forceNewChat: true })
+    return await runProcess(mergedStep, { autoSend: false, fast: false, forceNewChat: true })
   }
 
   const waitForChatgptResponseDone = async (stepLabel: string, timeoutMs = 240_000, preferredTabId?: number) => {
@@ -849,7 +922,13 @@ export default function ChatgptScreen() {
     setStatus('Đang dừng workflow sau khi hoàn tất bước hiện tại...')
   }
 
-  const runWorkflow = async (options?: { runId?: string; workflowId?: string; source?: string }) => {
+  const runWorkflow = async (options?: {
+    runId?: string
+    workflowId?: string
+    source?: string
+    /** Ưu tiên trước payload run; mặc định story DB — truyền `localstorage` để dùng clipboard. */
+    chatgptStep1Source?: 'localstorage' | 'stories'
+  }) => {
     if (!canUseWorkflow) {
       setStatus('Workflow chỉ dành cho tài khoản VIP hoặc quản trị viên.')
       return
@@ -903,6 +982,11 @@ export default function ChatgptScreen() {
           error: { code: '', message: '', details: {} },
         })
       }
+
+      step1ContentSourceRef.current = await resolveChatgptStep1SourceMode(workflowRunId, {
+        chatgptStep1Source: options?.chatgptStep1Source,
+        source: options?.source,
+      })
 
       for (let index = 0; index < processSteps.length; index += 1) {
         const step = processSteps[index]
@@ -987,6 +1071,7 @@ export default function ChatgptScreen() {
       workflowStopRef.current = false
       lockedWorkflowTabIdRef.current = 0
       runningWorkflowRunIdRef.current = ''
+      step1ContentSourceRef.current = 'stories'
       setIsWorkflowRunning(false)
       setIsWorkflowStopping(false)
     }
@@ -1026,7 +1111,15 @@ export default function ChatgptScreen() {
         if (isWorkflowRunning) return
         if (runningWorkflowRunIdRef.current === run._id) return
         setStatus(`SSE: nhận lệnh chạy workflow từ backend (${run._id}).`)
-        void runWorkflow({ runId: run._id, workflowId: run.workflowId, source: 'sse' })
+        const runPayload = (run.payload || {}) as { chatgptStep1Source?: string }
+        const rawSrc = String(runPayload.chatgptStep1Source || '').trim().toLowerCase()
+        void runWorkflow({
+          runId: run._id,
+          workflowId: run.workflowId,
+          source: 'sse',
+          chatgptStep1Source:
+            rawSrc === 'stories' ? 'stories' : rawSrc === 'localstorage' ? 'localstorage' : undefined,
+        })
       } catch {
         // ignore malformed SSE payload
       }

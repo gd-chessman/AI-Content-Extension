@@ -80,7 +80,11 @@ export const createWorkflowRun = async (payload: {
 export const getWorkflowRunById = async (id: string) => {
   const response = await axiosClient.get(`/workflow-runs/my/${id}`)
   return response.data as WorkflowRunItem & {
-    payload?: { facebookCriteria?: Record<string, unknown>; source?: string }
+    payload?: {
+      facebookCriteria?: Record<string, unknown>
+      chatgptStep1Source?: 'localstorage' | 'stories' | string
+      source?: string
+    }
   }
 }
 

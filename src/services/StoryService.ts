@@ -8,6 +8,10 @@ export type StoryItem = {
   name: string
   sourceContent: string
   sourceReelUrl: string
+  shortContent?: string
+  longContent?: string
+  blogPostUrl?: string
+  fbReelUrl?: string
   /** Lượt ghi nhận của user đối với story này */
   usageCount?: number
   createdAt?: string
