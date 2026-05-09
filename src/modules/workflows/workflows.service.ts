@@ -33,9 +33,15 @@ export class WorkflowsService {
     return found;
   }
 
-  async listForUser() {
+  async listForUser(platform?: WorkflowPlatform) {
+    const filter: { status: WorkflowStatus; platform?: WorkflowPlatform } = {
+      status: WorkflowStatus.ACTIVE,
+    };
+    if (platform !== undefined) {
+      filter.platform = this.normalizePlatform(platform);
+    }
     return this.workflowModel
-      .find({ status: WorkflowStatus.ACTIVE })
+      .find(filter)
       .sort({ createdAt: -1 })
       .lean();
   }

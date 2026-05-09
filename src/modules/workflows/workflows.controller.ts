@@ -1,9 +1,10 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
 import { UserRole } from '../users/users.schema';
 import { CreateWorkflowDto, UpdateWorkflowDto } from './workflows.dto';
+import { WorkflowPlatform } from './workflow.schema';
 import { WorkflowsService } from './workflows.service';
 
 @Controller('workflows')
@@ -13,8 +14,8 @@ export class WorkflowsController {
 
   @Get('user')
   @Roles(UserRole.USER, UserRole.ADMIN)
-  listForUser() {
-    return this.workflowsService.listForUser();
+  listForUser(@Query('platform') platform?: WorkflowPlatform) {
+    return this.workflowsService.listForUser(platform);
   }
 
   @Get('user/:id')
