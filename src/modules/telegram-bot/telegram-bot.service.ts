@@ -36,8 +36,8 @@ export class TelegramBotService implements OnModuleInit, OnModuleDestroy {
     }
   >();
 
-  /** Khớp tiêu chí merge trên FE `FacebookScreen` + `facebook-step-input.setup.ts`. */
-  private readonly facebookCriteriaKeySet = new Set([
+  /** Token key=value cuối lệnh /run (Facebook + ChatGPT workflow). */
+  private readonly workflowTailKeySet = new Set([
     'minViews',
     'maxViews',
     'append',
@@ -49,8 +49,9 @@ export class TelegramBotService implements OnModuleInit, OnModuleDestroy {
     'maxAppendRounds',
     'minLength',
     'timeoutMs',
-    /** Số fanpage tiếp theo trong danh sách để thử khi quét trống (sau fanpage đã mở). */
     'fallbackFanpageCount',
+    /** Nguồn tiến trình 1 ChatGPT: localstorage (ép); mặc định FE dùng stories từ DB */
+    'chatgptStep1Source',
   ]);
 
   constructor(
@@ -291,8 +292,9 @@ export class TelegramBotService implements OnModuleInit, OnModuleDestroy {
         [
           'Lệnh hỗ trợ:',
           '/workflows — Xem danh sách workflow đang hoạt động (chỉ VIP)',
-          '/run <id|tên> [tiêu chí Facebook] — Kích hoạt workflow (VIP); tiêu chí dạng key=value ở cuối (SSE → extension).',
-          'Ví dụ: /run FacebookWF minViews=800000 fallbackFanpageCount=3',
+          '/run <id|tên> [key=value …] — Tiêu chí cuối lệnh (SSE → extension).',
+          'ChatGPT: mặc định story DB (sourceContent); chatgptStep1Source=localstorage → clipboard/localStorage.',
+          'Facebook ví dụ: minViews=800000 fallbackFanpageCount=3',
           '/myid — Xem Telegram ID hiện tại',
         ].join('\n'),
       );
@@ -349,7 +351,7 @@ export class TelegramBotService implements OnModuleInit, OnModuleDestroy {
   }
 
   /** Lấy các token key=value từ cuối chuỗi (Telegram); phần còn lại là keyword workflow. */
-  private parseTelegramRunTail(rest: string): { keyword: string; facebookCriteria: Record<string, unknown> } {
+  private parseTelegramRunTail(rest: string): { keyword: string; tailCriteria: Record<string, unknown> } {
     const tokens = rest.trim().split(/\s+/).filter(Boolean);
     const criteria: Record<string, unknown> = {};
     while (tokens.length > 0) {
@@ -358,11 +360,30 @@ export class TelegramBotService implements OnModuleInit, OnModuleDestroy {
       if (eq <= 0) break;
       const key = last.slice(0, eq).trim();
       const valRaw = last.slice(eq + 1).trim();
-      if (!this.facebookCriteriaKeySet.has(key)) break;
+      if (!this.workflowTailKeySet.has(key)) break;
       criteria[key] = this.parseTelegramScalar(valRaw);
       tokens.pop();
     }
-    return { keyword: tokens.join(' ').trim(), facebookCriteria: criteria };
+    return { keyword: tokens.join(' ').trim(), tailCriteria: criteria };
+  }
+
+  private partitionWorkflowTailCriteria(tailCriteria: Record<string, unknown>): {
+    facebookCriteria: Record<string, unknown>;
+    chatgptStep1Source?: 'localstorage' | 'stories';
+  } {
+    const facebookCriteria: Record<string, unknown> = {};
+    let chatgptStep1Source: 'localstorage' | 'stories' | undefined;
+    for (const [k, v] of Object.entries(tailCriteria)) {
+      if (k === 'chatgptStep1Source') {
+        const s = String(v ?? '')
+          .trim()
+          .toLowerCase();
+        if (s === 'stories' || s === 'localstorage') chatgptStep1Source = s;
+        continue;
+      }
+      facebookCriteria[k] = v;
+    }
+    return { facebookCriteria, chatgptStep1Source };
   }
 
   private parseTelegramScalar(raw: string): unknown {
@@ -382,11 +403,13 @@ export class TelegramBotService implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
-    const { keyword, facebookCriteria } = this.parseTelegramRunTail(restAfterRun);
+    const { keyword, tailCriteria } = this.parseTelegramRunTail(restAfterRun);
     if (!keyword) {
       await this.sendMessage(chatId, 'Vui lòng nhập tên hoặc id workflow sau /run.');
       return;
     }
+
+    const { facebookCriteria, chatgptStep1Source } = this.partitionWorkflowTailCriteria(tailCriteria);
 
     const picked = await this.pickWorkflow(keyword);
     if (picked.error) {
@@ -410,6 +433,7 @@ export class TelegramBotService implements OnModuleInit, OnModuleDestroy {
         command: rawText,
         keyword,
         ...(Object.keys(facebookCriteria).length > 0 ? { facebookCriteria } : {}),
+        ...(chatgptStep1Source ? { chatgptStep1Source } : {}),
       },
       result: {},
       error: {},
@@ -423,12 +447,18 @@ export class TelegramBotService implements OnModuleInit, OnModuleDestroy {
       run: created.toObject() as unknown as Record<string, unknown>,
     });
 
-    const criteriaLine =
-      Object.keys(facebookCriteria).length > 0
-        ? `Tiêu chí (Facebook): ${Object.entries(facebookCriteria)
-            .map(([k, v]) => `${k}=${String(v)}`)
-            .join(' ')}`
-        : '';
+    const criteriaBits: string[] = [];
+    if (Object.keys(facebookCriteria).length > 0) {
+      criteriaBits.push(
+        `Facebook: ${Object.entries(facebookCriteria)
+          .map(([k, v]) => `${k}=${String(v)}`)
+          .join(' ')}`,
+      );
+    }
+    if (chatgptStep1Source) {
+      criteriaBits.push(`ChatGPT bước 1: ${chatgptStep1Source}`);
+    }
+    const criteriaLine = criteriaBits.length > 0 ? criteriaBits.join('\n') : '';
 
     await this.sendMessage(
       chatId,
