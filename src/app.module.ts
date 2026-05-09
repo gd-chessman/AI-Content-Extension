@@ -12,6 +12,8 @@ import { AuthModule } from './modules/auth/auth.module';
 import { FanpagesModule } from './modules/fanpages/fanpages.module';
 import { WebBlogModule } from './modules/webblog/webblog.module';
 import { GgSheetModule } from './modules/ggsheet/ggsheet.module';
+import { StepsModule } from './modules/steps/steps.module';
+import { WorkflowsModule } from './modules/workflows/workflows.module';
 
 @Module({
   imports: [
@@ -27,6 +29,8 @@ import { GgSheetModule } from './modules/ggsheet/ggsheet.module';
     FanpagesModule,
     WebBlogModule,
     GgSheetModule,
+    StepsModule,
+    WorkflowsModule,
   ],
   controllers: [AppController],
   providers: [AppService]
