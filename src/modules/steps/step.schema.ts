@@ -22,6 +22,16 @@ export enum StepActionType {
   DELAY = 'delay',
   CONDITION = 'condition',
   WEBHOOK = 'webhook',
+  /** Facebook extension — mở fanpage (URL, pickIndex hoặc nameContains) */
+  FACEBOOK_OPEN_FANPAGE = 'facebook_open_fanpage',
+  /** Facebook — quét reels (min/max lượt xem, append) */
+  FACEBOOK_SCAN_REELS = 'facebook_scan_reels',
+  /** Facebook — chọn reel trong danh sách vừa quét */
+  FACEBOOK_SELECT_REEL = 'facebook_select_reel',
+  /** Facebook — chờ caption/nội dung đủ dài sau khi vào Chi tiết */
+  FACEBOOK_WAIT_CONTENT = 'facebook_wait_content',
+  /** Facebook — lưu story (API) */
+  FACEBOOK_SAVE_STORY = 'facebook_save_story',
 }
 
 @Schema({ timestamps: true })
@@ -49,6 +59,7 @@ export class Step {
   })
   actionType: StepActionType;
 
+  /** Tham số bước (platform-specific). Facebook: xem `facebook-step-input.setup.ts`. */
   @Prop({ type: Object, default: {} })
   inputSchema: Record<string, unknown>;
 

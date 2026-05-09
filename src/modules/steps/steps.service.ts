@@ -2,6 +2,7 @@ import { BadRequestException, ConflictException, Injectable, NotFoundException }
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { CreateStepDto, UpdateStepDto } from './steps.dto';
+import { isFacebookStepAction, sanitizeFacebookStepInputSchema } from './facebook-step-input.setup';
 import { Step, StepActionType, StepDocument } from './step.schema';
 
 @Injectable()
@@ -30,6 +31,12 @@ export class StepsService {
 
   async create(dto: CreateStepDto) {
     const payload = this.normalizePayload(dto, false);
+    if (payload.actionType && isFacebookStepAction(payload.actionType)) {
+      payload.inputSchema = sanitizeFacebookStepInputSchema(
+        payload.actionType,
+        (payload.inputSchema || {}) as Record<string, unknown>,
+      );
+    }
     try {
       const created = await this.stepModel.create(payload);
       return created.toObject();
@@ -43,7 +50,29 @@ export class StepsService {
 
   async update(id: string, dto: UpdateStepDto) {
     this.assertObjectId(id, 'Invalid step id.');
+    const existing = await this.stepModel.findById(id).lean();
+    if (!existing) {
+      throw new NotFoundException('Step not found.');
+    }
+
     const patch = this.normalizePayload(dto, true);
+
+    const effectiveAction = (patch.actionType ?? existing.actionType) as StepActionType;
+    const inputSchemaInDto = 'inputSchema' in dto && dto.inputSchema !== undefined;
+    const actionTypeInDto = 'actionType' in dto && dto.actionType !== undefined;
+    const actionChanged = actionTypeInDto && String(dto.actionType) !== String(existing.actionType);
+
+    if (isFacebookStepAction(String(effectiveAction))) {
+      const shouldSanitize = inputSchemaInDto || actionChanged;
+      if (shouldSanitize) {
+        const raw = (inputSchemaInDto ? dto.inputSchema : existing.inputSchema) || {};
+        patch.inputSchema = sanitizeFacebookStepInputSchema(
+          effectiveAction,
+          raw as Record<string, unknown>,
+        );
+      }
+    }
+
     if (!Object.keys(patch).length) {
       throw new BadRequestException('Nothing to update.');
     }

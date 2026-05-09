@@ -36,6 +36,23 @@ export class TelegramBotService implements OnModuleInit, OnModuleDestroy {
     }
   >();
 
+  /** Khớp tiêu chí merge trên FE `FacebookScreen` + `facebook-step-input.setup.ts`. */
+  private readonly facebookCriteriaKeySet = new Set([
+    'minViews',
+    'maxViews',
+    'append',
+    'pickIndex',
+    'reelIndex',
+    'index',
+    'fanpageUrl',
+    'nameContains',
+    'maxAppendRounds',
+    'minLength',
+    'timeoutMs',
+    /** Số fanpage tiếp theo trong danh sách để thử khi quét trống (sau fanpage đã mở). */
+    'fallbackFanpageCount',
+  ]);
+
   constructor(
     private readonly configService: ConfigService,
     @InjectModel(User.name)
@@ -274,7 +291,8 @@ export class TelegramBotService implements OnModuleInit, OnModuleDestroy {
         [
           'Lệnh hỗ trợ:',
           '/workflows — Xem danh sách workflow đang hoạt động (chỉ VIP)',
-          '/run <id|tên> — Kích hoạt workflow (chỉ VIP)',
+          '/run <id|tên> [tiêu chí Facebook] — Kích hoạt workflow (VIP); tiêu chí dạng key=value ở cuối (SSE → extension).',
+          'Ví dụ: /run FacebookWF minViews=800000 fallbackFanpageCount=3',
           '/myid — Xem Telegram ID hiện tại',
         ].join('\n'),
       );
@@ -322,17 +340,51 @@ export class TelegramBotService implements OnModuleInit, OnModuleDestroy {
     }
 
     if (/^\/run\b/i.test(text)) {
-      await this.sendMessage(chatId, 'Dùng cú pháp: /run <workflow_id hoặc tên workflow>');
+      await this.sendMessage(
+        chatId,
+        'Dùng: /run <workflow_id hoặc tên> [minViews=… maxViews=… pickIndex=… reelIndex=… …]. Xem /start.',
+      );
       return;
     }
   }
 
-  private async handleRunCommand(chatId: number, user: UserDocument, keyword: string, rawText: string) {
+  /** Lấy các token key=value từ cuối chuỗi (Telegram); phần còn lại là keyword workflow. */
+  private parseTelegramRunTail(rest: string): { keyword: string; facebookCriteria: Record<string, unknown> } {
+    const tokens = rest.trim().split(/\s+/).filter(Boolean);
+    const criteria: Record<string, unknown> = {};
+    while (tokens.length > 0) {
+      const last = tokens[tokens.length - 1];
+      const eq = last.indexOf('=');
+      if (eq <= 0) break;
+      const key = last.slice(0, eq).trim();
+      const valRaw = last.slice(eq + 1).trim();
+      if (!this.facebookCriteriaKeySet.has(key)) break;
+      criteria[key] = this.parseTelegramScalar(valRaw);
+      tokens.pop();
+    }
+    return { keyword: tokens.join(' ').trim(), facebookCriteria: criteria };
+  }
+
+  private parseTelegramScalar(raw: string): unknown {
+    const s = raw.trim();
+    if (s === 'true') return true;
+    if (s === 'false') return false;
+    if (/^-?\d+(?:\.\d+)?$/.test(s)) return Number(s);
+    return s;
+  }
+
+  private async handleRunCommand(chatId: number, user: UserDocument, restAfterRun: string, rawText: string) {
     if (user.role !== UserRole.ADMIN && user.role !== UserRole.USER_VIP) {
       await this.sendMessage(
         chatId,
         'Tính năng Workflow chỉ dành cho tài khoản VIP. Vui lòng liên hệ quản trị viên.',
       );
+      return;
+    }
+
+    const { keyword, facebookCriteria } = this.parseTelegramRunTail(restAfterRun);
+    if (!keyword) {
+      await this.sendMessage(chatId, 'Vui lòng nhập tên hoặc id workflow sau /run.');
       return;
     }
 
@@ -357,6 +409,7 @@ export class TelegramBotService implements OnModuleInit, OnModuleDestroy {
         chatId,
         command: rawText,
         keyword,
+        ...(Object.keys(facebookCriteria).length > 0 ? { facebookCriteria } : {}),
       },
       result: {},
       error: {},
@@ -370,13 +423,23 @@ export class TelegramBotService implements OnModuleInit, OnModuleDestroy {
       run: created.toObject() as unknown as Record<string, unknown>,
     });
 
+    const criteriaLine =
+      Object.keys(facebookCriteria).length > 0
+        ? `Tiêu chí (Facebook): ${Object.entries(facebookCriteria)
+            .map(([k, v]) => `${k}=${String(v)}`)
+            .join(' ')}`
+        : '';
+
     await this.sendMessage(
       chatId,
-        [
+      [
         `Đã kích hoạt workflow: ${picked.workflow.name}`,
         `Run ID: ${String(created._id)}`,
-        'Trạng thái: đang xếp hàng',
-      ].join('\n'),
+        'Trạng thái: đang xếp hàng (extension nhận qua SSE)',
+        criteriaLine,
+      ]
+        .filter(Boolean)
+        .join('\n'),
     );
   }
 
