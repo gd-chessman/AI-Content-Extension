@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   FiAlertTriangle,
   FiCheck,
@@ -25,7 +25,12 @@ import {
   getFanpages,
   updateFanpage,
 } from '@/services/FanpageService'
-import { checkStoryReelSaved, createStoryFromReel, incrementStoryUsage } from '@/services/StoryService'
+import {
+  checkStoryReelSaved,
+  createStoryFromReel,
+  getMyStories,
+  incrementStoryUsage,
+} from '@/services/StoryService'
 
 type ScannedReel = {
   id: string
@@ -89,6 +94,23 @@ function isFacebookReelPageUrl(urlString: string): boolean {
     return false
   }
 }
+
+/** Khớp logic canonical URL reel trên BE (`canonicalSourceReelUrl`). */
+function canonicalSourceReelUrl(url: string): string {
+  try {
+    const u = new URL(url.trim())
+    u.protocol = 'https:'
+    u.hostname = u.hostname.replace(/^www\./i, '').toLowerCase()
+    const path = u.pathname.replace(/\/+$/, '')
+    u.pathname = path || '/'
+    u.search = ''
+    u.hash = ''
+    return u.toString()
+  } catch {
+    return url.trim()
+  }
+}
+
 const formatViewInput = (value: string) => {
   const digits = value.replace(/[^\d]/g, '')
   if (!digits) return ''
@@ -132,6 +154,22 @@ export default function FacebookScreen() {
     staleTime: 20_000,
   })
   const reelAlreadySaved = reelSavedCheck?.saved === true
+
+  const { data: myStories = [] } = useQuery({
+    queryKey: ['stories', 'my'],
+    queryFn: getMyStories,
+    enabled: activeView === 'reels',
+    staleTime: 30_000,
+  })
+
+  const savedCanonicalReelUrls = useMemo(() => {
+    const next = new Set<string>()
+    for (const s of myStories) {
+      const u = (s.sourceReelUrl || '').trim()
+      if (u) next.add(canonicalSourceReelUrl(u))
+    }
+    return next
+  }, [myStories])
   const createFanpageMutation = useMutation({
     mutationFn: createFanpage,
   })
@@ -543,6 +581,7 @@ export default function FacebookScreen() {
       })
       setStorySaveStatus('ok')
       void queryClient.invalidateQueries({ queryKey: ['stories', 'check-reel'] })
+      void queryClient.invalidateQueries({ queryKey: ['stories', 'my'] })
       window.setTimeout(() => setStorySaveStatus('idle'), 2800)
     } catch {
       setStorySaveStatus('error')
@@ -1487,7 +1526,9 @@ export default function FacebookScreen() {
             <section className="glass-panel rounded-3xl p-3">
             <h2 className="text-sm font-semibold text-white">Danh sách reels</h2>
               <div className="mt-2 space-y-2">
-              {scannedReels.map((reel) => (
+              {scannedReels.map((reel) => {
+                const reelSavedInList = savedCanonicalReelUrls.has(canonicalSourceReelUrl(reel.url))
+                return (
                 <article key={reel.id} className="rounded-2xl border border-blue-300/20 bg-blue-400/10 p-3">
                   <div className="flex gap-2">
                     {reel.imageUrl ? (
@@ -1502,7 +1543,24 @@ export default function FacebookScreen() {
                       </div>
                     )}
                     <div className="min-w-0 flex-1">
-                      <p className="line-clamp-2 text-xs font-medium text-slate-100">{reel.title}</p>
+                      <div className="flex items-start gap-1.5">
+                        <p className="line-clamp-2 min-w-0 flex-1 text-xs font-medium text-slate-100">{reel.title}</p>
+                        {reelSavedInList ? (
+                          <span
+                            className="relative inline-flex shrink-0 text-amber-200/90"
+                            title="Đã lưu vào story"
+                            aria-label="Đã lưu vào story"
+                          >
+                            <FiSave className="h-4 w-4" aria-hidden />
+                            <span
+                              className="pointer-events-none absolute -right-1 -top-1 flex h-3.5 w-3.5 items-center justify-center rounded-full border border-neutral-900/90 bg-emerald-500 text-white shadow-sm"
+                              aria-hidden
+                            >
+                              <FiCheck className="h-2 w-2 stroke-3" />
+                            </span>
+                          </span>
+                        ) : null}
+                      </div>
                       <p className="mt-1 line-clamp-1 text-[10px] text-slate-500">{reel.description || reel.url}</p>
                       <p className="mt-1 line-clamp-1 break-all text-[10px] text-slate-500">{reel.url}</p>
                     </div>
@@ -1518,7 +1576,8 @@ export default function FacebookScreen() {
                     </button>
                   </div>
                 </article>
-              ))}
+                )
+              })}
               {scannedReels.length === 0 ? (
                 <p className="rounded-xl border border-blue-300/20 bg-blue-400/10 px-3 py-2 text-[11px] text-slate-500">
                   Chưa có dữ liệu. Nhấn "Quét reels ngay" để lấy tối đa {MAX_SCAN_RESULTS} video theo ngưỡng lượt xem hiện tại.
