@@ -17,6 +17,14 @@ export class Story {
   @Prop({ default: '', trim: true })
   longContent: string;
 
+  /** Nội dung gốc / nguồn (copy từ reel, chat, v.v.) */
+  @Prop({ default: '', trim: true })
+  sourceContent: string;
+
+  /** Địa chỉ URL reel nguồn (Facebook hoặc nơi lấy nội dung) */
+  @Prop({ default: '', trim: true })
+  sourceReelUrl: string;
+
   /** Link bài viết blog đã đăng */
   @Prop({ default: '', trim: true })
   blogPostUrl: string;
