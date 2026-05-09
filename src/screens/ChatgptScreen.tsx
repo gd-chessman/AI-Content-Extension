@@ -107,11 +107,8 @@ export default function ChatgptScreen() {
   const { data: processSteps = [], isLoading: isLoadingProcessSteps } = useQuery<ProcessStep[]>({
     queryKey: ['chatgpt-process-steps'],
     queryFn: async () => {
-      const workflows = await getUserWorkflows()
-      const target =
-        workflows.find((item) => item.category === 'ai_video_creation' && (item.platform === 'chatgpt' || item.platform === 'multi')) ||
-        workflows.find((item) => item.category === 'ai_video_creation') ||
-        null
+      const workflows = await getUserWorkflows({ platform: 'chatgpt' })
+      const target = workflows[0] || null
       if (!target?._id) return []
       const detail = await getUserWorkflowDetail(target._id)
       return (detail.steps || [])

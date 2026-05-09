@@ -24,8 +24,12 @@ export type WorkflowDetail = WorkflowItem & {
   steps: WorkflowStep[]
 }
 
-export const getUserWorkflows = async () => {
-  const response = await axiosClient.get('/workflows/user')
+export const getUserWorkflows = async (params?: {
+  platform?: 'chatgpt' | 'grok' | 'facebook' | 'webblog' | 'ggsheet' | 'multi'
+}) => {
+  const response = await axiosClient.get('/workflows/user', {
+    params: params?.platform ? { platform: params.platform } : undefined,
+  })
   return (response.data || []) as WorkflowItem[]
 }
 
