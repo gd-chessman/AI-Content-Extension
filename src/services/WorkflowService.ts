@@ -76,6 +76,14 @@ export const createWorkflowRun = async (payload: {
   return response.data as WorkflowRunItem
 }
 
+/** Chi tiết một workflow run (payload gồm facebookCriteria từ Telegram, v.v.). */
+export const getWorkflowRunById = async (id: string) => {
+  const response = await axiosClient.get(`/workflow-runs/my/${id}`)
+  return response.data as WorkflowRunItem & {
+    payload?: { facebookCriteria?: Record<string, unknown>; source?: string }
+  }
+}
+
 export const updateWorkflowRun = async (
   runId: string,
   payload: {

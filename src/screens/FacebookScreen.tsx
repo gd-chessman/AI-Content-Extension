@@ -8,16 +8,21 @@ import {
   FiGlobe,
   FiInfo,
   FiMenu,
+  FiPlay,
   FiPlus,
+  FiRefreshCw,
   FiRotateCcw,
   FiSave,
   FiSearch,
+  FiSquare,
   FiTrash2,
   FiX,
   FiXCircle,
 } from 'react-icons/fi'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useAuth } from '@/hooks/useAuth'
 import translate from 'translate'
+import { isAxiosError } from 'axios'
 import {
   createFanpage,
   deleteAllFanpages,
@@ -31,6 +36,17 @@ import {
   getMyStories,
   incrementStoryUsage,
 } from '@/services/StoryService'
+import {
+  createStepRun,
+  createWorkflowRun,
+  createWorkflowRunEventSource,
+  getUserWorkflowDetail,
+  getUserWorkflows,
+  getWorkflowRunById,
+  updateStepRun,
+  updateWorkflowRun,
+  type WorkflowRunStreamEvent,
+} from '@/services/WorkflowService'
 
 type ScannedReel = {
   id: string
@@ -46,6 +62,18 @@ type FanpageItem = {
   _id: string
   name: string
   url: string
+}
+
+type FacebookProcessStep = {
+  id: string
+  label: string
+  prompt: string
+  workflowId: string
+  workflowPlatform: string
+  backendStepId: string
+  stepNo: number
+  actionType: string
+  inputSchema: Record<string, unknown>
 }
 
 type ExtensionChrome = {
@@ -111,6 +139,49 @@ function canonicalSourceReelUrl(url: string): string {
   }
 }
 
+/** `payload.facebookCriteria` (Telegram/SSE) gộp vào inputSchema theo từng bước Facebook. */
+function mergeFacebookStepCriteria(
+  step: FacebookProcessStep,
+  criteria: Record<string, unknown> | undefined,
+): FacebookProcessStep {
+  if (!criteria || Object.keys(criteria).length === 0) return step
+  const inputSchema: Record<string, unknown> = { ...(step.inputSchema || {}) }
+  const assignIf = (keys: string[]) => {
+    for (const k of keys) {
+      const v = criteria[k]
+      if (v !== undefined && v !== null && v !== '') inputSchema[k] = v
+    }
+  }
+  switch (step.actionType) {
+    case 'facebook_open_fanpage':
+      assignIf(['fanpageUrl', 'nameContains', 'pickIndex'])
+      break
+    case 'facebook_scan_reels':
+      assignIf(['minViews', 'maxViews', 'append'])
+      if (
+        criteria.fallbackFanpageCount !== undefined &&
+        criteria.fallbackFanpageCount !== null &&
+        criteria.fallbackFanpageCount !== ''
+      ) {
+        const n = Number(criteria.fallbackFanpageCount)
+        if (Number.isFinite(n) && n >= 0) inputSchema.fallbackFanpageCount = Math.floor(n)
+      }
+      break
+    case 'facebook_select_reel':
+      assignIf(['index', 'maxAppendRounds'])
+      if (inputSchema.index === undefined && criteria.reelIndex !== undefined) {
+        inputSchema.index = criteria.reelIndex
+      }
+      break
+    case 'facebook_wait_content':
+      assignIf(['minLength', 'timeoutMs'])
+      break
+    default:
+      break
+  }
+  return { ...step, inputSchema }
+}
+
 const formatViewInput = (value: string) => {
   const digits = value.replace(/[^\d]/g, '')
   if (!digits) return ''
@@ -122,6 +193,7 @@ export default function FacebookScreen() {
   const [openedFacebookUrls, setOpenedFacebookUrls] = useState<Set<string>>(new Set())
   const [scannedReels, setScannedReels] = useState<ScannedReel[]>([])
   const [hasMoreReels, setHasMoreReels] = useState(false)
+  const hasMoreReelsRef = useRef(false)
   const [scanStatus, setScanStatus] = useState('')
   const [isScanning, setIsScanning] = useState(false)
   const [minViewInput, setMinViewInput] = useState(formatViewInput(String(MIN_VIEW_COUNT)))
@@ -143,6 +215,14 @@ export default function FacebookScreen() {
   const [fanpageStatus, setFanpageStatus] = useState('')
   const [editingFanpages, setEditingFanpages] = useState<FanpageItem[]>([])
   const queryClient = useQueryClient()
+  const refreshRoleOnly = useAuth((s) => s.refreshRoleOnly)
+  const role = useAuth((s) => s.role)
+  const canUseWorkflow = role === 'user-vip' || role === 'admin'
+
+  useEffect(() => {
+    void refreshRoleOnly()
+  }, [refreshRoleOnly])
+
   const { data: fanpages = [], isLoading: isLoadingFanpages } = useQuery<FanpageItem[]>({
     queryKey: ['fanpages'],
     queryFn: getFanpages,
@@ -170,6 +250,33 @@ export default function FacebookScreen() {
     }
     return next
   }, [myStories])
+
+  const { data: fbWorkflowSteps = [], isLoading: isLoadingFbWorkflowSteps } = useQuery<FacebookProcessStep[]>({
+    queryKey: ['facebook-workflow-steps'],
+    queryFn: async () => {
+      const workflows = await getUserWorkflows({ platform: 'facebook' })
+      const target = workflows[0] || null
+      if (!target?._id) return []
+      const detail = await getUserWorkflowDetail(target._id)
+      return (detail.steps || [])
+        .slice()
+        .sort((a, b) => (a.stepNo || 0) - (b.stepNo || 0))
+        .map((step) => ({
+          id: `fb-step-${step.stepNo}`,
+          label: (step.title || '').trim() || `Bước ${step.stepNo}`,
+          prompt: (step.prompt || step.instruction || '').trim(),
+          workflowId: target._id,
+          workflowPlatform: (target.platform || 'facebook').trim().toLowerCase(),
+          backendStepId: (step._id || '').trim(),
+          stepNo: Number(step.stepNo) || 0,
+          actionType: (step.actionType || 'custom').trim(),
+          inputSchema: (step.inputSchema || {}) as Record<string, unknown>,
+        }))
+        .filter((step) => step.backendStepId && step.workflowId)
+    },
+    staleTime: 60_000,
+  })
+
   const createFanpageMutation = useMutation({
     mutationFn: createFanpage,
   })
@@ -186,6 +293,19 @@ export default function FacebookScreen() {
   const isContentDirtyRef = useRef(false)
   const contentTextareaRef = useRef<HTMLTextAreaElement | null>(null)
   const scanControlRef = useRef<{ token: string; tabId: number } | null>(null)
+  const isScanningRef = useRef(false)
+  const scanResultRef = useRef<ScannedReel[]>([])
+  const contentTextRef = useRef('')
+  const selectedReelRef = useRef<ScannedReel | null>(null)
+  /** Fanpage URL vừa mở trong workflow — dùng để chọn đúng tab Facebook khi side panel không active tab fanpage */
+  const workflowFanpageUrlRef = useRef<string | null>(null)
+  /** Chỉ số fanpage trong `fanpages` đã mở ở bước `facebook_open_fanpage` — dùng cho fallbackFanpageCount. */
+  const workflowOpenedFanpageIndexRef = useRef<number | null>(null)
+  const fbWorkflowStopRef = useRef(false)
+  const runningFbWorkflowRunIdRef = useRef('')
+  const [fbWorkflowStatus, setFbWorkflowStatus] = useState('')
+  const [isFbWorkflowRunning, setIsFbWorkflowRunning] = useState(false)
+  const [isFbWorkflowStopping, setIsFbWorkflowStopping] = useState(false)
   const scanStatusLower = scanStatus.toLowerCase()
   const scanStatusTone = scanStatusLower.includes('thất bại') || scanStatusLower.includes('không thể') || scanStatusLower.includes('không tìm thấy')
     ? 'error'
@@ -204,6 +324,26 @@ export default function FacebookScreen() {
   useEffect(() => {
     isContentDirtyRef.current = isContentDirty
   }, [isContentDirty])
+
+  useEffect(() => {
+    isScanningRef.current = isScanning
+  }, [isScanning])
+
+  useEffect(() => {
+    hasMoreReelsRef.current = hasMoreReels
+  }, [hasMoreReels])
+
+  useEffect(() => {
+    scanResultRef.current = scannedReels
+  }, [scannedReels])
+
+  useEffect(() => {
+    contentTextRef.current = contentText
+  }, [contentText])
+
+  useEffect(() => {
+    selectedReelRef.current = selectedReel
+  }, [selectedReel])
 
   useEffect(() => {
     const textarea = contentTextareaRef.current
@@ -230,6 +370,24 @@ export default function FacebookScreen() {
   }, [selectedReel])
 
   const normalizeUrl = (value: string) => (value.endsWith('/') ? value.slice(0, -1) : value)
+
+  const tabMatchesFanpageUrl = (tabUrl: string, fanpageUrl: string) => {
+    try {
+      const current = new URL(tabUrl)
+      const allowed = new URL(fanpageUrl)
+      if (current.hostname !== allowed.hostname) return false
+      const currentPath = normalizeUrl(current.pathname)
+      const allowedPath = normalizeUrl(allowed.pathname)
+      const currentId = current.searchParams.get('id')
+      const allowedId = allowed.searchParams.get('id')
+      if (allowedPath === '/profile.php') {
+        return currentPath === '/profile.php' && !!allowedId && currentId === allowedId
+      }
+      return currentPath === allowedPath || currentPath.startsWith(`${allowedPath}/`)
+    } catch {
+      return false
+    }
+  }
 
   /** Cùng reel dù Facebook thêm/khác query trên thanh địa chỉ */
   const isSameReelTabUrl = (tabUrl: string | undefined, targetUrl: string) => {
@@ -820,11 +978,26 @@ export default function FacebookScreen() {
     }
   }, [activeView, selectedReel])
 
-  const handleScanReels = (append = false) => {
+  /** Khi workflow gọi ngay sau setMinViewInput, state React chưa kịp cập nhật — phải truyền bounds trực tiếp. */
+  const handleScanReels = (
+    append = false,
+    viewBounds?: { minViews: number; maxViews?: number },
+  ) => {
     const extensionChrome = (globalThis as { chrome?: ExtensionChrome }).chrome
-    const minViewCount = Number(minViewInput.replace(/[^\d]/g, '')) || MIN_VIEW_COUNT
-    const parsedMaxView = Number(maxViewInput.replace(/[^\d]/g, ''))
-    const maxViewCount = Number.isFinite(parsedMaxView) && parsedMaxView > 0 ? parsedMaxView : Number.POSITIVE_INFINITY
+    const minViewCount = viewBounds
+      ? Math.max(1, Math.floor(viewBounds.minViews))
+      : Number(minViewInput.replace(/[^\d]/g, '')) || MIN_VIEW_COUNT
+
+    let maxViewCount: number
+    if (viewBounds) {
+      const mv = viewBounds.maxViews
+      maxViewCount =
+        mv != null && Number.isFinite(mv) && mv > 0 ? mv : Number.POSITIVE_INFINITY
+    } else {
+      const parsedMaxView = Number(maxViewInput.replace(/[^\d]/g, ''))
+      maxViewCount =
+        Number.isFinite(parsedMaxView) && parsedMaxView > 0 ? parsedMaxView : Number.POSITIVE_INFINITY
+    }
     const maxViewArg = Number.isFinite(maxViewCount) && maxViewCount !== Number.POSITIVE_INFINITY ? maxViewCount : -1
 
     if (!extensionChrome?.tabs?.query || !extensionChrome?.scripting?.executeScript) {
@@ -849,43 +1022,39 @@ export default function FacebookScreen() {
         ? 'Đang quét thêm reels theo khoảng lượt xem...'
         : 'Đang quét reels theo khoảng lượt xem — extension sẽ cuộn trang để tải thêm video nếu cần...',
     )
-    extensionChrome.tabs.query({ url: ['*://*.facebook.com/*'], active: true, currentWindow: true }, async (activeTabs) => {
-      const targetTab = activeTabs[0]
+    extensionChrome.tabs.query({ url: ['*://*.facebook.com/*'], currentWindow: true }, async (fbTabs) => {
+      const list = fbTabs || []
+      const pickTab = (): (typeof list)[number] | undefined => {
+        const prefer = workflowFanpageUrlRef.current?.trim()
+        if (prefer) {
+          const hit = list.find((t) => t.url && tabMatchesFanpageUrl(t.url, prefer))
+          if (hit?.id != null && extensionChrome.tabs?.update) {
+            extensionChrome.tabs.update(hit.id, { active: true })
+            return hit
+          }
+          if (hit) return hit
+        }
+        const allowed = (u: string) => fanpages.some((page) => tabMatchesFanpageUrl(u, page.url))
+        const activeOk = list.find((t) => t.active && t.url && allowed(t.url))
+        if (activeOk) return activeOk
+        const anyOk = list.find((t) => t.url && allowed(t.url))
+        if (anyOk) return anyOk
+        return list.find((t) => t.active) || list[0]
+      }
+      const targetTab = pickTab()
 
       if (!targetTab?.id) {
-        setScanStatus('Hãy mở fanpage Facebook cần quét trong tab hiện tại trước.')
+        setScanStatus('Hãy mở fanpage Facebook cần quét trong cửa sổ (tab Facebook).')
         setScannedReels([])
         setIsScanning(false)
         return
       }
 
       const targetUrl = targetTab.url || ''
-      const isAllowedFanpageTab = fanpages.some((page) => {
-        try {
-          const current = new URL(targetUrl)
-          const allowed = new URL(page.url)
-
-          if (current.hostname !== allowed.hostname) return false
-
-          const currentPath = normalizeUrl(current.pathname)
-          const allowedPath = normalizeUrl(allowed.pathname)
-          const currentId = current.searchParams.get('id')
-          const allowedId = allowed.searchParams.get('id')
-
-          // For profile URLs, ensure profile id matches the configured fanpage.
-          if (allowedPath === '/profile.php') {
-            return currentPath === '/profile.php' && !!allowedId && currentId === allowedId
-          }
-
-          // For normal page URLs, require same page path (allow deeper sub paths).
-          return currentPath === allowedPath || currentPath.startsWith(`${allowedPath}/`)
-        } catch {
-          return false
-        }
-      })
+      const isAllowedFanpageTab = fanpages.some((page) => tabMatchesFanpageUrl(targetUrl, page.url))
 
       if (!isAllowedFanpageTab) {
-        setScanStatus('Chỉ quét khi tab hiện tại là fanpage có trong danh sách.')
+        setScanStatus('Chỉ quét khi có tab fanpage có trong danh sách (hoặc đúng fanpage workflow).')
         setScannedReels([])
         setIsScanning(false)
         return
@@ -1108,11 +1277,16 @@ export default function FacebookScreen() {
         const reels = payload.rows || []
         setHasMoreReels(Boolean(payload.hasMore))
         setScannedReels((prev) => {
-          if (!append) return reels
+          if (!append) {
+            scanResultRef.current = reels
+            return reels
+          }
           const map = new Map<string, ScannedReel>()
           prev.forEach((item) => map.set(item.url, item))
           reels.forEach((item) => map.set(item.url, item))
-          return Array.from(map.values())
+          const merged = Array.from(map.values())
+          scanResultRef.current = merged
+          return merged
         })
         const rangeLabel =
           Number.isFinite(maxViewCount) && maxViewCount !== Number.POSITIVE_INFINITY
@@ -1153,6 +1327,436 @@ export default function FacebookScreen() {
     })
     setScanStatus('Đang dừng quét...')
   }
+
+  const sleep = (ms: number) => new Promise<void>((r) => window.setTimeout(r, ms))
+
+  const waitScanIdle = (timeoutMs = 180_000) =>
+    new Promise<void>((resolve, reject) => {
+      const started = Date.now()
+      const tick = () => {
+        if (!isScanningRef.current) {
+          resolve()
+          return
+        }
+        if (Date.now() - started > timeoutMs) {
+          reject(new Error('Timeout khi chờ quét reels'))
+          return
+        }
+        window.setTimeout(tick, 250)
+      }
+      tick()
+    })
+
+  const executeFacebookWorkflowStep = async (
+    step: FacebookProcessStep,
+  ): Promise<Record<string, unknown>> => {
+    const schema = step.inputSchema || {}
+    switch (step.actionType) {
+      case 'facebook_open_fanpage': {
+        let url = (schema.fanpageUrl as string | undefined)?.trim()
+        const pickRaw = schema.pickIndex
+        const pickIndex = pickRaw !== undefined && pickRaw !== null ? Number(pickRaw) : NaN
+        const nameContains = (schema.nameContains as string | undefined)?.trim().toLowerCase()
+        if (!url && nameContains) {
+          const fp = fanpages.find((p) => p.name.toLowerCase().includes(nameContains))
+          if (!fp) throw new Error(`Không tìm thấy fanpage chứa "${nameContains}"`)
+          url = fp.url
+        }
+        if (!url && Number.isFinite(pickIndex) && pickIndex >= 0) {
+          const fp = fanpages[pickIndex]
+          if (!fp) throw new Error(`Không có fanpage tại pickIndex=${pickIndex}`)
+          url = fp.url
+        }
+        if (!url) throw new Error('facebook_open_fanpage: thêm fanpageUrl, nameContains hoặc pickIndex trong inputSchema')
+
+        let openedListIndex: number | null = null
+        if (Number.isFinite(pickIndex) && pickIndex >= 0) {
+          openedListIndex = Math.floor(pickIndex)
+        } else {
+          const idx = fanpages.findIndex((p) => {
+            try {
+              return tabMatchesFanpageUrl(url, p.url)
+            } catch {
+              return false
+            }
+          })
+          openedListIndex = idx >= 0 ? idx : null
+        }
+        workflowOpenedFanpageIndexRef.current = openedListIndex
+
+        openFanpage(url)
+        workflowFanpageUrlRef.current = url
+        setActiveView('reels')
+        await sleep(2500)
+        return { fanpageUrl: url }
+      }
+      case 'facebook_scan_reels': {
+        const minV = schema.minViews != null ? Number(schema.minViews) : MIN_VIEW_COUNT
+        const maxV = schema.maxViews != null ? Number(schema.maxViews) : NaN
+        const minSafe = Number.isFinite(minV) && minV > 0 ? minV : MIN_VIEW_COUNT
+        const maxFinite = Number.isFinite(maxV) && maxV > 0 ? maxV : undefined
+        const viewBounds = {
+          minViews: minSafe,
+          ...(maxFinite != null ? { maxViews: maxFinite } : {}),
+        }
+        const fbCountRaw = schema.fallbackFanpageCount != null ? Number(schema.fallbackFanpageCount) : 0
+        const fallbackFanpageCount =
+          Number.isFinite(fbCountRaw) && fbCountRaw >= 0 ? Math.floor(fbCountRaw) : 0
+        const baseFanpageIdx = workflowOpenedFanpageIndexRef.current
+
+        const pollRowsAfterScan = async () => {
+          let rows = scanResultRef.current
+          for (let i = 0; i < 40 && rows.length === 0; i++) {
+            await sleep(250)
+            rows = scanResultRef.current
+          }
+          return rows
+        }
+
+        const runScanPass = async (appendFlag: boolean) => {
+          setMinViewInput(formatViewInput(String(minSafe)))
+          setMaxViewInput(maxFinite != null ? formatViewInput(String(maxFinite)) : '')
+          handleScanReels(appendFlag, viewBounds)
+          await waitScanIdle()
+          await sleep(400)
+          return pollRowsAfterScan()
+        }
+
+        let rows = await runScanPass(Boolean(schema.append))
+        let scanPasses = 1
+
+        if (rows.length === 0 && fallbackFanpageCount > 0 && baseFanpageIdx !== null && baseFanpageIdx >= 0) {
+          for (let step = 1; step <= fallbackFanpageCount; step += 1) {
+            const nextIdx = baseFanpageIdx + step
+            if (nextIdx >= fanpages.length) break
+            const fp = fanpages[nextIdx]
+            const nextUrl = fp?.url?.trim()
+            if (!nextUrl) continue
+            openFanpage(nextUrl)
+            workflowFanpageUrlRef.current = nextUrl
+            workflowOpenedFanpageIndexRef.current = nextIdx
+            setActiveView('reels')
+            await sleep(2500)
+            scanPasses += 1
+            rows = await runScanPass(false)
+            if (rows.length > 0) break
+          }
+        }
+
+        return { scannedCount: rows.length, scanPasses, fallbackFanpageCount }
+      }
+      case 'facebook_select_reel': {
+        const idx = schema.index != null ? Number(schema.index) : 0
+        if (!Number.isFinite(idx) || idx < 0) {
+          throw new Error('facebook_select_reel: index không hợp lệ')
+        }
+        const maxAppendRounds =
+          schema.maxAppendRounds != null && Number.isFinite(Number(schema.maxAppendRounds))
+            ? Math.max(0, Number(schema.maxAppendRounds))
+            : 8
+
+        const pollUntilRows = async () => {
+          let rows = scanResultRef.current
+          for (let i = 0; i < 40 && rows.length === 0; i++) {
+            await sleep(250)
+            rows = scanResultRef.current
+          }
+          return rows
+        }
+
+        let appendRound = 0
+
+        while (true) {
+          if (fbWorkflowStopRef.current) throw new Error('Đã dừng workflow')
+
+          const stories = await queryClient.fetchQuery({
+            queryKey: ['stories', 'my'],
+            queryFn: getMyStories,
+          })
+          const savedSet = new Set<string>()
+          for (const s of stories) {
+            const u = (s.sourceReelUrl || '').trim()
+            if (u) savedSet.add(canonicalSourceReelUrl(u))
+          }
+
+          let rows = scanResultRef.current
+          if (rows.length === 0) rows = await pollUntilRows()
+
+          const unsaved = rows.filter((r) => !savedSet.has(canonicalSourceReelUrl(r.url)))
+          const reel = unsaved[idx]
+
+          if (reel) {
+            handleSelectReel(reel)
+            await sleep(900)
+            return {
+              reelUrl: reel.url,
+              unsavedIndex: idx,
+              unsavedCount: unsaved.length,
+              appendRoundsUsed: appendRound,
+            }
+          }
+
+          if (rows.length === 0) {
+            throw new Error(`Không có reel sau quét (cần reel chưa lưu tại index=${idx}).`)
+          }
+
+          const canAppend = hasMoreReelsRef.current && appendRound < maxAppendRounds
+
+          if (!canAppend) {
+            if (unsaved.length === 0) {
+              throw new Error(
+                `Không có reel chưa lưu (${rows.length} reel đều đã lưu). Đã hết reel để quét thêm hoặc đạt giới hạn quét thêm (${maxAppendRounds} lần).`,
+              )
+            }
+            throw new Error(
+              `Không đủ reel chưa lưu tại index=${idx} (chỉ còn ${unsaved.length} reel chưa lưu).`,
+            )
+          }
+
+          appendRound += 1
+          const scanMin = schema.minViews != null ? Number(schema.minViews) : MIN_VIEW_COUNT
+          const scanMax = schema.maxViews != null ? Number(schema.maxViews) : NaN
+          const scanMinSafe = Number.isFinite(scanMin) && scanMin > 0 ? scanMin : MIN_VIEW_COUNT
+          const scanMaxFinite = Number.isFinite(scanMax) && scanMax > 0 ? scanMax : undefined
+          handleScanReels(true, {
+            minViews: scanMinSafe,
+            ...(scanMaxFinite != null ? { maxViews: scanMaxFinite } : {}),
+          })
+          await waitScanIdle()
+          await sleep(500)
+        }
+      }
+      case 'facebook_wait_content': {
+        const minLen = schema.minLength != null ? Number(schema.minLength) : 30
+        const timeoutMs = schema.timeoutMs != null ? Number(schema.timeoutMs) : 90_000
+        const t0 = Date.now()
+        while (Date.now() - t0 < timeoutMs) {
+          if (fbWorkflowStopRef.current) throw new Error('Đã dừng workflow')
+          const sr = selectedReelRef.current
+          if (sr) refreshSelectedReelFromFacebook(sr)
+          await sleep(1600)
+          if ((contentTextRef.current || '').trim().length >= minLen) {
+            return { contentLength: contentTextRef.current.trim().length }
+          }
+        }
+        throw new Error('Timeout chờ nội dung caption đủ dài')
+      }
+      case 'facebook_save_story': {
+        const sr = selectedReelRef.current
+        const text = contentTextRef.current.trim()
+        if (!sr?.url || !text) throw new Error('Thiếu reel hoặc nội dung để lưu')
+        try {
+          await createStoryFromReel({
+            sourceContent: text,
+            sourceReelUrl: sr.url.trim(),
+            name: (sr.title || '').trim().slice(0, 200),
+          })
+        } catch (e: unknown) {
+          if (isAxiosError(e) && e.response?.status === 409) {
+            return { skipped: true, reason: 'duplicate_reel' }
+          }
+          throw e
+        }
+        void queryClient.invalidateQueries({ queryKey: ['stories', 'check-reel'] })
+        void queryClient.invalidateQueries({ queryKey: ['stories', 'my'] })
+        return { saved: true }
+      }
+      default:
+        throw new Error(`Bước chưa hỗ trợ trên Facebook: ${step.actionType}`)
+    }
+  }
+
+  const stopFbWorkflowRun = () => {
+    fbWorkflowStopRef.current = true
+    setIsFbWorkflowStopping(true)
+    setFbWorkflowStatus('Đang dừng workflow sau bước hiện tại…')
+  }
+
+  const runFbWorkflow = async (options?: {
+    runId?: string
+    workflowId?: string
+    source?: string
+    /** Tiêu chí ghi đè (Telegram `payload.facebookCriteria` hoặc mở rộng sau này). */
+    facebookCriteria?: Record<string, unknown>
+  }) => {
+    if (!canUseWorkflow) {
+      setFbWorkflowStatus('Workflow chỉ dành cho VIP hoặc admin.')
+      return
+    }
+    const extensionChrome = (globalThis as { chrome?: ExtensionChrome }).chrome
+    if (!extensionChrome?.tabs?.query || !extensionChrome?.scripting?.executeScript) {
+      setFbWorkflowStatus('Cần extension Chrome (tabs + scripting).')
+      return
+    }
+    if (!fbWorkflowSteps.length || isFbWorkflowRunning) return
+
+    const first = fbWorkflowSteps[0]
+    if (!first?.workflowId) {
+      setFbWorkflowStatus('Chưa có workflow Facebook trên backend.')
+      return
+    }
+    if (options?.workflowId && options.workflowId !== first.workflowId) {
+      setFbWorkflowStatus('Workflow không khớp với dữ liệu đang tải.')
+      return
+    }
+
+    setIsFbWorkflowRunning(true)
+    setIsFbWorkflowStopping(false)
+    fbWorkflowStopRef.current = false
+
+    let workflowRunId = options?.runId || ''
+    runningFbWorkflowRunIdRef.current = workflowRunId
+
+    let facebookCriteria = options?.facebookCriteria
+    if (workflowRunId && facebookCriteria === undefined && options?.source === 'sse') {
+      try {
+        const r = await getWorkflowRunById(workflowRunId)
+        const raw = r.payload?.facebookCriteria
+        if (raw && typeof raw === 'object' && Object.keys(raw).length > 0) {
+          facebookCriteria = raw as Record<string, unknown>
+        }
+      } catch {
+        /* payload có thể đã có trên SSE */
+      }
+    }
+
+    try {
+      if (!workflowRunId) {
+        setFbWorkflowStatus(`Tạo workflow run (${fbWorkflowSteps.length} bước)…`)
+        const run = await createWorkflowRun({
+          workflowId: first.workflowId,
+          payload: { source: options?.source || 'facebook_screen', totalSteps: fbWorkflowSteps.length },
+        })
+        workflowRunId = run._id
+        runningFbWorkflowRunIdRef.current = workflowRunId
+      } else {
+        await updateWorkflowRun(workflowRunId, {
+          status: 'running',
+          progress: 0,
+          currentStepNo: 0,
+          startedAt: new Date().toISOString(),
+          finishedAt: null,
+          result: {},
+          error: { code: '', message: '', details: {} },
+        })
+      }
+
+      for (let index = 0; index < fbWorkflowSteps.length; index += 1) {
+        const step = fbWorkflowSteps[index]
+        const effectiveStep = mergeFacebookStepCriteria(step, facebookCriteria)
+        const stepNo = step.stepNo || index + 1
+        const progress = Math.round((index / fbWorkflowSteps.length) * 100)
+
+        await updateWorkflowRun(workflowRunId, {
+          status: 'running',
+          currentStepNo: stepNo,
+          progress,
+        })
+
+        setFbWorkflowStatus(`Workflow: ${step.label} (${index + 1}/${fbWorkflowSteps.length})`)
+
+        const stepRun = await createStepRun({
+          workflowRunId,
+          workflowId: step.workflowId,
+          stepId: step.backendStepId,
+          stepNo,
+          stepTitle: step.label,
+          status: 'running',
+          input: {
+            actionType: effectiveStep.actionType,
+            inputSchema: effectiveStep.inputSchema || {},
+          },
+        })
+
+        try {
+          const output = await executeFacebookWorkflowStep(effectiveStep)
+          await updateStepRun(stepRun._id, {
+            status: 'completed',
+            output: output as Record<string, unknown>,
+            finishedAt: new Date().toISOString(),
+          })
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : 'Step failed'
+          await updateStepRun(stepRun._id, {
+            status: 'failed',
+            error: { message: errorMessage },
+            finishedAt: new Date().toISOString(),
+          })
+          await updateWorkflowRun(workflowRunId, {
+            status: 'failed',
+            progress,
+            currentStepNo: stepNo,
+            error: { code: 'STEP_FAILED', message: errorMessage, details: { stepNo } },
+            finishedAt: new Date().toISOString(),
+          })
+          throw error
+        }
+
+        if (fbWorkflowStopRef.current) {
+          await updateWorkflowRun(workflowRunId, {
+            status: 'cancelled',
+            progress: Math.round(((index + 1) / fbWorkflowSteps.length) * 100),
+            currentStepNo: stepNo,
+            finishedAt: new Date().toISOString(),
+          })
+          setFbWorkflowStatus(`Đã dừng tại: ${step.label}`)
+          return
+        }
+      }
+
+      await updateWorkflowRun(workflowRunId, {
+        status: 'completed',
+        progress: 100,
+        currentStepNo: fbWorkflowSteps[fbWorkflowSteps.length - 1]?.stepNo || fbWorkflowSteps.length,
+        result: { completedSteps: fbWorkflowSteps.length },
+        finishedAt: new Date().toISOString(),
+      })
+      setFbWorkflowStatus(`Hoàn tất ${fbWorkflowSteps.length} bước.`)
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : 'Workflow lỗi'
+      if (!workflowRunId) {
+        setFbWorkflowStatus('Không tạo được workflow run.')
+      } else if (!fbWorkflowStopRef.current) {
+        setFbWorkflowStatus(`Lỗi: ${msg}`)
+      }
+    } finally {
+      fbWorkflowStopRef.current = false
+      workflowFanpageUrlRef.current = null
+      workflowOpenedFanpageIndexRef.current = null
+      runningFbWorkflowRunIdRef.current = ''
+      setIsFbWorkflowRunning(false)
+      setIsFbWorkflowStopping(false)
+    }
+  }
+
+  useEffect(() => {
+    if (!canUseWorkflow || !fbWorkflowSteps.length) return
+    const eventSource = createWorkflowRunEventSource()
+    eventSource.onmessage = (event) => {
+      try {
+        const payload = JSON.parse(String(event.data || '{}')) as WorkflowRunStreamEvent
+        if (payload?.type !== 'workflow_run_created') return
+        const run = payload.run
+        if (!run?._id || !run?.workflowId) return
+        if ((run.status || '').toLowerCase() !== 'queued') return
+        if (run.workflowId !== fbWorkflowSteps[0]?.workflowId) return
+        if (isFbWorkflowRunning) return
+        if (runningFbWorkflowRunIdRef.current === run._id) return
+        setFbWorkflowStatus(`SSE: chạy workflow ${run._id}`)
+        const runPayload = (run.payload || {}) as { facebookCriteria?: Record<string, unknown> }
+        void runFbWorkflow({
+          runId: run._id,
+          workflowId: run.workflowId,
+          facebookCriteria: runPayload.facebookCriteria,
+        })
+      } catch {
+        /* ignore */
+      }
+    }
+    eventSource.onerror = () => {}
+    return () => eventSource.close()
+    // Không phụ thuộc isFbWorkflowRunning để tránh đóng/mở SSE giữa chừng khi chạy workflow
+  }, [canUseWorkflow, fbWorkflowSteps])
 
   useEffect(() => {
     syncOpenedFacebookTabs()
@@ -1197,6 +1801,51 @@ export default function FacebookScreen() {
           </button>
         </div>
       </section>
+
+      {canUseWorkflow ? (
+        <section className="mb-3 rounded-2xl border border-violet-400/25 bg-violet-500/10 px-3 py-2">
+          <div className="flex items-center gap-2">
+            {isFbWorkflowRunning ? (
+              <button
+                type="button"
+                onClick={stopFbWorkflowRun}
+                disabled={isFbWorkflowStopping}
+                className="inline-flex h-8 shrink-0 cursor-pointer items-center justify-center rounded-lg bg-rose-500/25 px-2 text-rose-100 transition hover:bg-rose-500/35 disabled:cursor-not-allowed disabled:opacity-50"
+                title={isFbWorkflowStopping ? 'Đang dừng…' : 'Dừng workflow'}
+                aria-label="Dừng workflow Facebook"
+              >
+                {isFbWorkflowStopping ? (
+                  <FiRefreshCw className="h-4 w-4 animate-spin" aria-hidden />
+                ) : (
+                  <FiSquare className="h-4 w-4" aria-hidden />
+                )}
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => void runFbWorkflow()}
+                disabled={!fbWorkflowSteps.length || isLoadingFbWorkflowSteps}
+                className="inline-flex h-8 shrink-0 cursor-pointer items-center justify-center rounded-lg bg-violet-500/25 px-2 text-violet-100 transition hover:bg-violet-500/35 disabled:cursor-not-allowed disabled:opacity-50"
+                title="Chạy workflow Facebook"
+                aria-label="Chạy workflow Facebook"
+              >
+                <FiPlay className="h-4 w-4" aria-hidden />
+              </button>
+            )}
+            <p className="min-w-0 flex-1 text-[11px] leading-snug text-slate-400">
+              {isLoadingFbWorkflowSteps
+                ? 'Đang tải workflow…'
+                : fbWorkflowStatus ||
+                  'Workflow VIP: theo bước trên backend — fanpage → quét reel → chọn chi tiết → chờ nội dung → lưu.'}
+            </p>
+          </div>
+          {!isLoadingFbWorkflowSteps && !fbWorkflowSteps.length ? (
+            <p className="mt-1.5 text-[10px] text-amber-200/90">
+              Chưa cấu hình steps cho workflow platform facebook (admin).
+            </p>
+          ) : null}
+        </section>
+      ) : null}
 
       <div className={activeView === 'content' ? 'relative min-h-0 flex flex-1 pr-1' : 'relative min-h-0 flex-1 space-y-3 overflow-y-auto pr-1'}>
         {activeView === 'fanpages' ? (
