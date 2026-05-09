@@ -5,6 +5,7 @@ import { Model, Types } from 'mongoose';
 import { User, UserDocument } from '../users/users.schema';
 import { Workflow, WorkflowDocument, WorkflowStatus } from '../workflows/workflow.schema';
 import { WorkflowRun, WorkflowRunDocument, WorkflowRunStatus } from '../workflow-runs/workflow-run.schema';
+import { WorkflowRunEvent, WorkflowRunsEvents } from '../workflow-runs/workflow-runs.events';
 
 type TelegramUpdate = {
   update_id: number;
@@ -26,6 +27,14 @@ export class TelegramBotService implements OnModuleInit, OnModuleDestroy {
   private stopped = false;
   private offset = 0;
   private loopPromise: Promise<void> | null = null;
+  private readonly runNotifyCache = new Map<
+    string,
+    {
+      status: string;
+      currentStepNo: number;
+      progress: number;
+    }
+  >();
 
   constructor(
     private readonly configService: ConfigService,
@@ -35,6 +44,7 @@ export class TelegramBotService implements OnModuleInit, OnModuleDestroy {
     private readonly workflowModel: Model<WorkflowDocument>,
     @InjectModel(WorkflowRun.name)
     private readonly workflowRunModel: Model<WorkflowRunDocument>,
+    private readonly workflowRunsEvents: WorkflowRunsEvents,
   ) {
     this.token = (this.configService.get<string>('TELEGRAM_BOT_TOKEN') || '').trim();
     this.enabled = ((this.configService.get<string>('TELEGRAM_BOT_ENABLED') || 'true').trim().toLowerCase() !== 'false');
@@ -53,6 +63,7 @@ export class TelegramBotService implements OnModuleInit, OnModuleDestroy {
 
     try {
       await this.bootstrapOffset();
+      this.bindWorkflowRunNotifications();
       this.loopPromise = this.pollLoop();
       this.logger.log('Telegram bot polling started.');
     } catch (error) {
@@ -89,6 +100,124 @@ export class TelegramBotService implements OnModuleInit, OnModuleDestroy {
         this.logger.warn(`Telegram polling warning: ${message}`);
       }
     }
+  }
+
+  private bindWorkflowRunNotifications() {
+    this.workflowRunsEvents.events$.subscribe({
+      next: (event) => {
+        void this.handleWorkflowRunEvent(event);
+      },
+      error: (error) => {
+        const message = error instanceof Error ? error.message : 'Unknown event stream error';
+        this.logger.warn(`Workflow run event stream warning: ${message}`);
+      },
+    });
+  }
+
+  private async handleWorkflowRunEvent(event: WorkflowRunEvent) {
+    const run = event.run || {};
+    const runId = String(run._id || '').trim();
+    if (!runId) return;
+
+    const payload = (run.payload || {}) as Record<string, unknown>;
+    const source = String(payload.source || '').trim().toLowerCase();
+    if (source !== 'telegram_bot') return;
+
+    const chatIdRaw = Number(payload.chatId || 0);
+    if (!chatIdRaw) return;
+
+    const status = String(run.status || '').trim().toLowerCase();
+    const progress = Number(run.progress || 0);
+    const currentStepNo = Number(run.currentStepNo || 0);
+
+    const prev = this.runNotifyCache.get(runId);
+    const statusChanged = !prev || prev.status !== status;
+    const stepChanged = !prev || prev.currentStepNo !== currentStepNo;
+    const progressChanged = !prev || prev.progress !== progress;
+
+    // Always notify final states, notify when status changes, and
+    // while running notify when step changes to avoid too many messages.
+    const shouldNotify =
+      ['completed', 'failed', 'cancelled'].includes(status) ||
+      statusChanged ||
+      (status === 'running' && stepChanged) ||
+      (status === 'running' && progressChanged && progress % 25 === 0);
+    if (!shouldNotify) return;
+
+    this.runNotifyCache.set(runId, {
+      status,
+      currentStepNo,
+      progress,
+    });
+
+    const workflowName = await this.resolveWorkflowName(run.workflowId);
+    const message = this.buildRunStatusMessage({
+      runId,
+      workflowName,
+      status,
+      progress,
+      currentStepNo,
+      error: run.error as Record<string, unknown> | undefined,
+    });
+    await this.sendMessage(chatIdRaw, message);
+
+    if (['completed', 'failed', 'cancelled'].includes(status)) {
+      this.runNotifyCache.delete(runId);
+    }
+  }
+
+  private buildRunStatusMessage(params: {
+    runId: string;
+    workflowName: string;
+    status: string;
+    progress: number;
+    currentStepNo: number;
+    error?: Record<string, unknown>;
+  }) {
+    const { runId, workflowName, status, progress, currentStepNo, error } = params;
+    if (status === WorkflowRunStatus.RUNNING) {
+      return [
+        `Workflow dang chay: ${workflowName}`,
+        `Run ID: ${runId}`,
+        `Tien do: ${Math.max(0, Math.min(100, Math.round(progress)))}%`,
+        `Step hien tai: ${Math.max(0, Math.floor(currentStepNo))}`,
+      ].join('\n');
+    }
+    if (status === WorkflowRunStatus.COMPLETED) {
+      return [
+        `Workflow hoan tat: ${workflowName}`,
+        `Run ID: ${runId}`,
+        `Ket qua: thanh cong`,
+      ].join('\n');
+    }
+    if (status === WorkflowRunStatus.CANCELLED) {
+      return [
+        `Workflow da dung: ${workflowName}`,
+        `Run ID: ${runId}`,
+        `Trang thai: cancelled`,
+      ].join('\n');
+    }
+    if (status === WorkflowRunStatus.FAILED) {
+      const errorMessage = String(error?.message || '').trim();
+      return [
+        `Workflow that bai: ${workflowName}`,
+        `Run ID: ${runId}`,
+        errorMessage ? `Loi: ${errorMessage}` : 'Loi: khong ro',
+      ].join('\n');
+    }
+    return [
+      `Workflow cap nhat: ${workflowName}`,
+      `Run ID: ${runId}`,
+      `Trang thai: ${status || 'unknown'}`,
+      `Tien do: ${Math.max(0, Math.min(100, Math.round(progress)))}%`,
+    ].join('\n');
+  }
+
+  private async resolveWorkflowName(workflowId: unknown) {
+    const value = String(workflowId || '').trim();
+    if (!Types.ObjectId.isValid(value)) return 'Workflow';
+    const workflow = await this.workflowModel.findById(value).lean();
+    return (workflow?.name || 'Workflow').trim();
   }
 
   private async getUpdates(offset: number, timeoutSec: number) {
@@ -212,6 +341,11 @@ export class TelegramBotService implements OnModuleInit, OnModuleDestroy {
       attempt: 0,
       startedAt: null,
       finishedAt: null,
+    });
+    this.workflowRunsEvents.publish({
+      type: 'workflow_run_created',
+      userId: String(user._id),
+      run: created.toObject() as unknown as Record<string, unknown>,
     });
 
     await this.sendMessage(

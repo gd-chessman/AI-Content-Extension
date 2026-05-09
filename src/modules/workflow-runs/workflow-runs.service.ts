@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
+import { WorkflowRunsEvents } from './workflow-runs.events';
 import { CreateWorkflowRunDto, UpdateWorkflowRunDto } from './workflow-runs.dto';
 import { WorkflowRun, WorkflowRunDocument, WorkflowRunStatus } from './workflow-run.schema';
 
@@ -9,6 +10,7 @@ export class WorkflowRunsService {
   constructor(
     @InjectModel(WorkflowRun.name)
     private readonly workflowRunModel: Model<WorkflowRunDocument>,
+    private readonly workflowRunsEvents: WorkflowRunsEvents,
   ) {}
 
   async listForUser(userId: string, workflowId?: string) {
@@ -50,7 +52,13 @@ export class WorkflowRunsService {
       result: {},
       error: {},
     });
-    return created.toObject();
+    const out = created.toObject();
+    this.workflowRunsEvents.publish({
+      type: 'workflow_run_created',
+      userId: userId.trim(),
+      run: out as unknown as Record<string, unknown>,
+    });
+    return out;
   }
 
   async updateForUser(id: string, userId: string, dto: UpdateWorkflowRunDto) {
@@ -70,7 +78,13 @@ export class WorkflowRunsService {
     if (!updated) {
       throw new NotFoundException('Workflow run not found.');
     }
-    return updated.toObject();
+    const out = updated.toObject();
+    this.workflowRunsEvents.publish({
+      type: 'workflow_run_updated',
+      userId: userId.trim(),
+      run: out as unknown as Record<string, unknown>,
+    });
+    return out;
   }
 
   private normalizePatch(dto: UpdateWorkflowRunDto): {
