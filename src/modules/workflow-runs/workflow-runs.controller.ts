@@ -24,7 +24,7 @@ import { WorkflowRunsService } from './workflow-runs.service';
 
 @Controller('workflow-runs')
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(UserRole.USER, UserRole.ADMIN)
+@Roles(UserRole.USER_VIP, UserRole.ADMIN)
 export class WorkflowRunsController {
   constructor(
     private readonly workflowRunsService: WorkflowRunsService,

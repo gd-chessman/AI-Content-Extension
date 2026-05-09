@@ -2,7 +2,7 @@ import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/commo
 import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
-import { User, UserDocument } from '../users/users.schema';
+import { User, UserDocument, UserRole } from '../users/users.schema';
 import { Workflow, WorkflowDocument, WorkflowStatus } from '../workflows/workflow.schema';
 import { WorkflowRun, WorkflowRunDocument, WorkflowRunStatus } from '../workflow-runs/workflow-run.schema';
 import { WorkflowRunEvent, WorkflowRunsEvents } from '../workflow-runs/workflow-runs.events';
@@ -269,8 +269,8 @@ export class TelegramBotService implements OnModuleInit, OnModuleDestroy {
         chatId,
         [
           'Lệnh hỗ trợ:',
-          '/workflows — Xem danh sách workflow đang hoạt động',
-          '/run <id|tên> — Kích hoạt workflow',
+          '/workflows — Xem danh sách workflow đang hoạt động (chỉ VIP)',
+          '/run <id|tên> — Kích hoạt workflow (chỉ VIP)',
           '/myid — Xem Telegram ID hiện tại',
         ].join('\n'),
       );
@@ -288,6 +288,13 @@ export class TelegramBotService implements OnModuleInit, OnModuleDestroy {
     }
 
     if (/^\/workflows\b/i.test(text)) {
+      if (user.role !== UserRole.ADMIN && user.role !== UserRole.USER_VIP) {
+        await this.sendMessage(
+          chatId,
+          'Tính năng Workflow chỉ dành cho tài khoản VIP. Vui lòng liên hệ quản trị viên.',
+        );
+        return;
+      }
       const workflows = await this.workflowModel
         .find({ status: WorkflowStatus.ACTIVE })
         .sort({ createdAt: -1 })
@@ -317,6 +324,14 @@ export class TelegramBotService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async handleRunCommand(chatId: number, user: UserDocument, keyword: string, rawText: string) {
+    if (user.role !== UserRole.ADMIN && user.role !== UserRole.USER_VIP) {
+      await this.sendMessage(
+        chatId,
+        'Tính năng Workflow chỉ dành cho tài khoản VIP. Vui lòng liên hệ quản trị viên.',
+      );
+      return;
+    }
+
     const picked = await this.pickWorkflow(keyword);
     if (picked.error) {
       await this.sendMessage(chatId, picked.error);

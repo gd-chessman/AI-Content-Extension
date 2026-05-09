@@ -10,7 +10,7 @@ import { GgSheetService } from './ggsheet.service';
 
 @Controller('ggsheet')
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(UserRole.USER)
+@Roles(UserRole.USER, UserRole.USER_VIP, UserRole.ADMIN)
 export class GgSheetController {
   constructor(private readonly ggSheetService: GgSheetService) {}
 

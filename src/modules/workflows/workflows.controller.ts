@@ -13,13 +13,13 @@ export class WorkflowsController {
   constructor(private readonly workflowsService: WorkflowsService) {}
 
   @Get('user')
-  @Roles(UserRole.USER, UserRole.ADMIN)
+  @Roles(UserRole.USER, UserRole.USER_VIP, UserRole.ADMIN)
   listForUser(@Query('platform') platform?: WorkflowPlatform) {
     return this.workflowsService.listForUser(platform);
   }
 
   @Get('user/:id')
-  @Roles(UserRole.USER, UserRole.ADMIN)
+  @Roles(UserRole.USER, UserRole.USER_VIP, UserRole.ADMIN)
   getDetailForUser(@Param('id') id: string) {
     return this.workflowsService.getDetailForUser(id);
   }

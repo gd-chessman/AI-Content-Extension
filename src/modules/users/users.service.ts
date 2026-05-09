@@ -8,8 +8,8 @@ import { InjectModel } from '@nestjs/mongoose';
 import { ConfigService } from '@nestjs/config';
 import { Model } from 'mongoose';
 import * as bcrypt from 'bcryptjs';
-import { CreateUserDto, UpdateMeDto } from './users.dto';
-import { User, UserDocument, UserGender } from './users.schema';
+import { CreateUserDto, PatchUserByAdminDto, UpdateMeDto } from './users.dto';
+import { User, UserDocument, UserGender, UserRole } from './users.schema';
 
 @Injectable()
 export class UsersService {
@@ -20,6 +20,13 @@ export class UsersService {
 
   async findByUsername(username: string) {
     return this.userModel.findOne({ username: username.toLowerCase().trim() });
+  }
+
+  async findByIdForAuth(userId: string) {
+    return this.userModel
+      .findById(userId)
+      .select('username role isActive')
+      .lean<{ username: string; role: UserRole; isActive: boolean }>();
   }
 
   async getMe(userId: string) {
@@ -60,10 +67,13 @@ export class UsersService {
     const name = this.normalizeName(dto.name);
 
     const passwordHash = await bcrypt.hash(password, 10);
+    const role =
+      dto.role === 'user-vip' ? UserRole.USER_VIP : UserRole.USER;
+
     const created = await this.userModel.create({
       username,
       passwordHash,
-      role: 'user',
+      role,
       isActive: true,
       name,
       avatarUrl,
@@ -139,6 +149,48 @@ export class UsersService {
     };
   }
 
+  async patchByAdmin(targetId: string, dto: PatchUserByAdminDto) {
+    if (dto.role === undefined) {
+      throw new BadRequestException('Nothing to update.');
+    }
+
+    let nextRole: UserRole;
+    switch (dto.role) {
+      case 'admin':
+        nextRole = UserRole.ADMIN;
+        break;
+      case 'user-vip':
+        nextRole = UserRole.USER_VIP;
+        break;
+      case 'user':
+        nextRole = UserRole.USER;
+        break;
+      default:
+        throw new BadRequestException('Invalid role.');
+    }
+
+    const updated = await this.userModel.findByIdAndUpdate(
+      targetId,
+      { role: nextRole },
+      { new: true },
+    );
+    if (!updated) {
+      throw new NotFoundException('User not found.');
+    }
+
+    return {
+      id: String(updated._id),
+      username: updated.username,
+      name: updated.name || '',
+      role: updated.role,
+      isActive: updated.isActive,
+      avatarUrl: updated.avatarUrl || '',
+      telegramId: updated.telegramId || '',
+      birthDate: updated.birthDate || null,
+      gender: updated.gender || UserGender.OTHER,
+    };
+  }
+
   async ensureAdminAccount() {
     const adminUsername = (
       this.configService.get<string>('ADMIN_USERNAME') || 'admin'
@@ -155,7 +207,7 @@ export class UsersService {
     await this.userModel.create({
       username: adminUsername,
       passwordHash,
-      role: 'admin',
+      role: UserRole.ADMIN,
       isActive: true,
       name: 'Admin',
       avatarUrl: '',

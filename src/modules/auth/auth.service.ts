@@ -4,6 +4,7 @@ import { ConfigService } from '@nestjs/config';
 import { Request, Response } from 'express';
 import * as bcrypt from 'bcryptjs';
 import { UsersService } from '../users/users.service';
+import { UserRole } from '../users/users.schema';
 
 @Injectable()
 export class AuthService {
@@ -23,11 +24,7 @@ export class AuthService {
     };
   }
 
-  private buildPayload(user: {
-    _id: unknown;
-    username: string;
-    role: 'admin' | 'user';
-  }) {
+  private buildPayload(user: { _id: unknown; username: string; role: UserRole }) {
     return {
       sub: String(user._id),
       username: user.username,
@@ -37,11 +34,7 @@ export class AuthService {
 
   private async setAuthCookies(
     res: Response,
-    user: {
-      _id: unknown;
-      username: string;
-      role: 'admin' | 'user';
-    },
+    user: { _id: unknown; username: string; role: UserRole },
   ) {
     const accessExp =
       this.configService.get<string>('JWT_ACCESS_EXPIRES') || '15m';
@@ -100,7 +93,7 @@ export class AuthService {
       const payload = this.jwtService.verify<{
         sub: string;
         username: string;
-        role: 'admin' | 'user';
+        role: UserRole;
       }>(refreshToken);
       const user = await this.usersService.findByUsername(payload.username);
       if (!user || !user.isActive) {

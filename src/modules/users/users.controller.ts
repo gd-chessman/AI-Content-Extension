@@ -2,13 +2,14 @@ import {
   Body,
   Controller,
   Get,
+  Param,
   Patch,
   Post,
   Req,
   UseGuards,
 } from '@nestjs/common';
 import { Request } from 'express';
-import { CreateUserDto, UpdateMeDto } from './users.dto';
+import { CreateUserDto, PatchUserByAdminDto, UpdateMeDto } from './users.dto';
 import { UsersService } from './users.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { JwtPayload } from '../auth/jwt.strategy';
@@ -39,5 +40,12 @@ export class UsersController {
   @Roles(UserRole.ADMIN)
   create(@Body() dto: CreateUserDto) {
     return this.usersService.createUser(dto);
+  }
+
+  @Patch(':id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN)
+  patchByAdmin(@Param('id') id: string, @Body() dto: PatchUserByAdminDto) {
+    return this.usersService.patchByAdmin(id, dto);
   }
 }

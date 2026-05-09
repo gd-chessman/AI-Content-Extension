@@ -10,7 +10,7 @@ import { FanpagesService } from './fanpages.service';
 
 @Controller('fanpages')
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(UserRole.USER)
+@Roles(UserRole.USER, UserRole.USER_VIP, UserRole.ADMIN)
 export class FanpagesController {
   constructor(private readonly fanpagesService: FanpagesService) {}
 

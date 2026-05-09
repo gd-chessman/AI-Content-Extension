@@ -10,7 +10,7 @@ import { WebBlogService } from './webblog.service';
 
 @Controller('webblog')
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(UserRole.USER)
+@Roles(UserRole.USER, UserRole.USER_VIP, UserRole.ADMIN)
 export class WebBlogController {
   constructor(private readonly webBlogService: WebBlogService) {}
 

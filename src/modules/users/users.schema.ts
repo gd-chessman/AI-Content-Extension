@@ -5,6 +5,7 @@ export type UserDocument = HydratedDocument<User>;
 
 export enum UserRole {
   USER = 'user',
+  USER_VIP = 'user-vip',
   ADMIN = 'admin',
 }
 
@@ -28,7 +29,7 @@ export class User {
   @Prop({ default: true })
   isActive: boolean;
 
-  @Prop({ default: 'user' })
+  @Prop({ type: String, default: UserRole.USER, enum: Object.values(UserRole) })
   role: UserRole;
 
   @Prop({ default: '' })

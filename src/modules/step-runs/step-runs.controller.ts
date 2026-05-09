@@ -10,7 +10,7 @@ import { StepRunsService } from './step-runs.service';
 
 @Controller('step-runs')
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(UserRole.USER, UserRole.ADMIN)
+@Roles(UserRole.USER_VIP, UserRole.ADMIN)
 export class StepRunsController {
   constructor(private readonly stepRunsService: StepRunsService) {}
 
