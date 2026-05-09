@@ -29,6 +29,7 @@ export const getMe = async () => {
 export const updateMe = async (payload: {
   name?: string
   avatarUrl?: string
+  telegramId?: string
   birthDate?: string
   gender?: 'male' | 'female' | 'other'
 }) => {

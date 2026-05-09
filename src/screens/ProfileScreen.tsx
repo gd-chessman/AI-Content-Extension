@@ -16,11 +16,13 @@ export default function ProfileScreen({ onLogout }: { onLogout: () => void }) {
     role: string
     isActive: boolean
     avatarUrl: string
+    telegramId: string
     birthDate: string
     gender: 'male' | 'female' | 'other'
   } | null>(null)
   const [nameInput, setNameInput] = useState('')
   const [avatarUrlInput, setAvatarUrlInput] = useState('')
+  const [telegramIdInput, setTelegramIdInput] = useState('')
   const [birthDateInput, setBirthDateInput] = useState('')
   const [genderInput, setGenderInput] = useState<'male' | 'female' | 'other'>('other')
   const setAuthenticated = useAuth((state) => state.setAuthenticated)
@@ -55,17 +57,20 @@ export default function ProfileScreen({ onLogout }: { onLogout: () => void }) {
           role: data?.role || 'user',
           isActive: Boolean(data?.isActive),
           avatarUrl: data?.avatarUrl || '',
+          telegramId: data?.telegramId || '',
           birthDate: data?.birthDate || '',
           gender: (data?.gender as 'male' | 'female' | 'other') || 'other',
         })
         setNameInput(data?.name || '')
         setAvatarUrlInput(data?.avatarUrl || '')
+        setTelegramIdInput(data?.telegramId || '')
         setBirthDateInput(data?.birthDate ? new Date(data.birthDate).toISOString().slice(0, 10) : '')
         setGenderInput((data?.gender as 'male' | 'female' | 'other') || 'other')
       } catch {
         setProfile(null)
         setNameInput('')
         setAvatarUrlInput('')
+        setTelegramIdInput('')
         setBirthDateInput('')
         setGenderInput('other')
       } finally {
@@ -94,6 +99,7 @@ export default function ProfileScreen({ onLogout }: { onLogout: () => void }) {
       const updated = await updateMe({
         name: nameInput.trim(),
         avatarUrl: avatarUrlInput.trim(),
+        telegramId: telegramIdInput.trim(),
         birthDate: birthDateInput.trim(),
         gender: genderInput,
       })
@@ -103,6 +109,7 @@ export default function ProfileScreen({ onLogout }: { onLogout: () => void }) {
         role: updated?.role || profile?.role || 'user',
         isActive: Boolean(updated?.isActive),
         avatarUrl: updated?.avatarUrl || '',
+        telegramId: updated?.telegramId || '',
         birthDate: updated?.birthDate || '',
         gender: (updated?.gender as 'male' | 'female' | 'other') || 'other',
       })
@@ -126,6 +133,7 @@ export default function ProfileScreen({ onLogout }: { onLogout: () => void }) {
 
   const startEditProfile = () => {
     setAvatarUrlInput(profile?.avatarUrl || '')
+    setTelegramIdInput(profile?.telegramId || '')
     setNameInput(profile?.name || '')
     setBirthDateInput(profile?.birthDate ? new Date(profile.birthDate).toISOString().slice(0, 10) : '')
     setGenderInput((profile?.gender as 'male' | 'female' | 'other') || 'other')
@@ -134,6 +142,7 @@ export default function ProfileScreen({ onLogout }: { onLogout: () => void }) {
 
   const cancelEditProfile = () => {
     setAvatarUrlInput(profile?.avatarUrl || '')
+    setTelegramIdInput(profile?.telegramId || '')
     setNameInput(profile?.name || '')
     setBirthDateInput(profile?.birthDate ? new Date(profile.birthDate).toISOString().slice(0, 10) : '')
     setGenderInput((profile?.gender as 'male' | 'female' | 'other') || 'other')
@@ -272,6 +281,13 @@ export default function ProfileScreen({ onLogout }: { onLogout: () => void }) {
                             onChange={(event) => setBirthDateInput(event.target.value)}
                             className="w-full rounded-md bg-slate-800/80 px-2 py-1 text-[11px] text-slate-100 outline-none"
                           />
+                          <input
+                            type="text"
+                            value={telegramIdInput}
+                            onChange={(event) => setTelegramIdInput(event.target.value)}
+                            placeholder="Telegram ID"
+                            className="w-full rounded-md bg-slate-800/80 px-2 py-1 text-[11px] text-slate-100 outline-none placeholder:text-slate-500"
+                          />
                         </div>
                       ) : (
                         <>
@@ -304,6 +320,9 @@ export default function ProfileScreen({ onLogout }: { onLogout: () => void }) {
                   </p>
                   <p>
                     <span className="text-slate-400">Giới tính:</span> {getGenderLabel(profile.gender)}
+                  </p>
+                  <p>
+                    <span className="text-slate-400">Telegram ID:</span> {profile.telegramId || 'Chưa cập nhật'}
                   </p>
                   <p>
                     <span className="text-slate-400">Vai trò:</span> {getRoleLabel(profile.role)}
