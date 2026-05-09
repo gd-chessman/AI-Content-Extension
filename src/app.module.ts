@@ -16,6 +16,7 @@ import { StepsModule } from './modules/steps/steps.module';
 import { StepRunsModule } from './modules/step-runs/step-runs.module';
 import { WorkflowRunsModule } from './modules/workflow-runs/workflow-runs.module';
 import { WorkflowsModule } from './modules/workflows/workflows.module';
+import { TelegramBotModule } from './modules/telegram-bot/telegram-bot.module';
 
 @Module({
   imports: [
@@ -35,6 +36,7 @@ import { WorkflowsModule } from './modules/workflows/workflows.module';
     StepRunsModule,
     WorkflowRunsModule,
     WorkflowsModule,
+    TelegramBotModule,
   ],
   controllers: [AppController],
   providers: [AppService]

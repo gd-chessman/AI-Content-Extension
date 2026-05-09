@@ -3,6 +3,7 @@ export class CreateUserDto {
   password: string;
   name?: string;
   avatarUrl?: string;
+  telegramId?: string;
   birthDate?: string;
   gender?: 'male' | 'female' | 'other';
 }
@@ -10,6 +11,7 @@ export class CreateUserDto {
 export class UpdateMeDto {
   name?: string;
   avatarUrl?: string;
+  telegramId?: string;
   birthDate?: string;
   gender?: 'male' | 'female' | 'other';
 }

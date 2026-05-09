@@ -35,6 +35,7 @@ export class UsersService {
       role: user.role,
       isActive: user.isActive,
       avatarUrl: user.avatarUrl || '',
+      telegramId: user.telegramId || '',
       birthDate: user.birthDate || null,
       gender: user.gender || UserGender.OTHER,
     };
@@ -53,6 +54,7 @@ export class UsersService {
     }
 
     const avatarUrl = this.normalizeAvatarUrl(dto.avatarUrl);
+    const telegramId = this.normalizeTelegramId(dto.telegramId);
     const birthDate = this.normalizeBirthDate(dto.birthDate);
     const gender = this.normalizeGender(dto.gender);
     const name = this.normalizeName(dto.name);
@@ -65,6 +67,7 @@ export class UsersService {
       isActive: true,
       name,
       avatarUrl,
+      telegramId,
       birthDate,
       gender,
     });
@@ -76,6 +79,7 @@ export class UsersService {
       role: created.role,
       isActive: created.isActive,
       avatarUrl: created.avatarUrl || '',
+      telegramId: created.telegramId || '',
       birthDate: created.birthDate || null,
       gender: created.gender || UserGender.OTHER,
     };
@@ -84,6 +88,7 @@ export class UsersService {
   async updateMe(userId: string, dto: UpdateMeDto) {
     if (
       dto.avatarUrl === undefined &&
+      dto.telegramId === undefined &&
       dto.birthDate === undefined &&
       dto.gender === undefined &&
       dto.name === undefined
@@ -94,6 +99,7 @@ export class UsersService {
     const patch: {
       name?: string;
       avatarUrl?: string;
+      telegramId?: string;
       birthDate?: Date | null;
       gender?: UserGender;
     } = {};
@@ -102,6 +108,9 @@ export class UsersService {
     }
     if (dto.avatarUrl !== undefined) {
       patch.avatarUrl = this.normalizeAvatarUrl(dto.avatarUrl);
+    }
+    if (dto.telegramId !== undefined) {
+      patch.telegramId = this.normalizeTelegramId(dto.telegramId);
     }
     if (dto.birthDate !== undefined) {
       patch.birthDate = this.normalizeBirthDate(dto.birthDate);
@@ -124,6 +133,7 @@ export class UsersService {
       role: updated.role,
       isActive: updated.isActive,
       avatarUrl: updated.avatarUrl || '',
+      telegramId: updated.telegramId || '',
       birthDate: updated.birthDate || null,
       gender: updated.gender || UserGender.OTHER,
     };
@@ -149,6 +159,7 @@ export class UsersService {
       isActive: true,
       name: 'Admin',
       avatarUrl: '',
+      telegramId: '',
       birthDate: null,
       gender: UserGender.OTHER,
     });
@@ -169,6 +180,12 @@ export class UsersService {
   }
 
   private normalizeName(raw?: string) {
+    const value = (raw || '').trim();
+    if (!value) return '';
+    return value.slice(0, 80);
+  }
+
+  private normalizeTelegramId(raw?: string) {
     const value = (raw || '').trim();
     if (!value) return '';
     return value.slice(0, 80);

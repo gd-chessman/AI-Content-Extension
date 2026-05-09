@@ -34,6 +34,9 @@ export class User {
   @Prop({ default: '' })
   avatarUrl: string;
 
+  @Prop({ default: '', trim: true })
+  telegramId: string;
+
   @Prop({ default: null })
   birthDate: Date | null;
 
