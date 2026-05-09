@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { FiAlignLeft, FiAlertTriangle, FiCheck, FiCopy, FiDownload, FiEdit3, FiFileText, FiFilm, FiImage, FiInfo, FiItalic, FiScissors, FiType } from 'react-icons/fi'
 import { IoFlash } from 'react-icons/io5'
 import { RiAdminFill } from 'react-icons/ri'
 import { SiGooglesheets, SiX } from 'react-icons/si'
+import { getUserWorkflowDetail, getUserWorkflows } from '@/services/WorkflowService'
 
 type BrowserTab = { id?: number; url?: string; active?: boolean; windowId?: number }
 type ExtensionChrome = {
@@ -70,112 +72,46 @@ const hashDataUrl = (dataUrl: string) => {
   return `${(h >>> 0).toString(16)}_${dataUrl.length}`
 }
 
-export const STEP_1_PROMPT_TEMPLATE = `Rewrite the following English story to make it highly engaging, emotionally compelling, and irresistible to readers.
-Requirements:
-- The rewritten story must be between 550-650 words.
-- Keep the original storyline, core plot, and sequence of events unchanged.
-- Do NOT change the key message or alter the main outcome of the story.
-- Rewrite with completely new character names that are memorable, natural, and suitable for the story's tone.
-- Creatively adjust a few minor details (such as setting, small actions, descriptions, or background elements) to make the story feel fresher, more vivid, and immersive.
-- Enhance emotional intensity, tension, and dramatic pacing to make the story more gripping and addictive.
-- Change the opening lines to be more powerful, shocking, or curiosity-driven so readers feel compelled to continue.
-- Maintain logical consistency - no contradictions with the original plot.
-- Use vivid descriptions, natural dialogue, and storytelling flow similar to a short dramatic novel.
-Ending requirement:
-- STOP the story exactly at the most climactic, suspenseful moment.
-- Do NOT reveal the resolution.
-Output format:
-- Present the entire rewritten story inside a clean Markdown code block for easy copying.`
-const PROCESS_STEPS: Array<{ id: string; label: string; prompt: string }> = [
-  {
-    id: 'step-1',
-    label: 'Tiến trình 1',
-    prompt: `Rewrite the following English story to make it highly engaging, emotionally compelling, and irresistible to readers.
-Requirements:
-- The rewritten story must be between 550-650 words.
-- Keep the original storyline, core plot, and sequence of events unchanged.
-- Do NOT change the key message or alter the main outcome of the story.
-- Rewrite with completely new character names that are memorable, natural, and suitable for the story's tone.
-- Creatively adjust a few minor details (such as setting, small actions, descriptions, or background elements) to make the story feel fresher, more vivid, and immersive.
-- Enhance emotional intensity, tension, and dramatic pacing to make the story more gripping and addictive.
-- Change the opening lines to be more powerful, shocking, or curiosity-driven so readers feel compelled to continue.
-- Maintain logical consistency - no contradictions with the original plot.
-- Use vivid descriptions, natural dialogue, and storytelling flow similar to a short dramatic novel.
-Ending requirement:
-- STOP the story exactly at the most climactic, suspenseful moment.
-- Do NOT reveal the resolution.
-Output format:
-- Present the entire rewritten story inside a clean Markdown code block for easy copying.`,
-  },
-  {
-    id: 'step-2',
-    label: 'Tiến trình 2',
-    prompt: `Create 2 images and 2 videos based on the story provided above.
-Requirements:
-- Ensure the 2 image scenes connect seamlessly and directly with the 2 6-second videos (each image corresponds to one 6-second video).
-- Divide each video into small segments, with each segment focusing on character dialogues specifically in the climax/tense/suspenseful parts.
-- Idea 1 and Idea 2 must showcase continuous actions and smooth, natural, flowing dialogues.
-- Image 1 and Image 2 The main character has a clearly defined face, must feature ultra-sharp, crystal-clear main characters that are perfectly synchronized (exact same appearance, facial features, hairstyle, and identical outfits/accessories).
-- The video scripts must adhere 100% to the story/content provided above.
-- All characters are European with Caucasian features, maintaining consistent identity across all frames.
-No non-European or mixed ethnicity traits.
-Each character must have stable facial structure, light skin tone, and realistic Western European appearance throughout the entire video.
-- Total length of each video is exactly 6 seconds, with each scene only 2 seconds long.
-- A panoramic view, seeing the context and objects in space.
-- Make every scene highly dramatic and intense.
-- Ultra vibrant color palette, high saturation, cinematic lighting, soft glow, bright clean daylight, cool-neutral color grading, pure white highlights, high dynamic range (HDR), crystal clear visuals, no orange tones, no warm filter, fresh and modern look.
-- Describe in precise, vivid detail: character movements, actions, camera movements, and sound effects/sounds that perfectly match the emotion and context of each scene.
-- Cinematic wide shot, smooth camera movement, wide-angle perspective, characters interacting naturally in a lively environment, balanced composition, no close-up, no face zoom, maintaining spatial context.
-- Optimize the entire prompt and descriptions perfectly for AI video generation tools (e.g., Runway, Grok, Kling, Luma, Pika, etc.).
-- No violence, no sexual content, no harm to children, no illegal or hateful content, no graphic or disturbing elements. Keep safe and appropriate.
-- Dialogue accuracy is higher priority than background sound or cinematic effects.
-- The character must deliver the dialogue EXACTLY as written below, word-for-word.
-- Lip movement must be perfectly synchronized with each spoken word.
-- Emotional tone must match the scene context (e.g., angry, whispering, panicked, crying).
-- Voice must sound natural, human-like, and clearly audible.
-- If multiple characters are present, specify clearly who is speaking.
-- Do NOT include subtitles or any text overlay.
-VOICE & AUDIO:
-- Assign clear, consistent voice types: Boy (young male, high-pitched, innocent), Girl (young female, soft, emotional), Woman (adult female, expressive), Man (adult male, deep, firm), Elderly (older voice, slow, slightly raspy).
-- Dialogue must match emotion (fear, tension, urgency), with natural pauses, breathing, and occasional voice cracks.
-- Ensure accurate lip-sync and spatial audio (closer = louder/clearer, far = softer/echo).
-- Keep dialogue clear over background; add subtle ambient sounds (footsteps, door creaks, heartbeat) to enhance realism.`,
-  },
-  {
-    id: 'step-3',
-    label: 'Tiến trình 3',
-    prompt: `Tạo giúp tôi ảnh từ PROMPT ẢNH 1 và PROMPT ẢNH 2 ở trên, ảnh rõ nét các nhân vật và không có chữ.
-Ảnh dạng chia đôi dọc (vertical split screen), hai khung rộng đặt cạnh nhau trái và phải trong khung hình ngang 16:9.`,
-  },
-  {
-    id: 'step-4',
-    label: 'Tiến trình 4',
-    prompt: `Write a complete, full-length English story based on the story provided above.
-Requirements:
-- The entire story must be approximately 2500 words (1850-2000 words is ideal).
-- Create a captivating title consisting of exactly TWO sentences.
-- The story must be extremely gripping, emotional, and hook the reader from the very first sentence so they cannot stop reading.
-- Build tension naturally and deliver a shocking, mind-blowing, unpredictable twist ending that NO ONE would ever see coming - make it the most surprising and satisfying ending possible.
-- Write in a lively and engaging style like a novel, with vivid descriptions, deep emotions, and natural dialogue.
-- Develop complex inner thoughts, emotional conflict, and layered dialogue for all major characters.
-- Ensure each scene raises tension, reveals something meaningful, or pushes the story closer to the climax.
-- Add subtle foreshadowing and emotional callbacks to make the final twist more shocking and satisfying.
-- Use dynamic pacing, cinematic descriptions, and emotionally powerful prose throughout.
-- Ensure the ending is logical, consistent, and fully supported by earlier foreshadowing.
-- Avoid plot holes, forced twists, or inconsistent character behavior.
-- Deliver a strong emotional payoff and a satisfying, well-earned conclusion.
-- The story must have a happy ending.`,
-  },
-]
+type ProcessStep = { id: string; label: string; prompt: string }
 
 export default function ChatgptScreen() {
   const [status, setStatus] = useState('Chọn một tiến trình để gửi prompt tự động vào ChatGPT.')
-  const [selectedStepId, setSelectedStepId] = useState(PROCESS_STEPS[0].id)
+  const [selectedStepId, setSelectedStepId] = useState('')
   const [splitImages, setSplitImages] = useState<{ left: string; right: string } | null>(null)
   const [copiedPart, setCopiedPart] = useState<'left' | 'right' | null>(null)
   const [copiedTool, setCopiedTool] = useState<string | null>(null)
+  const { data: processSteps = [], isLoading: isLoadingProcessSteps } = useQuery<ProcessStep[]>({
+    queryKey: ['chatgpt-process-steps'],
+    queryFn: async () => {
+      const workflows = await getUserWorkflows()
+      const target =
+        workflows.find((item) => item.category === 'ai_video_creation' && (item.platform === 'chatgpt' || item.platform === 'multi')) ||
+        workflows.find((item) => item.category === 'ai_video_creation') ||
+        null
+      if (!target?._id) return []
+      const detail = await getUserWorkflowDetail(target._id)
+      return (detail.steps || [])
+        .slice()
+        .sort((a, b) => (a.stepNo || 0) - (b.stepNo || 0))
+        .map((step) => ({
+          id: `step-${step.stepNo}`,
+          label: (step.title || '').trim() || `Tiến trình ${step.stepNo}`,
+          prompt: (step.prompt || step.instruction || '').trim(),
+        }))
+        .filter((step) => step.prompt)
+    },
+    staleTime: 60_000,
+  })
 
   const getChrome = () => (globalThis as { chrome?: ExtensionChrome }).chrome
+
+  useEffect(() => {
+    if (!processSteps.length) {
+      setSelectedStepId('')
+      return
+    }
+    setSelectedStepId((prev) => (processSteps.some((step) => step.id === prev) ? prev : processSteps[0].id))
+  }, [processSteps])
 
   const queryTabs = (pattern?: string[], currentWindow = false, active = false) =>
     new Promise<BrowserTab[]>((resolve) => {
@@ -459,7 +395,12 @@ export default function ChatgptScreen() {
     const onRunStep1FromFacebook = (event: Event) => {
       const customEvent = event as CustomEvent<{ reelContent?: string }>
       const reelContent = customEvent.detail?.reelContent?.trim() || ''
-      const mergedPrompt = `${STEP_1_PROMPT_TEMPLATE}\n\nStory:\n${reelContent}`
+      const step1Prompt = processSteps.find((step) => step.id === 'step-1')?.prompt || ''
+      if (!step1Prompt) {
+        setStatus('Chưa tải được prompt Tiến trình 1 từ backend.')
+        return
+      }
+      const mergedPrompt = `${step1Prompt}\n\nStory:\n${reelContent}`
       void runProcess({ label: 'Tiến trình 1', prompt: mergedPrompt }, { autoSend: false, fast: false })
     }
 
@@ -467,7 +408,7 @@ export default function ChatgptScreen() {
     return () => {
       window.removeEventListener('run-chatgpt-step1-from-facebook', onRunStep1FromFacebook as EventListener)
     }
-  }, [])
+  }, [processSteps])
 
   const splitCapturedImage = async (
     screenshotDataUrl: string,
@@ -1469,7 +1410,7 @@ export default function ChatgptScreen() {
     }
   }
 
-  const selectedStep = PROCESS_STEPS.find((step) => step.id === selectedStepId) || PROCESS_STEPS[0]
+  const selectedStep = processSteps.find((step) => step.id === selectedStepId) || null
   const statusLower = status.toLowerCase()
   const statusTone = statusLower.includes('không thể') || statusLower.includes('không tìm thấy') || statusLower.includes('thất bại') || statusLower.includes('lỗi')
     ? 'error'
@@ -1483,11 +1424,15 @@ export default function ChatgptScreen() {
     <section className="glass-panel flex h-full min-h-0 flex-col rounded-3xl p-4">
       <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_92px] gap-3">
         <div className="flex min-h-0 flex-col rounded-2xl border border-white/10 bg-black/30 p-3">
-          <h2 className="text-sm font-semibold text-white">{selectedStep.label}</h2>
+          <h2 className="text-sm font-semibold text-white">{selectedStep?.label || 'Tiến trình'}</h2>
           <p className="mt-1 text-[11px] text-slate-400">Nội dung chi tiết tiến trình đang chọn.</p>
           <textarea
             readOnly
-            value={selectedStep.prompt}
+            value={
+              isLoadingProcessSteps
+                ? 'Đang tải dữ liệu workflow...'
+                : selectedStep?.prompt || 'Chưa có dữ liệu workflow/steps từ backend.'
+            }
             className="mt-2 min-h-[180px] flex-1 w-full resize-none rounded-xl border border-white/10 bg-slate-900/80 px-3 py-2 text-[11px] text-slate-200 outline-none"
           />
           <p
@@ -1518,7 +1463,7 @@ export default function ChatgptScreen() {
 
         <aside className="flex min-h-0 flex-col rounded-2xl border border-white/10 bg-black/30 p-2">
           <div className="min-h-0 space-y-1.5 overflow-y-auto pr-0.5">
-            {PROCESS_STEPS.map((step) => (
+            {processSteps.map((step) => (
               <div key={step.id} className="rounded-xl border border-white/10 bg-white/5 p-1.5">
                 <button
                   type="button"
@@ -1537,7 +1482,10 @@ export default function ChatgptScreen() {
                 <div className="mt-1.5 grid grid-cols-2 gap-1.5">
                   <button
                     type="button"
-                    onClick={() => void runFastProcess(step)}
+                    onClick={() => {
+                      setSelectedStepId(step.id)
+                      void runFastProcess(step)
+                    }}
                     className="inline-flex h-7 w-full cursor-pointer items-center justify-center rounded-md bg-emerald-500/25 text-emerald-100 transition hover:bg-emerald-500/35 disabled:cursor-not-allowed disabled:opacity-40"
                     title={step.id === 'step-1' ? 'Tiến trình 1 + bản nhớ tạm mới nhất, tự Enter' : 'Chạy nhanh và tự Enter'}
                   >
@@ -1545,7 +1493,10 @@ export default function ChatgptScreen() {
                   </button>
                   <button
                     type="button"
-                    onClick={() => void runFillProcess(step)}
+                    onClick={() => {
+                      setSelectedStepId(step.id)
+                      void runFillProcess(step)
+                    }}
                     className="inline-flex h-7 w-full cursor-pointer items-center justify-center rounded-md bg-amber-500/20 text-amber-100 transition hover:bg-amber-500/30"
                     title={step.id === 'step-1' ? 'Tiến trình 1 + bản nhớ tạm mới nhất, không Enter' : 'Điền prompt, không Enter'}
                   >
@@ -1554,6 +1505,11 @@ export default function ChatgptScreen() {
                 </div>
               </div>
             ))}
+            {!isLoadingProcessSteps && processSteps.length === 0 ? (
+              <p className="rounded-xl border border-white/10 bg-white/5 px-2 py-2 text-[10px] text-slate-400">
+                Chưa có workflow/steps cho ChatGPT. Hãy tạo dữ liệu.
+              </p>
+            ) : null}
           </div>
 
           <div className="mt-2 shrink-0 rounded-xl border border-white/10 bg-white/5 p-2">
