@@ -8,6 +8,10 @@ export class Story {
   @Prop({ type: Types.ObjectId, required: false, index: true })
   userId?: Types.ObjectId;
 
+  /** Tham chiếu chủ đề (StoryTopic) */
+  @Prop({ type: Types.ObjectId, ref: 'StoryTopic', required: false, index: true })
+  topicId?: Types.ObjectId;
+
   @Prop({ default: '', trim: true })
   name: string;
 
@@ -52,3 +56,4 @@ export class Story {
 
 export const StorySchema = SchemaFactory.createForClass(Story);
 StorySchema.index({ userId: 1, createdAt: -1 });
+StorySchema.index({ topicId: 1, createdAt: -1 });
