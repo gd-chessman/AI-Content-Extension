@@ -13,6 +13,8 @@ import { FanpagesModule } from './modules/fanpages/fanpages.module';
 import { WebBlogModule } from './modules/webblog/webblog.module';
 import { GgSheetModule } from './modules/ggsheet/ggsheet.module';
 import { StepsModule } from './modules/steps/steps.module';
+import { StepRunsModule } from './modules/step-runs/step-runs.module';
+import { WorkflowRunsModule } from './modules/workflow-runs/workflow-runs.module';
 import { WorkflowsModule } from './modules/workflows/workflows.module';
 
 @Module({
@@ -30,6 +32,8 @@ import { WorkflowsModule } from './modules/workflows/workflows.module';
     WebBlogModule,
     GgSheetModule,
     StepsModule,
+    StepRunsModule,
+    WorkflowRunsModule,
     WorkflowsModule,
   ],
   controllers: [AppController],
