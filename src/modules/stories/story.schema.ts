@@ -57,3 +57,11 @@ export class Story {
 export const StorySchema = SchemaFactory.createForClass(Story);
 StorySchema.index({ userId: 1, createdAt: -1 });
 StorySchema.index({ topicId: 1, createdAt: -1 });
+/** Unique per user: same sourceReelUrl allowed across different users. */
+StorySchema.index(
+  { userId: 1, sourceReelUrl: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { sourceReelUrl: { $gt: '' } },
+  },
+);

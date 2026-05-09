@@ -81,8 +81,12 @@ export class TelegramBotService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /**
+   * Drain pending updates once at startup. Must use timeout 0 — timeout 50 would long-poll
+   * up to 50s and block Nest OnModuleInit (delaying HTTP listen).
+   */
   private async bootstrapOffset() {
-    const updates = await this.getUpdates(0, 50);
+    const updates = await this.getUpdates(0, 0);
     const maxUpdateId = updates.reduce((max, item) => Math.max(max, item.update_id || 0), 0);
     this.offset = maxUpdateId > 0 ? maxUpdateId + 1 : 0;
   }

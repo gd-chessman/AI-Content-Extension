@@ -1,7 +1,10 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
+import { RolesGuard } from '../auth/roles.guard';
 import { StoryTopic, StoryTopicSchema } from './story-topic.schema';
 import { Story, StorySchema } from './story.schema';
+import { StoriesController } from './stories.controller';
+import { StoriesService } from './stories.service';
 
 @Module({
   imports: [
@@ -10,6 +13,8 @@ import { Story, StorySchema } from './story.schema';
       { name: Story.name, schema: StorySchema },
     ]),
   ],
-  exports: [MongooseModule],
+  controllers: [StoriesController],
+  providers: [StoriesService, RolesGuard],
+  exports: [MongooseModule, StoriesService],
 })
 export class StoriesModule {}
