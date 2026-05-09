@@ -25,7 +25,7 @@ import {
   getFanpages,
   updateFanpage,
 } from '@/services/FanpageService'
-import { checkStoryReelSaved, createStoryFromReel } from '@/services/StoryService'
+import { checkStoryReelSaved, createStoryFromReel, incrementStoryUsage } from '@/services/StoryService'
 
 type ScannedReel = {
   id: string
@@ -507,6 +507,16 @@ export default function FacebookScreen() {
     try {
       await navigator.clipboard.writeText(contentText)
       localStorage.setItem(FACEBOOK_REEL_MEMORY_KEY, contentText.trim())
+      if (reelAlreadySaved && reelSavedCheck?.storyId) {
+        try {
+          await incrementStoryUsage(reelSavedCheck.storyId)
+          void queryClient.invalidateQueries({
+            queryKey: ['stories', 'check-reel', selectedReel?.url],
+          })
+        } catch {
+          /* sao chép vẫn thành công */
+        }
+      }
       setCopyStatus('ok')
       window.setTimeout(() => setCopyStatus('idle'), 1200)
     } catch {
@@ -1580,6 +1590,19 @@ export default function FacebookScreen() {
               Chưa chọn reel. Mở reel trong một tab Chrome (facebook.com/reel/…), rồi bấm icon film góc phải — extension đọc tab đang xem (ưu tiên tab đang chọn trong cửa sổ hiện tại).
             </p>
           )}
+          {selectedReel && reelSavedCheck ? (
+            <p className="mt-1.5 text-[10px] text-slate-500">
+              Lượt dùng — bạn:{' '}
+              <span className="font-medium tabular-nums text-slate-300">
+                {reelSavedCheck.myUsageCount ?? 0}
+              </span>
+              <span className="mx-1.5 text-slate-600">·</span>
+              Toàn hệ thống:{' '}
+              <span className="font-medium tabular-nums text-slate-300">
+                {reelSavedCheck.globalUsageCount ?? 0}
+              </span>
+            </p>
+          ) : null}
           <div className="relative mt-2 min-h-0 flex-1 overflow-hidden">
             <textarea
               ref={contentTextareaRef}
