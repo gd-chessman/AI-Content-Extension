@@ -1,10 +1,17 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { FiAlignLeft, FiAlertTriangle, FiCheck, FiCopy, FiDownload, FiEdit3, FiFileText, FiFilm, FiImage, FiInfo, FiItalic, FiScissors, FiType } from 'react-icons/fi'
+import { FiAlignLeft, FiAlertTriangle, FiCheck, FiCopy, FiDownload, FiEdit3, FiFileText, FiFilm, FiImage, FiInfo, FiItalic, FiPlay, FiScissors, FiSquare, FiType } from 'react-icons/fi'
 import { IoFlash } from 'react-icons/io5'
 import { RiAdminFill } from 'react-icons/ri'
 import { SiGooglesheets, SiX } from 'react-icons/si'
-import { getUserWorkflowDetail, getUserWorkflows } from '@/services/WorkflowService'
+import {
+  createStepRun,
+  createWorkflowRun,
+  getUserWorkflowDetail,
+  getUserWorkflows,
+  updateStepRun,
+  updateWorkflowRun,
+} from '@/services/WorkflowService'
 
 type BrowserTab = { id?: number; url?: string; active?: boolean; windowId?: number }
 type ExtensionChrome = {
@@ -72,7 +79,17 @@ const hashDataUrl = (dataUrl: string) => {
   return `${(h >>> 0).toString(16)}_${dataUrl.length}`
 }
 
-type ProcessStep = { id: string; label: string; prompt: string }
+type ProcessStep = {
+  id: string
+  label: string
+  prompt: string
+  workflowId: string
+  workflowPlatform: string
+  backendStepId: string
+  stepNo: number
+  actionType: string
+  inputSchema: Record<string, unknown>
+}
 
 export default function ChatgptScreen() {
   const [status, setStatus] = useState('Chọn một tiến trình để gửi prompt tự động vào ChatGPT.')
@@ -80,6 +97,10 @@ export default function ChatgptScreen() {
   const [splitImages, setSplitImages] = useState<{ left: string; right: string } | null>(null)
   const [copiedPart, setCopiedPart] = useState<'left' | 'right' | null>(null)
   const [copiedTool, setCopiedTool] = useState<string | null>(null)
+  const [isWorkflowRunning, setIsWorkflowRunning] = useState(false)
+  const [isWorkflowStopping, setIsWorkflowStopping] = useState(false)
+  const workflowStopRef = useRef(false)
+  const lockedWorkflowTabIdRef = useRef<number>(0)
   const { data: processSteps = [], isLoading: isLoadingProcessSteps } = useQuery<ProcessStep[]>({
     queryKey: ['chatgpt-process-steps'],
     queryFn: async () => {
@@ -97,8 +118,14 @@ export default function ChatgptScreen() {
           id: `step-${step.stepNo}`,
           label: (step.title || '').trim() || `Tiến trình ${step.stepNo}`,
           prompt: (step.prompt || step.instruction || '').trim(),
+          workflowId: target._id,
+          workflowPlatform: (target.platform || 'multi').trim().toLowerCase(),
+          backendStepId: (step._id || '').trim(),
+          stepNo: Number(step.stepNo) || 0,
+          actionType: (step.actionType || 'custom').trim(),
+          inputSchema: (step.inputSchema || {}) as Record<string, unknown>,
         }))
-        .filter((step) => step.prompt)
+        .filter((step) => step.prompt && step.backendStepId && step.workflowId)
     },
     staleTime: 60_000,
   })
@@ -116,19 +143,34 @@ export default function ChatgptScreen() {
   const queryTabs = (pattern?: string[], currentWindow = false, active = false) =>
     new Promise<BrowserTab[]>((resolve) => {
       const extensionChrome = getChrome()
-      extensionChrome?.tabs?.query?.({ url: pattern, currentWindow, active }, (tabs) => resolve(tabs || []))
+      const query = extensionChrome?.tabs?.query
+      if (!query) {
+        resolve([])
+        return
+      }
+      query({ url: pattern, currentWindow, active }, (tabs) => resolve(tabs || []))
     })
 
   const createTab = (url: string) =>
     new Promise<BrowserTab | null>((resolve) => {
       const extensionChrome = getChrome()
-      extensionChrome?.tabs?.create?.({ url, active: true }, (tab) => resolve(tab || null))
+      const create = extensionChrome?.tabs?.create
+      if (!create) {
+        resolve(null)
+        return
+      }
+      create({ url, active: true }, (tab) => resolve(tab || null))
     })
 
   const updateTab = (tabId: number, url?: string) =>
     new Promise<BrowserTab | null>((resolve) => {
       const extensionChrome = getChrome()
-      extensionChrome?.tabs?.update?.(
+      const update = extensionChrome?.tabs?.update
+      if (!update) {
+        resolve(null)
+        return
+      }
+      update(
         tabId,
         url ? { url, active: true } : { active: true },
         (tab) => resolve(tab || null),
@@ -138,7 +180,12 @@ export default function ChatgptScreen() {
   const captureVisibleTab = (windowId?: number) =>
     new Promise<string | null>((resolve) => {
       const extensionChrome = getChrome()
-      extensionChrome?.tabs?.captureVisibleTab?.(windowId, { format: 'png' }, (dataUrl) => {
+      const capture = extensionChrome?.tabs?.captureVisibleTab
+      if (!capture) {
+        resolve(null)
+        return
+      }
+      capture(windowId, { format: 'png' }, (dataUrl) => {
         const maybeError = extensionChrome?.runtime?.lastError?.message || ''
         if (maybeError) {
           resolve(null)
@@ -293,16 +340,16 @@ export default function ChatgptScreen() {
     return Boolean(result?.[0]?.result)
   }
 
-  const runProcess = async (step: { label: string; prompt: string }, options?: { autoSend?: boolean; fast?: boolean }) => {
-    const autoSend = Boolean(options?.autoSend)
-    const fastMode = Boolean(options?.fast)
-    const extensionChrome = getChrome()
-    if (!extensionChrome?.tabs?.query || !extensionChrome.tabs.create || !extensionChrome.tabs.update || !extensionChrome.scripting?.executeScript) {
-      setStatus('Môi trường hiện tại không hỗ trợ tự động gửi vào ChatGPT.')
-      return
+  const pickChatgptTab = async (preferredTabId?: number) => {
+    if (preferredTabId) {
+      const tab = await updateTab(preferredTabId)
+      if (tab?.id) {
+        if (!tab.url?.includes('chatgpt.com')) {
+          return await updateTab(tab.id, CHATGPT_URL)
+        }
+        return tab
+      }
     }
-
-    setStatus(`${step.label}: Đang mở ChatGPT và chuẩn bị xử lý...`)
 
     const currentActive = await queryTabs(undefined, true, true)
     const activeTab = currentActive[0]
@@ -320,9 +367,28 @@ export default function ChatgptScreen() {
       target = await updateTab(target.id)
     }
 
+    return target || null
+  }
+
+  const runProcess = async (
+    step: { label: string; prompt: string },
+    options?: { autoSend?: boolean; fast?: boolean; preferredTabId?: number },
+  ) => {
+    const autoSend = Boolean(options?.autoSend)
+    const fastMode = Boolean(options?.fast)
+    const preferredTabId = options?.preferredTabId
+    const extensionChrome = getChrome()
+    if (!extensionChrome?.tabs?.query || !extensionChrome.tabs.create || !extensionChrome.tabs.update || !extensionChrome.scripting?.executeScript) {
+      setStatus('Môi trường hiện tại không hỗ trợ tự động gửi vào ChatGPT.')
+      return false
+    }
+
+    setStatus(`${step.label}: Đang mở ChatGPT và chuẩn bị xử lý...`)
+    const target = await pickChatgptTab(preferredTabId)
+
     if (!target?.id) {
       setStatus(`${step.label}: Không thể mở tab ChatGPT.`)
-      return
+      return false
     }
 
     setStatus(`${step.label}: Đã mở ChatGPT, đang điền prompt...`)
@@ -349,17 +415,17 @@ export default function ChatgptScreen() {
           : `${step.label}: Đã điền prompt vào ChatGPT (chưa gửi).`
         : `${step.label}: Không tìm thấy khung chat để xử lý.`,
     )
+    return filled
   }
 
-  const runFastProcess = async (step: { id: string; label: string; prompt: string }) => {
+  const runFastProcess = async (step: ProcessStep) => {
     if (step.id === 'step-2') {
       setSplitImages(null)
       setCopiedPart(null)
     }
 
     if (step.id !== 'step-1') {
-      await runProcess(step, { autoSend: true, fast: true })
-      return
+      return await runProcess(step, { autoSend: true, fast: true, preferredTabId: lockedWorkflowTabIdRef.current || undefined })
     }
 
     let mergedPrompt = step.prompt
@@ -368,18 +434,20 @@ export default function ChatgptScreen() {
       mergedPrompt = `${step.prompt}\n\n${fromStorage}`
     }
 
-    await runProcess({ ...step, prompt: mergedPrompt }, { autoSend: true, fast: true })
+    return await runProcess(
+      { ...step, prompt: mergedPrompt },
+      { autoSend: true, fast: true, preferredTabId: lockedWorkflowTabIdRef.current || undefined },
+    )
   }
 
-  const runFillProcess = async (step: { id: string; label: string; prompt: string }) => {
+  const runFillProcess = async (step: ProcessStep) => {
     if (step.id === 'step-2') {
       setSplitImages(null)
       setCopiedPart(null)
     }
 
     if (step.id !== 'step-1') {
-      await runProcess(step, { autoSend: false, fast: false })
-      return
+      return await runProcess(step, { autoSend: false, fast: false })
     }
 
     let mergedPrompt = step.prompt
@@ -388,7 +456,440 @@ export default function ChatgptScreen() {
       mergedPrompt = `${step.prompt}\n\n${fromStorage}`
     }
 
-    await runProcess({ ...step, prompt: mergedPrompt }, { autoSend: false, fast: false })
+    return await runProcess({ ...step, prompt: mergedPrompt }, { autoSend: false, fast: false })
+  }
+
+  const waitForChatgptResponseDone = async (stepLabel: string, timeoutMs = 240_000, preferredTabId?: number) => {
+    const extensionChrome = getChrome()
+    if (!extensionChrome?.tabs?.query || !extensionChrome.scripting?.executeScript) {
+      setStatus(`${stepLabel}: Không hỗ trợ theo dõi phản hồi ChatGPT.`)
+      return false
+    }
+
+    const target = await pickChatgptTab(preferredTabId)
+    if (!target?.id) {
+      setStatus(`${stepLabel}: Không tìm thấy tab ChatGPT để chờ phản hồi.`)
+      return false
+    }
+    await sleep(220)
+
+    setStatus(`${stepLabel}: Đang đợi ChatGPT phản hồi xong...`)
+    const result = await extensionChrome.scripting.executeScript({
+      target: { tabId: target.id },
+      func: (async (maxWaitMs: number) => {
+        const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
+        const pollMs = 650
+        const stableMs = 2200
+        const startedAt = Date.now()
+
+        const isVisible = (el: Element | null): el is HTMLElement => {
+          if (!(el instanceof HTMLElement)) return false
+          const rect = el.getBoundingClientRect()
+          const style = window.getComputedStyle(el)
+          return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden'
+        }
+
+        const isGenerating = () => {
+          const stopBtn =
+            (document.querySelector('button[data-testid="stop-button"]') as HTMLButtonElement | null) ||
+            (document.querySelector('button[aria-label*="Stop"]') as HTMLButtonElement | null) ||
+            (document.querySelector('button[aria-label*="Dừng"]') as HTMLButtonElement | null)
+          if (stopBtn && !stopBtn.disabled && isVisible(stopBtn)) return true
+          return Boolean(document.querySelector('[data-testid="conversation-turn-loading"]'))
+        }
+
+        const getAssistantSignature = () => {
+          const turns = Array.from(document.querySelectorAll<HTMLElement>('[data-message-author-role="assistant"]')).filter(
+            (el) => (el.innerText || '').trim().length > 0,
+          )
+          const lastText = (turns[turns.length - 1]?.innerText || '').replace(/\s+/g, ' ').trim()
+          const compact = lastText.slice(0, 180)
+          return {
+            count: turns.length,
+            text: compact,
+            textLen: lastText.length,
+          }
+        }
+
+        const initial = getAssistantSignature()
+        let prev = initial
+        let stableSince = Date.now()
+        let observedProgress = false
+
+        while (Date.now() - startedAt < maxWaitMs) {
+          const current = getAssistantSignature()
+          const generatingNow = isGenerating()
+          const changed =
+            current.count !== initial.count || current.textLen !== initial.textLen || current.text !== initial.text
+
+          if (changed || generatingNow) observedProgress = true
+          if (
+            current.count !== prev.count ||
+            current.textLen !== prev.textLen ||
+            current.text !== prev.text ||
+            generatingNow
+          ) {
+            stableSince = Date.now()
+          }
+
+          if (!generatingNow && observedProgress && Date.now() - stableSince >= stableMs) {
+            return { ok: true, reason: 'done', elapsedMs: Date.now() - startedAt }
+          }
+
+          prev = current
+          await sleep(pollMs)
+        }
+
+        return {
+          ok: false,
+          reason: observedProgress ? 'timeout' : 'no_response',
+          elapsedMs: Date.now() - startedAt,
+        }
+      }) as (...args: unknown[]) => unknown,
+      args: [timeoutMs],
+    })
+
+    const payload = (result?.[0]?.result || null) as { ok?: boolean; reason?: string } | null
+    if (payload?.ok) {
+      setStatus(`${stepLabel}: ChatGPT đã phản hồi xong, tiếp tục bước kế tiếp.`)
+      return true
+    }
+
+    if (payload?.reason === 'timeout') {
+      setStatus(`${stepLabel}: Hết thời gian chờ phản hồi ChatGPT.`)
+      return false
+    }
+    if (payload?.reason === 'no_response') {
+      setStatus(`${stepLabel}: Chưa thấy phản hồi mới từ ChatGPT.`)
+      return false
+    }
+    setStatus(`${stepLabel}: Không thể xác nhận trạng thái phản hồi ChatGPT.`)
+    return false
+  }
+
+  const getAssistantImageCount = async (preferredTabId?: number) => {
+    const extensionChrome = getChrome()
+    if (!extensionChrome?.scripting?.executeScript) return 0
+    const target = await pickChatgptTab(preferredTabId)
+    if (!target?.id) return 0
+
+    const result = await extensionChrome.scripting.executeScript({
+      target: { tabId: target.id },
+      func: (() => {
+        const all = Array.from(document.querySelectorAll<HTMLImageElement>('[data-message-author-role="assistant"] img'))
+        return all.filter((img) => {
+          const src = (img.getAttribute('src') || '').trim()
+          if (!src) return false
+          if (src.startsWith('data:')) return false
+          return true
+        }).length
+      }) as (...args: unknown[]) => unknown,
+    })
+    return Number(result?.[0]?.result || 0)
+  }
+
+  const waitForGeneratedImageDone = async (stepLabel: string, baselineCount: number, timeoutMs = 360_000, preferredTabId?: number) => {
+    const extensionChrome = getChrome()
+    if (!extensionChrome?.tabs?.query || !extensionChrome.scripting?.executeScript) {
+      setStatus(`${stepLabel}: Không hỗ trợ theo dõi tạo ảnh ChatGPT.`)
+      return false
+    }
+    const target = await pickChatgptTab(preferredTabId)
+    if (!target?.id) {
+      setStatus(`${stepLabel}: Không tìm thấy tab ChatGPT để chờ tạo ảnh.`)
+      return false
+    }
+
+    setStatus(`${stepLabel}: Đang đợi ChatGPT tạo ảnh xong...`)
+    const result = await extensionChrome.scripting.executeScript({
+      target: { tabId: target.id },
+      func: (async (baseCount: number, maxWaitMs: number) => {
+        const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
+        const pollMs = 700
+        const stableMs = 1800
+        const settleAfterDetectMs = 3200
+        const startedAt = Date.now()
+        let stableSince = Date.now()
+        let imageDetected = false
+        let firstDetectAt = 0
+        let lastCount = baseCount
+        let assistantChanged = false
+
+        const isVisible = (el: Element | null): el is HTMLElement => {
+          if (!(el instanceof HTMLElement)) return false
+          const rect = el.getBoundingClientRect()
+          const style = window.getComputedStyle(el)
+          return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden'
+        }
+
+        const isGenerating = () => {
+          const stopBtn =
+            (document.querySelector('button[data-testid="stop-button"]') as HTMLButtonElement | null) ||
+            (document.querySelector('button[aria-label*="Stop"]') as HTMLButtonElement | null) ||
+            (document.querySelector('button[aria-label*="Dừng"]') as HTMLButtonElement | null)
+          if (stopBtn && !stopBtn.disabled && isVisible(stopBtn)) return true
+          return Boolean(document.querySelector('[data-testid="conversation-turn-loading"]'))
+        }
+
+        const countAssistantImages = () => {
+          const all = Array.from(
+            document.querySelectorAll<HTMLImageElement>(
+              '[data-message-author-role="assistant"] img, article img, main img',
+            ),
+          )
+          return all.filter((img) => {
+            const src = (img.getAttribute('src') || '').trim()
+            if (!src) return false
+            if (src.startsWith('data:')) return false
+            const alt = (img.getAttribute('alt') || '').toLowerCase()
+            if (alt.includes('avatar') || alt.includes('profile')) return false
+            const w = img.naturalWidth || img.width || 0
+            const h = img.naturalHeight || img.height || 0
+            // Ignore tiny icons/avatars.
+            if (w > 0 && h > 0 && (w < 96 || h < 96)) return false
+            return true
+          }).length
+        }
+
+        const getAssistantSignature = () => {
+          const turns = Array.from(document.querySelectorAll<HTMLElement>('[data-message-author-role="assistant"]')).filter(
+            (el) => (el.innerText || '').trim().length > 0,
+          )
+          const lastText = (turns[turns.length - 1]?.innerText || '').replace(/\s+/g, ' ').trim()
+          return {
+            count: turns.length,
+            textLen: lastText.length,
+          }
+        }
+
+        const initialSig = getAssistantSignature()
+        let prevSig = initialSig
+
+        while (Date.now() - startedAt < maxWaitMs) {
+          const currentCount = countAssistantImages()
+          const generatingNow = isGenerating()
+          const currentSig = getAssistantSignature()
+          if (currentCount > baseCount) {
+            imageDetected = true
+            if (!firstDetectAt) firstDetectAt = Date.now()
+          }
+          if (currentSig.count !== initialSig.count || currentSig.textLen !== initialSig.textLen) {
+            assistantChanged = true
+          }
+
+          if (
+            currentCount !== lastCount ||
+            generatingNow ||
+            currentSig.count !== prevSig.count ||
+            currentSig.textLen !== prevSig.textLen
+          ) {
+            stableSince = Date.now()
+          }
+
+          // Success condition A: image count increased and DOM stabilized.
+          if (imageDetected && Date.now() - stableSince >= stableMs) {
+            return { ok: true, reason: 'image_done', imageCount: currentCount }
+          }
+          // Success condition A2: no detectable new img element, but assistant output changed
+          // and UI stabilized (covers alternate render paths).
+          if (assistantChanged && Date.now() - stableSince >= stableMs) {
+            return { ok: true, reason: 'assistant_done', imageCount: currentCount }
+          }
+          // Success condition B: image detected and enough settle time passed,
+          // even if UI still reports generating (avoid stuck waiting).
+          if (imageDetected && firstDetectAt && Date.now() - firstDetectAt >= settleAfterDetectMs && !generatingNow) {
+            return { ok: true, reason: 'image_done_settle', imageCount: currentCount }
+          }
+
+          lastCount = currentCount
+          prevSig = currentSig
+          await sleep(pollMs)
+        }
+
+        return { ok: false, reason: imageDetected ? 'timeout_after_image' : 'no_new_image', imageCount: lastCount }
+      }) as (...args: unknown[]) => unknown,
+      args: [baselineCount, timeoutMs],
+    })
+
+    const payload = (result?.[0]?.result || null) as { ok?: boolean; reason?: string } | null
+    if (payload?.ok) {
+      setStatus(`${stepLabel}: Ảnh đã tạo xong, tiếp tục bước kế tiếp.`)
+      return true
+    }
+    if (payload?.reason === 'no_new_image') {
+      setStatus(`${stepLabel}: Không thấy ảnh mới được tạo.`)
+      return false
+    }
+    if (payload?.reason === 'timeout_after_image') {
+      setStatus(`${stepLabel}: Đã có ảnh mới nhưng hết thời gian chờ hoàn tất.`)
+      return false
+    }
+    setStatus(`${stepLabel}: Không thể xác nhận trạng thái tạo ảnh.`)
+    return false
+  }
+
+  const parseDelayMs = (inputSchema: Record<string, unknown>) => {
+    const raw = inputSchema?.delayMs ?? inputSchema?.ms ?? inputSchema?.delay
+    const value = Number(raw)
+    if (!Number.isFinite(value) || value < 0) return 1200
+    return Math.max(100, Math.floor(value))
+  }
+
+  const executeWorkflowStep = async (step: ProcessStep) => {
+    // User-required behavior: every workflow step in ChatGPT screen
+    // runs exactly like "Chạy nhanh", then waits for response completion.
+    const action = (step.actionType || '').trim().toLowerCase()
+    const isGenerateImageStep = action === 'generate_image'
+    const baselineImageCount = isGenerateImageStep ? await getAssistantImageCount(lockedWorkflowTabIdRef.current || undefined) : 0
+
+    const sent = await runFastProcess(step)
+    if (!sent) {
+      throw new Error(`${step.label}: Không điền/gửi được prompt vào ChatGPT.`)
+    }
+
+    const done = isGenerateImageStep
+      ? await waitForGeneratedImageDone(step.label, baselineImageCount, 360_000, lockedWorkflowTabIdRef.current || undefined)
+      : await waitForChatgptResponseDone(step.label, 240_000, lockedWorkflowTabIdRef.current || undefined)
+    if (!done) {
+      throw new Error(
+        isGenerateImageStep
+          ? `${step.label}: ChatGPT chưa tạo ảnh hoàn tất.`
+          : `${step.label}: ChatGPT chưa phản hồi hoàn tất.`,
+      )
+    }
+    return {
+      mode: 'forced_fast_per_step',
+      actionType: step.actionType || 'custom',
+      workflowPlatform: step.workflowPlatform,
+      promptSent: sent,
+      responseCompleted: done,
+    }
+  }
+
+  const stopWorkflowRun = () => {
+    workflowStopRef.current = true
+    setIsWorkflowStopping(true)
+    setStatus('Đang dừng workflow sau khi hoàn tất bước hiện tại...')
+  }
+
+  const runWorkflow = async () => {
+    if (!processSteps.length || isWorkflowRunning) return
+    const extensionChrome = getChrome()
+    if (!extensionChrome?.tabs?.query || !extensionChrome?.scripting?.executeScript) {
+      setStatus('Workflow chỉ chạy được trong extension Chrome đã cấp quyền Tabs + Scripting.')
+      return
+    }
+    const firstStep = processSteps[0]
+    if (!firstStep?.workflowId) {
+      setStatus('Chưa tìm thấy workflowId để bắt đầu chạy workflow.')
+      return
+    }
+
+    setIsWorkflowRunning(true)
+    setIsWorkflowStopping(false)
+    workflowStopRef.current = false
+
+    let workflowRunId = ''
+    try {
+      const lockedTab = await pickChatgptTab()
+      lockedWorkflowTabIdRef.current = lockedTab?.id || 0
+      if (!lockedWorkflowTabIdRef.current) {
+        setStatus('Không thể khóa tab ChatGPT cho workflow.')
+        return
+      }
+
+      setStatus(`Đang tạo workflow run (${processSteps.length} bước)...`)
+      const run = await createWorkflowRun({
+        workflowId: firstStep.workflowId,
+        payload: { source: 'chatgpt_screen', totalSteps: processSteps.length },
+      })
+      workflowRunId = run._id
+
+      for (let index = 0; index < processSteps.length; index += 1) {
+        const step = processSteps[index]
+        const stepNo = step.stepNo || index + 1
+        const progress = Math.round((index / processSteps.length) * 100)
+
+        await updateWorkflowRun(workflowRunId, {
+          status: 'running',
+          currentStepNo: stepNo,
+          progress,
+        })
+
+        setSelectedStepId(step.id)
+        setStatus(`Workflow: đang chạy ${step.label} (${index + 1}/${processSteps.length})...`)
+
+        const stepRun = await createStepRun({
+          workflowRunId,
+          workflowId: step.workflowId,
+          stepId: step.backendStepId,
+          stepNo,
+          stepTitle: step.label,
+          status: 'running',
+          input: {
+            actionType: step.actionType,
+            promptLength: step.prompt.length,
+            inputSchema: step.inputSchema || {},
+          },
+        })
+
+        try {
+          const output = await executeWorkflowStep(step)
+          await updateStepRun(stepRun._id, {
+            status: 'completed',
+            output: output as Record<string, unknown>,
+            finishedAt: new Date().toISOString(),
+          })
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : 'Step execution failed.'
+          await updateStepRun(stepRun._id, {
+            status: 'failed',
+            error: { message: errorMessage },
+            finishedAt: new Date().toISOString(),
+          })
+          await updateWorkflowRun(workflowRunId, {
+            status: 'failed',
+            progress,
+            currentStepNo: stepNo,
+            error: { code: 'STEP_FAILED', message: errorMessage, details: { stepId: step.id, stepNo } },
+            finishedAt: new Date().toISOString(),
+          })
+          throw error
+        }
+
+        if (workflowStopRef.current) {
+          await updateWorkflowRun(workflowRunId, {
+            status: 'cancelled',
+            progress: Math.round(((index + 1) / processSteps.length) * 100),
+            currentStepNo: stepNo,
+            finishedAt: new Date().toISOString(),
+          })
+          setStatus(`Workflow đã dừng ở ${step.label}.`)
+          return
+        }
+      }
+
+      await updateWorkflowRun(workflowRunId, {
+        status: 'completed',
+        progress: 100,
+        currentStepNo: processSteps[processSteps.length - 1]?.stepNo || processSteps.length,
+        result: { completedSteps: processSteps.length },
+        finishedAt: new Date().toISOString(),
+      })
+      setStatus(`Workflow chạy xong ${processSteps.length}/${processSteps.length} bước.`)
+    } catch (error) {
+      if (!workflowRunId) {
+        setStatus('Không thể tạo workflow run trên backend.')
+      } else if (!workflowStopRef.current) {
+        const errorMessage = error instanceof Error ? error.message : 'Workflow execution failed.'
+        setStatus(`Workflow thất bại: ${errorMessage}`)
+      }
+    } finally {
+      workflowStopRef.current = false
+      lockedWorkflowTabIdRef.current = 0
+      setIsWorkflowRunning(false)
+      setIsWorkflowStopping(false)
+    }
   }
 
   useEffect(() => {
@@ -1462,6 +1963,31 @@ export default function ChatgptScreen() {
         </div>
 
         <aside className="flex min-h-0 flex-col rounded-2xl border border-white/10 bg-black/30 p-2">
+          <div className="mb-2 shrink-0 rounded-xl border border-white/10 bg-white/5 p-1.5">
+            {isWorkflowRunning ? (
+              <button
+                type="button"
+                onClick={stopWorkflowRun}
+                disabled={isWorkflowStopping}
+                className="inline-flex h-8 w-full cursor-pointer items-center justify-center gap-1 rounded-lg bg-rose-500/20 text-[11px] font-semibold text-rose-100 transition hover:bg-rose-500/30 disabled:cursor-not-allowed disabled:opacity-50"
+                title="Dừng workflow"
+              >
+                <FiSquare className="h-3.5 w-3.5" />
+                {isWorkflowStopping ? 'Đang dừng...' : 'Dừng workflow'}
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => void runWorkflow()}
+                disabled={!processSteps.length || isLoadingProcessSteps}
+                className="inline-flex h-8 w-full cursor-pointer items-center justify-center gap-1 rounded-lg bg-violet-500/20 text-[11px] font-semibold text-violet-100 transition hover:bg-violet-500/30 disabled:cursor-not-allowed disabled:opacity-50"
+                title="Chạy toàn bộ workflow"
+              >
+                <FiPlay className="h-3.5 w-3.5" />
+                Chạy workflow
+              </button>
+            )}
+          </div>
           <div className="min-h-0 space-y-1.5 overflow-y-auto pr-0.5">
             {processSteps.map((step) => (
               <div key={step.id} className="rounded-xl border border-white/10 bg-white/5 p-1.5">
