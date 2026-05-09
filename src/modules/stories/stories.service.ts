@@ -89,29 +89,78 @@ export class StoriesService {
   async checkSourceReelSaved(
     userId: string,
     rawUrl: string,
-  ): Promise<{ saved: boolean; storyId?: string; canonicalUrl?: string }> {
+  ): Promise<{
+    saved: boolean;
+    storyId?: string;
+    canonicalUrl?: string;
+    myUsageCount: number;
+    globalUsageCount: number;
+  }> {
     const normalized = this.normalizeHttpUrl((rawUrl || '').trim());
     if (!normalized) {
-      return { saved: false };
+      return { saved: false, myUsageCount: 0, globalUsageCount: 0 };
     }
     try {
       this.assertFacebookReelUrl(normalized);
     } catch {
-      return { saved: false };
+      return { saved: false, myUsageCount: 0, globalUsageCount: 0 };
     }
     const canonical = this.canonicalSourceReelUrl(normalized);
+    const globalUsageCount = await this.sumUsageAcrossStoriesForReel(canonical);
     const doc = await this.storyModel
       .findOne({
         userId: new Types.ObjectId(userId),
         sourceReelUrl: canonical,
       })
-      .select('_id')
+      .select('_id usageCount')
       .lean();
     return {
       saved: Boolean(doc),
       storyId: doc ? String(doc._id) : undefined,
       canonicalUrl: canonical,
+      myUsageCount: doc ? Number(doc.usageCount) || 0 : 0,
+      globalUsageCount,
     };
+  }
+
+  /** +1 vào Story của user; tổng hệ thống = tổng usageCount mọi Story cùng reel (URL chuẩn). */
+  async incrementUsage(userId: string, storyId: string) {
+    if (!Types.ObjectId.isValid(storyId)) {
+      throw new BadRequestException('Invalid story id.');
+    }
+    const oid = new Types.ObjectId(storyId);
+    const userOid = new Types.ObjectId(userId);
+    const story = await this.storyModel
+      .findOne({ _id: oid, userId: userOid })
+      .select('sourceReelUrl')
+      .lean();
+    if (!story?.sourceReelUrl) {
+      throw new NotFoundException('Story not found.');
+    }
+    const canonical = this.canonicalSourceReelUrl(story.sourceReelUrl);
+
+    await this.storyModel.updateOne({ _id: oid, userId: userOid }, { $inc: { usageCount: 1 } });
+
+    const updated = await this.storyModel.findById(oid).select('usageCount').lean();
+    const globalUsageCount = await this.sumUsageAcrossStoriesForReel(canonical);
+
+    return {
+      storyId: String(oid),
+      canonicalUrl: canonical,
+      myUsageCount: Number(updated?.usageCount) || 0,
+      globalUsageCount,
+    };
+  }
+
+  /** Tổng lượt dùng toàn hệ thống cho một reel = ∑ usageCount của mọi Story trùng sourceReelUrl. */
+  private async sumUsageAcrossStoriesForReel(canonicalReelUrl: string): Promise<number> {
+    const agg = await this.storyModel
+      .aggregate<{ total?: number }>([
+        { $match: { sourceReelUrl: canonicalReelUrl } },
+        { $group: { _id: null, total: { $sum: '$usageCount' } } },
+      ])
+      .exec();
+    return Number(agg[0]?.total) || 0;
   }
 
   private serializeStory(row: Record<string, unknown>) {
@@ -138,6 +187,7 @@ export class StoriesService {
       videoStorageAddresses: Array.isArray(row.videoStorageAddresses)
         ? row.videoStorageAddresses
         : [],
+      usageCount: Number(row.usageCount) || 0,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
     };

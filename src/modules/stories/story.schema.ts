@@ -29,6 +29,10 @@ export class Story {
   @Prop({ default: '', trim: true })
   sourceReelUrl: string;
 
+  /** Số lần ghi nhận sử dụng (theo user — document Story thuộc user này). */
+  @Prop({ default: 0 })
+  usageCount: number;
+
   /** Link bài viết blog đã đăng */
   @Prop({ default: '', trim: true })
   blogPostUrl: string;
