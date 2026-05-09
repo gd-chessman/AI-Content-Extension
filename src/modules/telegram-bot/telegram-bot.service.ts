@@ -177,39 +177,39 @@ export class TelegramBotService implements OnModuleInit, OnModuleDestroy {
     const { runId, workflowName, status, progress, currentStepNo, error } = params;
     if (status === WorkflowRunStatus.RUNNING) {
       return [
-        `Workflow dang chay: ${workflowName}`,
+        `Workflow đang chạy: ${workflowName}`,
         `Run ID: ${runId}`,
-        `Tien do: ${Math.max(0, Math.min(100, Math.round(progress)))}%`,
-        `Step hien tai: ${Math.max(0, Math.floor(currentStepNo))}`,
+        `Tiến độ: ${Math.max(0, Math.min(100, Math.round(progress)))}%`,
+        `Bước hiện tại: ${Math.max(0, Math.floor(currentStepNo))}`,
       ].join('\n');
     }
     if (status === WorkflowRunStatus.COMPLETED) {
       return [
-        `Workflow hoan tat: ${workflowName}`,
+        `Workflow hoàn tất: ${workflowName}`,
         `Run ID: ${runId}`,
-        `Ket qua: thanh cong`,
+        `Kết quả: thành công`,
       ].join('\n');
     }
     if (status === WorkflowRunStatus.CANCELLED) {
       return [
-        `Workflow da dung: ${workflowName}`,
+        `Workflow đã dừng: ${workflowName}`,
         `Run ID: ${runId}`,
-        `Trang thai: cancelled`,
+        `Trạng thái: đã hủy`,
       ].join('\n');
     }
     if (status === WorkflowRunStatus.FAILED) {
       const errorMessage = String(error?.message || '').trim();
       return [
-        `Workflow that bai: ${workflowName}`,
+        `Workflow thất bại: ${workflowName}`,
         `Run ID: ${runId}`,
-        errorMessage ? `Loi: ${errorMessage}` : 'Loi: khong ro',
+        errorMessage ? `Lỗi: ${errorMessage}` : 'Lỗi: không rõ',
       ].join('\n');
     }
     return [
-      `Workflow cap nhat: ${workflowName}`,
+      `Workflow cập nhật: ${workflowName}`,
       `Run ID: ${runId}`,
-      `Trang thai: ${status || 'unknown'}`,
-      `Tien do: ${Math.max(0, Math.min(100, Math.round(progress)))}%`,
+      `Trạng thái: ${status || 'không xác định'}`,
+      `Tiến độ: ${Math.max(0, Math.min(100, Math.round(progress)))}%`,
     ].join('\n');
   }
 
@@ -259,7 +259,7 @@ export class TelegramBotService implements OnModuleInit, OnModuleDestroy {
     if (!user) {
       await this.sendMessage(
         chatId,
-        'Chua lien ket telegram_id. Vui long vao ho so extension va cap nhat telegram_id truoc.',
+        'Chưa liên kết telegram_id. Vui lòng vào hồ sơ extension và cập nhật telegram_id trước.',
       );
       return;
     }
@@ -268,10 +268,10 @@ export class TelegramBotService implements OnModuleInit, OnModuleDestroy {
       await this.sendMessage(
         chatId,
         [
-          'Lenh ho tro:',
-          '/workflows - Xem danh sach workflow active',
-          '/run <id|ten> - Kich hoat workflow',
-          '/myid - Xem Telegram ID hien tai',
+          'Lệnh hỗ trợ:',
+          '/workflows — Xem danh sách workflow đang hoạt động',
+          '/run <id|tên> — Kích hoạt workflow',
+          '/myid — Xem Telegram ID hiện tại',
         ].join('\n'),
       );
       return;
@@ -280,7 +280,10 @@ export class TelegramBotService implements OnModuleInit, OnModuleDestroy {
     if (/^\/myid\b/i.test(text)) {
       const fromId = String(message?.from?.id || '');
       const current = user.telegramId || '';
-      await this.sendMessage(chatId, `Telegram from.id: ${fromId}\ntelegram_id dang lien ket: ${current || '(trong)'}`);
+      await this.sendMessage(
+        chatId,
+        `Telegram from.id: ${fromId}\ntelegram_id đang liên kết: ${current || '(trống)'}`,
+      );
       return;
     }
 
@@ -290,14 +293,14 @@ export class TelegramBotService implements OnModuleInit, OnModuleDestroy {
         .sort({ createdAt: -1 })
         .lean();
       if (!workflows.length) {
-        await this.sendMessage(chatId, 'Chua co workflow active.');
+        await this.sendMessage(chatId, 'Chưa có workflow đang hoạt động.');
         return;
       }
       const lines = workflows.slice(0, 20).map((wf, idx) => {
         const id = String(wf._id);
         return `${idx + 1}. ${wf.name} | id=${id} | ${wf.platform}/${wf.category}`;
       });
-      await this.sendMessage(chatId, `Workflow active:\n${lines.join('\n')}`);
+      await this.sendMessage(chatId, `Workflow đang hoạt động:\n${lines.join('\n')}`);
       return;
     }
 
@@ -308,7 +311,7 @@ export class TelegramBotService implements OnModuleInit, OnModuleDestroy {
     }
 
     if (/^\/run\b/i.test(text)) {
-      await this.sendMessage(chatId, 'Dung cu phap: /run <workflow_id hoac ten workflow>');
+      await this.sendMessage(chatId, 'Dùng cú pháp: /run <workflow_id hoặc tên workflow>');
       return;
     }
   }
@@ -320,7 +323,7 @@ export class TelegramBotService implements OnModuleInit, OnModuleDestroy {
       return;
     }
     if (!picked.workflow) {
-      await this.sendMessage(chatId, 'Khong tim thay workflow phu hop.');
+      await this.sendMessage(chatId, 'Không tìm thấy workflow phù hợp.');
       return;
     }
 
@@ -350,10 +353,10 @@ export class TelegramBotService implements OnModuleInit, OnModuleDestroy {
 
     await this.sendMessage(
       chatId,
-      [
-        `Da kich hoat workflow: ${picked.workflow.name}`,
+        [
+        `Đã kích hoạt workflow: ${picked.workflow.name}`,
         `Run ID: ${String(created._id)}`,
-        'Trang thai: queued',
+        'Trạng thái: đang xếp hàng',
       ].join('\n'),
     );
   }
@@ -363,7 +366,7 @@ export class TelegramBotService implements OnModuleInit, OnModuleDestroy {
     error?: string;
   }> {
     const keyword = keywordRaw.trim();
-    if (!keyword) return { error: 'Vui long nhap workflow_id hoac ten workflow.' };
+    if (!keyword) return { error: 'Vui lòng nhập workflow_id hoặc tên workflow.' };
 
     if (Types.ObjectId.isValid(keyword)) {
       const byId = await this.workflowModel.findOne({ _id: keyword, status: WorkflowStatus.ACTIVE }).lean();
@@ -371,7 +374,7 @@ export class TelegramBotService implements OnModuleInit, OnModuleDestroy {
     }
 
     const active = await this.workflowModel.find({ status: WorkflowStatus.ACTIVE }).lean();
-    if (!active.length) return { error: 'Chua co workflow active.' };
+    if (!active.length) return { error: 'Chưa có workflow đang hoạt động.' };
 
     const lower = keyword.toLowerCase();
     const exact = active.find((wf) => (wf.name || '').trim().toLowerCase() === lower);
@@ -384,7 +387,7 @@ export class TelegramBotService implements OnModuleInit, OnModuleDestroy {
     if (partial.length > 1) {
       const names = partial.slice(0, 8).map((wf) => `- ${wf.name} (${String(wf._id)})`);
       return {
-        error: `Nhieu workflow trung khop. Vui long chi ro hon:\n${names.join('\n')}`,
+        error: `Nhiều workflow trùng khớp. Vui lòng chỉ rõ hơn:\n${names.join('\n')}`,
       };
     }
     return { workflow: undefined };
