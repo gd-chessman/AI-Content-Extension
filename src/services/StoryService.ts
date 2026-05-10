@@ -54,17 +54,17 @@ export const getMyStorySources = async () => {
   return (response.data || []) as StorySourceListItem[]
 }
 
-export type StoryReelCheckResult = {
-  /** Đã có bản ghi story nguồn (đã đồng bộ caption từ reel). */
+/** Kết quả GET /stories/sources/check-reel — chỉ phản ánh StorySource. */
+export type StorySourceReelCheckResult = {
   saved: boolean
   storySourceId?: string
-  storyId?: string
   canonicalUrl?: string
-  /** Lượt dùng đã ghi nhận trên story nguồn của user (0 nếu chưa có nguồn) */
   myUsageCount: number
-  /** Tổng lượt dùng toàn hệ thống cho cùng reel (URL chuẩn) */
   globalUsageCount: number
 }
+
+/** @deprecated Dùng StorySourceReelCheckResult */
+export type StoryReelCheckResult = StorySourceReelCheckResult
 
 export type IncrementStoryUsageResult = {
   storyId: string
@@ -73,12 +73,15 @@ export type IncrementStoryUsageResult = {
   globalUsageCount: number
 }
 
-export const checkStoryReelSaved = async (sourceReelUrl: string) => {
-  const response = await axiosClient.get('/stories/check-reel', {
+export const checkStorySourceForReel = async (sourceReelUrl: string) => {
+  const response = await axiosClient.get('/stories/sources/check-reel', {
     params: { url: sourceReelUrl },
   })
-  return response.data as StoryReelCheckResult
+  return response.data as StorySourceReelCheckResult
 }
+
+/** @deprecated Dùng checkStorySourceForReel */
+export const checkStoryReelSaved = checkStorySourceForReel
 
 export const incrementStoryUsage = async (storyId: string) => {
   const response = await axiosClient.post(`/stories/${storyId}/increment-usage`)
