@@ -20,6 +20,12 @@ export class StoriesController {
     return this.storiesService.listForUser(user.sub);
   }
 
+  @Get('sources/my')
+  listMySources(@Req() req: Request) {
+    const user = req.user as JwtPayload;
+    return this.storiesService.listSourcesForUser(user.sub);
+  }
+
   @Get('check-reel')
   checkReel(@Req() req: Request, @Query('url') url?: string) {
     const user = req.user as JwtPayload;

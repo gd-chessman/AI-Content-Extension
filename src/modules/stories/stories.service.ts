@@ -22,6 +22,20 @@ export class StoriesService {
     private readonly storyTopicModel: Model<StoryTopicDocument>,
   ) {}
 
+  /** URL reel chuẩn đã có story nguồn — dùng cho checklist UI (không phụ thuộc populate Story). */
+  async listSourcesForUser(userId: string) {
+    const rows = await this.storySourceModel
+      .find({ userId: new Types.ObjectId(userId) })
+      .select('sourceReelUrl')
+      .sort({ updatedAt: -1 })
+      .limit(500)
+      .lean();
+
+    return rows.map((r) => ({
+      sourceReelUrl: String(r.sourceReelUrl || ''),
+    }));
+  }
+
   async listForUser(userId: string) {
     const rows = await this.storyModel
       .find({ userId: new Types.ObjectId(userId) })
