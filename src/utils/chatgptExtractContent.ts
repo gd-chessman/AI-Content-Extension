@@ -132,7 +132,6 @@ export function chatgptExtractContent(...args: unknown[]): ChatgptExtractContent
   }
 
   let raw = ''
-  let matchedAssistantNode: HTMLElement | null = null
 
   for (let i = turns.length - 1; i >= 0; i -= 1) {
     const role = (turns[i].getAttribute('data-message-author-role') || '').toLowerCase()
@@ -149,7 +148,6 @@ export function chatgptExtractContent(...args: unknown[]): ChatgptExtractContent
       if (!assistantText) continue
       if (!isStep4AssistantOutput(assistantText)) continue
       raw = assistantText
-      matchedAssistantNode = turns[j]
       break
     }
 
@@ -157,8 +155,6 @@ export function chatgptExtractContent(...args: unknown[]): ChatgptExtractContent
   }
 
   if (!raw) return mode === 'collect' ? null : ''
-
-  matchedAssistantNode?.scrollIntoView({ block: 'start', behavior: 'instant' })
 
   const plainTitle = pickTitle(raw)
   const styledTitle = stylizeTitle(plainTitle)
