@@ -35,6 +35,12 @@ export const getMyStories = async () => {
   return (response.data || []) as StoryItem[]
 }
 
+/** Danh sách reel đã có story nguồn (đồng bộ caption / đã lưu nguồn). */
+export const getMyStorySources = async () => {
+  const response = await axiosClient.get('/stories/sources/my')
+  return (response.data || []) as { sourceReelUrl: string }[]
+}
+
 export type StoryReelCheckResult = {
   /** Đã có bản ghi story nguồn (đã đồng bộ caption từ reel). */
   saved: boolean

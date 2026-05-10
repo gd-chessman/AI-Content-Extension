@@ -33,7 +33,7 @@ import {
 import {
   checkStoryReelSaved,
   createStoryFromReel,
-  getMyStories,
+  getMyStorySources,
   incrementStoryUsage,
   syncStorySourceFromReel,
 } from '@/services/StoryService'
@@ -281,21 +281,21 @@ export default function FacebookScreen() {
   /** Đã đồng bộ caption vào story nguồn (không chặn lưu thêm story). */
   const hasStorySourceSynced = reelSavedCheck?.saved === true
 
-  const { data: myStories = [] } = useQuery({
-    queryKey: ['stories', 'my'],
-    queryFn: getMyStories,
+  const { data: myStorySources = [] } = useQuery({
+    queryKey: ['stories', 'sources', 'my'],
+    queryFn: getMyStorySources,
     enabled: activeView === 'reels',
     staleTime: 30_000,
   })
 
   const savedCanonicalReelUrls = useMemo(() => {
     const next = new Set<string>()
-    for (const s of myStories) {
-      const u = (s.sourceReelUrl || '').trim()
+    for (const row of myStorySources) {
+      const u = (row.sourceReelUrl || '').trim()
       if (u) next.add(canonicalSourceReelUrl(u))
     }
     return next
-  }, [myStories])
+  }, [myStorySources])
 
   const { data: fbWorkflowSteps = [], isLoading: isLoadingFbWorkflowSteps } = useQuery<FacebookProcessStep[]>({
     queryKey: ['facebook-workflow-steps'],
@@ -824,6 +824,7 @@ export default function FacebookScreen() {
       setStorySaveStatus('ok')
       void queryClient.invalidateQueries({ queryKey: ['stories', 'check-reel'] })
       void queryClient.invalidateQueries({ queryKey: ['stories', 'my'] })
+      void queryClient.invalidateQueries({ queryKey: ['stories', 'sources', 'my'] })
       window.setTimeout(() => setStorySaveStatus('idle'), 2800)
     } catch {
       setStorySaveStatus('error')
@@ -1049,6 +1050,7 @@ export default function FacebookScreen() {
             void queryClient.invalidateQueries({
               queryKey: ['stories', 'check-reel', targetReel.url],
             })
+            void queryClient.invalidateQueries({ queryKey: ['stories', 'sources', 'my'] })
           })
           .catch(() => {
             /* chưa đăng nhập hoặc lỗi mạng — bỏ qua */
@@ -1575,13 +1577,13 @@ export default function FacebookScreen() {
         while (true) {
           if (fbWorkflowStopRef.current) throw new Error('Đã dừng workflow')
 
-          const stories = await queryClient.fetchQuery({
-            queryKey: ['stories', 'my'],
-            queryFn: getMyStories,
+          const sources = await queryClient.fetchQuery({
+            queryKey: ['stories', 'sources', 'my'],
+            queryFn: getMyStorySources,
           })
           const savedSet = new Set<string>()
-          for (const s of stories) {
-            const u = (s.sourceReelUrl || '').trim()
+          for (const row of sources) {
+            const u = (row.sourceReelUrl || '').trim()
             if (u) savedSet.add(canonicalSourceReelUrl(u))
           }
 
@@ -1665,6 +1667,7 @@ export default function FacebookScreen() {
         }
         void queryClient.invalidateQueries({ queryKey: ['stories', 'check-reel'] })
         void queryClient.invalidateQueries({ queryKey: ['stories', 'my'] })
+        void queryClient.invalidateQueries({ queryKey: ['stories', 'sources', 'my'] })
         return { saved: true }
       }
       default:
@@ -2317,8 +2320,8 @@ export default function FacebookScreen() {
                         {reelSavedInList ? (
                           <span
                             className="relative inline-flex shrink-0 text-amber-200/90"
-                            title="Đã lưu vào story"
-                            aria-label="Đã lưu vào story"
+                            title="Đã có story nguồn (caption đã đồng bộ)"
+                            aria-label="Đã có story nguồn trên máy chủ"
                           >
                             <FiSave className="h-4 w-4" aria-hidden />
                             <span
