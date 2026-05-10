@@ -16,6 +16,7 @@ export type StoryItem = {
   fbReelUrl?: string
   /** Lượt ghi nhận trên story nguồn (reel) — chung cho mọi story cùng nguồn */
   usageCount?: number
+  videoPrompts?: string[]
   createdAt?: string
   updatedAt?: string
 }
@@ -35,10 +36,22 @@ export const getMyStories = async () => {
   return (response.data || []) as StoryItem[]
 }
 
-/** Danh sách reel đã có story nguồn (đồng bộ caption / đã lưu nguồn). */
+/** Một bản ghi StorySource (API đã sắp: mới trước, usageCount thấp trước khi trùng thời điểm). */
+export type StorySourceListItem = {
+  _id: string
+  id: string
+  sourceContent: string
+  sourceReelUrl: string
+  name: string
+  usageCount: number
+  createdAt?: string
+  updatedAt?: string
+}
+
+/** Danh sách story nguồn (caption reel) — thứ tự ưu tiên mới & ít dùng. */
 export const getMyStorySources = async () => {
   const response = await axiosClient.get('/stories/sources/my')
-  return (response.data || []) as { sourceReelUrl: string }[]
+  return (response.data || []) as StorySourceListItem[]
 }
 
 export type StoryReelCheckResult = {
@@ -70,6 +83,11 @@ export const checkStoryReelSaved = async (sourceReelUrl: string) => {
 export const incrementStoryUsage = async (storyId: string) => {
   const response = await axiosClient.post(`/stories/${storyId}/increment-usage`)
   return response.data as IncrementStoryUsageResult
+}
+
+export const patchStory = async (storyId: string, payload: { videoPrompts: string[] }) => {
+  const response = await axiosClient.patch(`/stories/${storyId}`, payload)
+  return response.data as StoryItem
 }
 
 export const syncStorySourceFromReel = async (payload: {
