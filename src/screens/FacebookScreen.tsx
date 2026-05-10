@@ -111,8 +111,7 @@ function isFacebookReelPageUrl(urlString: string): boolean {
       host === 'fb.watch' ||
       host.endsWith('.fb.watch')
     const hasReelSegment =
-      fullLower.includes('facebook.com/reel/') ||
-      fullLower.includes('m.facebook.com/reel/') ||
+      u.pathname.includes('/reel/') ||
       /[?&]reel_id=/i.test(fullLower) ||
       host === 'fb.watch' ||
       fullLower.includes('fb.watch/')
@@ -122,12 +121,12 @@ function isFacebookReelPageUrl(urlString: string): boolean {
   }
 }
 
-/** Tab hợp lệ cho nút film: chỉ `facebook.com/reel/…` (www được chuẩn hóa). Không m.facebook, fb.watch. */
+/** Tab desktop hợp lệ cho nút film: `facebook.com` hoặc `web.facebook.com/reel/…` (www bỏ). Không m.facebook, fb.watch. */
 function isFacebookDotComReelPath(urlString: string): boolean {
   try {
     const u = new URL(urlString.trim())
     const host = u.hostname.replace(/^www\./i, '').toLowerCase()
-    if (host !== 'facebook.com') return false
+    if (host !== 'facebook.com' && host !== 'web.facebook.com') return false
     return u.pathname.includes('/reel/')
   } catch {
     return false
@@ -744,7 +743,7 @@ export default function FacebookScreen() {
     const finishWithUrl = (url: string | null) => {
       if (!url) {
         setContentReelLoadStatus(
-          'Không thấy tab facebook.com/reel/… Hãy mở reel đúng định dạng này trong Chrome.',
+          'Không thấy tab facebook.com hoặc web.facebook.com/reel/… Hãy mở reel đúng định dạng này trong Chrome.',
         )
         return
       }
@@ -2418,10 +2417,10 @@ export default function FacebookScreen() {
               onClick={() => handleLoadReelFromOpenFacebookTab()}
               title={
                 hasDotComReelTab
-                  ? 'Lấy reel từ tab facebook.com/reel/ đang mở'
-                  : 'Mở reel tại facebook.com/reel/… trong một tab Chrome (tab trong cửa sổ này)'
+                  ? 'Lấy reel từ tab facebook.com hoặc web.facebook.com/reel/ đang mở'
+                  : 'Mở reel tại facebook.com hoặc web.facebook.com/reel/… trong một tab Chrome (tab trong cửa sổ này)'
               }
-              aria-label="Lấy reel từ tab facebook.com/reel"
+              aria-label="Lấy reel từ tab facebook.com hoặc web.facebook.com/reel"
               className="shrink-0 cursor-pointer rounded-lg p-1.5 text-blue-300 transition hover:bg-blue-500/20 disabled:cursor-not-allowed disabled:opacity-40"
             >
               <FiFilm className="h-4 w-4" aria-hidden />
@@ -2461,7 +2460,7 @@ export default function FacebookScreen() {
             </div>
           ) : (
             <p className="mt-2 rounded-xl border border-blue-300/20 bg-blue-400/10 px-3 py-2 text-[11px] text-slate-500">
-              Chưa chọn reel. Mở đúng URL dạng facebook.com/reel/… trong tab (cùng cửa sổ), rồi bấm icon film khi nút sáng — không dùng m.facebook hay fb.watch.
+              Chưa chọn reel. Mở đúng URL dạng facebook.com hoặc web.facebook.com/reel/… trong tab (cùng cửa sổ), rồi bấm icon film khi nút sáng — không dùng m.facebook hay fb.watch.
             </p>
           )}
           {selectedReel && reelSavedCheck ? (
