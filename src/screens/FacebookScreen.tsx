@@ -123,6 +123,18 @@ function isFacebookReelPageUrl(urlString: string): boolean {
   }
 }
 
+/** Tab hợp lệ cho nút film: chỉ `facebook.com/reel/…` (www được chuẩn hóa). Không m.facebook, fb.watch. */
+function isFacebookDotComReelPath(urlString: string): boolean {
+  try {
+    const u = new URL(urlString.trim())
+    const host = u.hostname.replace(/^www\./i, '').toLowerCase()
+    if (host !== 'facebook.com') return false
+    return u.pathname.includes('/reel/')
+  } catch {
+    return false
+  }
+}
+
 /** Khớp logic canonical URL reel trên BE (`canonicalSourceReelUrl`). */
 function canonicalSourceReelUrl(url: string): string {
   try {
@@ -208,6 +220,8 @@ export default function FacebookScreen() {
   const [storySaveStatus, setStorySaveStatus] = useState<'idle' | 'saving' | 'ok' | 'error'>('idle')
   const [isContentDirty, setIsContentDirty] = useState(false)
   const [contentReelLoadStatus, setContentReelLoadStatus] = useState('')
+  /** Có ít nhất một tab cửa sổ hiện tại đang mở facebook.com/reel/… */
+  const [hasDotComReelTab, setHasDotComReelTab] = useState(false)
   const [reelLinkInput, setReelLinkInput] = useState('')
   const [showAddFanpageForm, setShowAddFanpageForm] = useState(false)
   const [showEditFanpagesModal, setShowEditFanpagesModal] = useState(false)
@@ -230,13 +244,14 @@ export default function FacebookScreen() {
     queryFn: getFanpages,
   })
 
+  /** Không auto-chọn fanpage đầu — chỉ viền tím sau khi user bấm (workflow vẫn dùng pickIndex backend nếu chưa chọn). */
   useEffect(() => {
     if (!fanpages.length) {
       setSelectedFanpageId(null)
       return
     }
     setSelectedFanpageId((prev) =>
-      prev && fanpages.some((p) => p._id === prev) ? prev : fanpages[0]._id,
+      prev && fanpages.some((p) => p._id === prev) ? prev : null,
     )
   }, [fanpages])
   const { data: reelSavedCheck } = useQuery({
@@ -425,6 +440,29 @@ export default function FacebookScreen() {
       setOpenedFacebookUrls(next)
     })
   }, [])
+
+  /** Bật nút film (Chi tiết reel) chỉ khi có tab facebook.com/reel/… trong cửa sổ hiện tại. */
+  useEffect(() => {
+    if (activeView !== 'content') {
+      setHasDotComReelTab(false)
+      return
+    }
+    const extensionChrome = (globalThis as { chrome?: ExtensionChrome }).chrome
+    const query = extensionChrome?.tabs?.query
+    if (!query) {
+      setHasDotComReelTab(false)
+      return
+    }
+    const tick = () => {
+      query({ currentWindow: true }, (tabs) => {
+        const ok = (tabs || []).some((t) => t.url && isFacebookDotComReelPath(t.url))
+        setHasDotComReelTab(ok)
+      })
+    }
+    tick()
+    const id = window.setInterval(tick, 2000)
+    return () => window.clearInterval(id)
+  }, [activeView])
 
   const openFanpage = (url: string) => {
     const extensionChrome = (globalThis as { chrome?: ExtensionChrome }).chrome
@@ -663,7 +701,7 @@ export default function FacebookScreen() {
     const finishWithUrl = (url: string | null) => {
       if (!url) {
         setContentReelLoadStatus(
-          'Không thấy tab nào đang mở reel Facebook. Hãy mở reel trong một tab (facebook.com/reel/…).',
+          'Không thấy tab facebook.com/reel/… Hãy mở reel đúng định dạng này trong Chrome.',
         )
         return
       }
@@ -678,12 +716,12 @@ export default function FacebookScreen() {
     }
 
     const reelTabsIn = (tabs: Array<{ id?: number; url?: string; active?: boolean }>) =>
-      tabs.filter((t) => t.url && isFacebookReelPageUrl(t.url))
+      tabs.filter((t) => t.url && isFacebookDotComReelPath(t.url))
 
     tabsQuery({ currentWindow: true }, (windowTabs) => {
       const list = windowTabs || []
       const activeTab = list.find((t) => t.active)
-      if (activeTab?.url && isFacebookReelPageUrl(activeTab.url)) {
+      if (activeTab?.url && isFacebookDotComReelPath(activeTab.url)) {
         finishWithUrl(activeTab.url)
         return
       }
@@ -815,19 +853,19 @@ export default function FacebookScreen() {
     const normalizedTarget = normalize(targetReel.url)
     const reelId = targetReel.url.match(/\/reel\/(\d+)/)?.[1] || ''
 
-    extensionChrome.tabs.query({ url: ['*://*.facebook.com/*'] }, async (tabs) => {
+    extensionChrome.tabs.query({ url: ['*://*.facebook.com/*', '*://facebook.com/*'] }, async (tabs) => {
+      const reelTabs = (tabs || []).filter((tab) => tab.url && isFacebookDotComReelPath(tab.url))
       const matchedTab =
-        tabs.find((tab) => {
+        reelTabs.find((tab) => {
           const tabUrl = tab.url || ''
-          if (!tabUrl) return false
           if (normalize(tabUrl) === normalizedTarget) return true
           if (reelId && tabUrl.includes(reelId)) return true
           return false
         }) ||
-        tabs.find((tab) => tab.active && tab.id) ||
-        tabs[0]
+        reelTabs.find((tab) => tab.active && tab.id) ||
+        reelTabs[0]
 
-      if (!matchedTab?.id || !matchedTab.url || !/facebook\.com/.test(matchedTab.url)) {
+      if (!matchedTab?.id || !matchedTab.url) {
         return
       }
 
@@ -1923,7 +1961,18 @@ export default function FacebookScreen() {
               <p className="rounded-xl border border-amber-300/20 bg-amber-400/10 px-3 py-2 text-[11px] text-slate-400">
                 Chưa có fanpage nào. Hãy thêm mới
               </p>
-            ) : fanpages.map((page) => (
+            ) : fanpages.map((page) => {
+              const isSelected = page._id === selectedFanpageId
+              const isOpen = openedFacebookUrls.has(normalizeUrl(page.url))
+              const workflowRow = isFbWorkflowRunning && isSelected
+              const cardClass = workflowRow
+                ? 'border border-violet-400/70 bg-violet-500/15 ring-1 ring-violet-400/40'
+                : isSelected
+                  ? 'border border-green-500/55 bg-green-500/12 ring-1 ring-green-500/35'
+                  : isOpen
+                    ? 'border border-emerald-500/40 bg-emerald-500/10'
+                    : 'border border-blue-300/20 bg-blue-400/10 hover:bg-blue-400/15'
+              return (
               <button
                 key={page._id}
                 type="button"
@@ -1931,19 +1980,17 @@ export default function FacebookScreen() {
                   setSelectedFanpageId(page._id)
                   openFanpage(page.url)
                 }}
-                className={`flex w-full cursor-pointer items-center justify-between rounded-2xl px-3 py-3 text-left transition ${
-                  page._id === selectedFanpageId
-                    ? 'border border-violet-400/70 bg-violet-500/15 ring-1 ring-violet-400/40'
-                    : openedFacebookUrls.has(normalizeUrl(page.url))
-                      ? 'border border-emerald-500/40 bg-emerald-500/10'
-                      : 'border border-blue-300/20 bg-blue-400/10 hover:bg-blue-400/15'
-                }`}
+                className={`flex w-full cursor-pointer items-center justify-between rounded-2xl px-3 py-3 text-left transition ${cardClass}`}
               >
                 <div>
                   <p className="text-xs font-semibold text-slate-100">{page.name}</p>
                   <p className="mt-0.5 line-clamp-1 break-all text-[11px] text-slate-500">{page.url}</p>
                 </div>
-                {openedFacebookUrls.has(normalizeUrl(page.url)) ? (
+                {workflowRow ? (
+                  <span className="whitespace-nowrap rounded-lg bg-violet-500/25 px-2 py-1 text-[10px] font-semibold text-violet-200">
+                    Workflow
+                  </span>
+                ) : openedFacebookUrls.has(normalizeUrl(page.url)) ? (
                   <span className="whitespace-nowrap rounded-lg bg-emerald-500/20 px-2 py-1 text-[10px] font-semibold text-emerald-300">
                     Đang mở
                   </span>
@@ -1953,7 +2000,8 @@ export default function FacebookScreen() {
                   </span>
                 )}
               </button>
-            ))}
+              )
+            })}
           </div>
           </section>
         ) : null}
@@ -2278,10 +2326,15 @@ export default function FacebookScreen() {
             <h2 className="text-sm font-semibold text-white">Chi tiết Reels</h2>
             <button
               type="button"
+              disabled={!hasDotComReelTab}
               onClick={() => handleLoadReelFromOpenFacebookTab()}
-              title="Lấy reel từ tab đang mở"
-              aria-label="Lấy reel từ tab đang mở"
-              className="shrink-0 cursor-pointer rounded-lg p-1.5 text-blue-300 transition hover:bg-blue-500/20"
+              title={
+                hasDotComReelTab
+                  ? 'Lấy reel từ tab facebook.com/reel/ đang mở'
+                  : 'Mở reel tại facebook.com/reel/… trong một tab Chrome (tab trong cửa sổ này)'
+              }
+              aria-label="Lấy reel từ tab facebook.com/reel"
+              className="shrink-0 cursor-pointer rounded-lg p-1.5 text-blue-300 transition hover:bg-blue-500/20 disabled:cursor-not-allowed disabled:opacity-40"
             >
               <FiFilm className="h-4 w-4" aria-hidden />
             </button>
@@ -2320,7 +2373,7 @@ export default function FacebookScreen() {
             </div>
           ) : (
             <p className="mt-2 rounded-xl border border-blue-300/20 bg-blue-400/10 px-3 py-2 text-[11px] text-slate-500">
-              Chưa chọn reel. Mở reel trong một tab Chrome (facebook.com/reel/…), rồi bấm icon film góc phải — extension đọc tab đang xem (ưu tiên tab đang chọn trong cửa sổ hiện tại).
+              Chưa chọn reel. Mở đúng URL dạng facebook.com/reel/… trong tab (cùng cửa sổ), rồi bấm icon film khi nút sáng — không dùng m.facebook hay fb.watch.
             </p>
           )}
           {selectedReel && reelSavedCheck ? (
