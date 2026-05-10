@@ -280,6 +280,8 @@ export default function FacebookScreen() {
   })
   /** Đã đồng bộ caption vào story nguồn (không chặn lưu thêm story). */
   const hasStorySourceSynced = reelSavedCheck?.saved === true
+  /** Đã có bản ghi story trên máy chủ cho reel này — khóa nút Lưu. */
+  const storyAlreadySavedForReel = Boolean(reelSavedCheck?.storyId)
 
   const { data: myStorySources = [] } = useQuery({
     queryKey: ['stories', 'sources', 'my'],
@@ -351,6 +353,8 @@ export default function FacebookScreen() {
   const runningFbWorkflowRunIdRef = useRef('')
   const [fbWorkflowStatus, setFbWorkflowStatus] = useState('')
   const [isFbWorkflowRunning, setIsFbWorkflowRunning] = useState(false)
+  /** Đồng bộ ngay khi bật/tắt workflow — callback refresh reel không được chờ re-render. */
+  const isFbWorkflowRunningRef = useRef(false)
   const [isFbWorkflowStopping, setIsFbWorkflowStopping] = useState(false)
   const scanStatusLower = scanStatus.toLowerCase()
   const scanStatusTone = scanStatusLower.includes('thất bại') || scanStatusLower.includes('không thể') || scanStatusLower.includes('không tìm thấy')
@@ -810,7 +814,8 @@ export default function FacebookScreen() {
     if (
       !selectedReel?.url?.trim() ||
       !contentText.trim() ||
-      storySaveStatus === 'saving'
+      storySaveStatus === 'saving' ||
+      storyAlreadySavedForReel
     ) {
       return
     }
@@ -1041,20 +1046,22 @@ export default function FacebookScreen() {
           setOriginalContentText(content)
           setIsContentTranslated(false)
         }
-        void syncStorySourceFromReel({
-          sourceReelUrl: targetReel.url.trim(),
-          sourceContent: description.trim(),
-          name: (targetReel.title || '').trim().slice(0, 200),
-        })
-          .then(() => {
-            void queryClient.invalidateQueries({
-              queryKey: ['stories', 'check-reel', targetReel.url],
+        if (isFbWorkflowRunningRef.current) {
+          void syncStorySourceFromReel({
+            sourceReelUrl: targetReel.url.trim(),
+            sourceContent: description.trim(),
+            name: (targetReel.title || '').trim().slice(0, 200),
+          })
+            .then(() => {
+              void queryClient.invalidateQueries({
+                queryKey: ['stories', 'check-reel', targetReel.url],
+              })
+              void queryClient.invalidateQueries({ queryKey: ['stories', 'sources', 'my'] })
             })
-            void queryClient.invalidateQueries({ queryKey: ['stories', 'sources', 'my'] })
-          })
-          .catch(() => {
-            /* chưa đăng nhập hoặc lỗi mạng — bỏ qua */
-          })
+            .catch(() => {
+              /* chưa đăng nhập hoặc lỗi mạng — bỏ qua */
+            })
+        }
       } catch {
         // ignore
       }
@@ -1709,6 +1716,7 @@ export default function FacebookScreen() {
       return
     }
 
+    isFbWorkflowRunningRef.current = true
     setIsFbWorkflowRunning(true)
     setIsFbWorkflowStopping(false)
     fbWorkflowStopRef.current = false
@@ -1833,6 +1841,7 @@ export default function FacebookScreen() {
       workflowFanpageUrlRef.current = null
       workflowOpenedFanpageIndexRef.current = null
       runningFbWorkflowRunIdRef.current = ''
+      isFbWorkflowRunningRef.current = false
       setIsFbWorkflowRunning(false)
       setIsFbWorkflowStopping(false)
     }
@@ -2501,16 +2510,25 @@ export default function FacebookScreen() {
               <button
                 type="button"
                 onClick={() => void saveStoryToServer()}
-                disabled={!selectedReel || !contentText.trim() || storySaveStatus === 'saving'}
+                disabled={
+                  !selectedReel ||
+                  !contentText.trim() ||
+                  storySaveStatus === 'saving' ||
+                  storyAlreadySavedForReel
+                }
                 aria-label={
-                  hasStorySourceSynced
-                    ? 'Tạo thêm story từ reel này (đã có nguồn đồng bộ)'
-                    : 'Lưu nội dung và link reel vào máy chủ'
+                  storyAlreadySavedForReel
+                    ? 'Đã lưu story cho reel này'
+                    : hasStorySourceSynced
+                      ? 'Tạo thêm story từ reel này (đã có nguồn đồng bộ)'
+                      : 'Lưu nội dung và link reel vào máy chủ'
                 }
                 title={
-                  hasStorySourceSynced
-                    ? 'Mỗi lần lưu tạo một story mới; caption reel đã được lưu ở story nguồn'
-                    : 'Lưu story (nội dung + link reel). Nhiều story có thể cùng một reel.'
+                  storyAlreadySavedForReel
+                    ? 'Reel này đã có story trên máy chủ — không cần lưu lại'
+                    : hasStorySourceSynced
+                      ? 'Mỗi lần lưu tạo một story mới; caption reel đã được lưu ở story nguồn'
+                      : 'Lưu story (nội dung + link reel). Nhiều story có thể cùng một reel.'
                 }
                 className={`relative inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg transition disabled:cursor-not-allowed ${
                   storySaveStatus === 'ok'
@@ -2528,7 +2546,7 @@ export default function FacebookScreen() {
                   <FiSave className="h-4 w-4" aria-hidden />
                 )}
                 {storySaveStatus !== 'saving' &&
-                (hasStorySourceSynced || storySaveStatus === 'ok') ? (
+                (storyAlreadySavedForReel || hasStorySourceSynced || storySaveStatus === 'ok') ? (
                   <span
                     className="pointer-events-none absolute -right-0.5 -top-0.5 flex h-3.5 w-3.5 items-center justify-center rounded-full border border-neutral-900/90 bg-emerald-500 text-white shadow-sm"
                     aria-hidden
