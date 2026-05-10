@@ -200,6 +200,7 @@ const formatViewInput = (value: string) => {
 
 const FB_REELS_SCAN_MIN_LS_KEY = 'facebookReelsScanMinViews'
 const FB_REELS_SCAN_MAX_LS_KEY = 'facebookReelsScanMaxViews'
+const FB_SELECTED_FANPAGE_LS_KEY = 'facebookSelectedFanpageId'
 
 function readStoredScanViewInput(key: string, fallback: string): string {
   try {
@@ -259,16 +260,30 @@ export default function FacebookScreen() {
     queryFn: getFanpages,
   })
 
-  /** Không auto-chọn fanpage đầu — chỉ viền tím sau khi user bấm (workflow vẫn dùng pickIndex backend nếu chưa chọn). */
   useEffect(() => {
     if (!fanpages.length) {
       setSelectedFanpageId(null)
       return
     }
-    setSelectedFanpageId((prev) =>
-      prev && fanpages.some((p) => p._id === prev) ? prev : null,
-    )
+    setSelectedFanpageId((prev) => {
+      if (prev && fanpages.some((p) => p._id === prev)) return prev
+      try {
+        const raw = localStorage.getItem(FB_SELECTED_FANPAGE_LS_KEY)
+        if (raw && fanpages.some((p) => p._id === raw)) return raw
+      } catch {
+        /* ignore */
+      }
+      return null
+    })
   }, [fanpages])
+
+  useEffect(() => {
+    try {
+      if (selectedFanpageId) localStorage.setItem(FB_SELECTED_FANPAGE_LS_KEY, selectedFanpageId)
+    } catch {
+      /* ignore */
+    }
+  }, [selectedFanpageId])
   const checkReelQueryKey = useMemo(() => {
     const u = selectedReel?.url?.trim()
     return u ? canonicalSourceReelUrl(u) : ''
