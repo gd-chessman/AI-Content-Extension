@@ -12,6 +12,10 @@ export class Story {
   @Prop({ type: Types.ObjectId, ref: 'StoryTopic', required: false, index: true })
   topicId?: Types.ObjectId;
 
+  /** Nguồn reel (caption đồng bộ); nhiều Story có thể trỏ cùng một StorySource. */
+  @Prop({ type: Types.ObjectId, ref: 'StorySource', required: false, index: true })
+  storySourceId?: Types.ObjectId;
+
   @Prop({ default: '', trim: true })
   name: string;
 
@@ -20,18 +24,6 @@ export class Story {
 
   @Prop({ default: '', trim: true })
   longContent: string;
-
-  /** Nội dung gốc / nguồn (copy từ reel, chat, v.v.) */
-  @Prop({ default: '', trim: true })
-  sourceContent: string;
-
-  /** Địa chỉ URL reel nguồn (Facebook hoặc nơi lấy nội dung) */
-  @Prop({ default: '', trim: true })
-  sourceReelUrl: string;
-
-  /** Số lần ghi nhận sử dụng (theo user — document Story thuộc user này). */
-  @Prop({ default: 0 })
-  usageCount: number;
 
   /** Link bài viết blog đã đăng */
   @Prop({ default: '', trim: true })
@@ -61,11 +53,4 @@ export class Story {
 export const StorySchema = SchemaFactory.createForClass(Story);
 StorySchema.index({ userId: 1, createdAt: -1 });
 StorySchema.index({ topicId: 1, createdAt: -1 });
-/** Unique per user: same sourceReelUrl allowed across different users. */
-StorySchema.index(
-  { userId: 1, sourceReelUrl: 1 },
-  {
-    unique: true,
-    partialFilterExpression: { sourceReelUrl: { $gt: '' } },
-  },
-);
+StorySchema.index({ userId: 1, storySourceId: 1, createdAt: -1 });

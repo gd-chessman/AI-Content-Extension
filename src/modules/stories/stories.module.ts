@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { RolesGuard } from '../auth/roles.guard';
 import { StoryTopic, StoryTopicSchema } from './story-topic.schema';
+import { StorySource, StorySourceSchema } from './story-source.schema';
 import { Story, StorySchema } from './story.schema';
 import { StoriesController } from './stories.controller';
 import { StoriesService } from './stories.service';
@@ -10,6 +11,7 @@ import { StoriesService } from './stories.service';
   imports: [
     MongooseModule.forFeature([
       { name: StoryTopic.name, schema: StoryTopicSchema },
+      { name: StorySource.name, schema: StorySourceSchema },
       { name: Story.name, schema: StorySchema },
     ]),
   ],

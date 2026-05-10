@@ -11,3 +11,10 @@ export class CreateStoryDto {
   /** StoryTopic id (tuỳ chọn) */
   topicId?: string;
 }
+
+/** Đồng bộ / cập nhật story nguồn khi lấy caption từ reel (không tạo Story). */
+export class UpsertStorySourceDto {
+  sourceContent: string;
+  sourceReelUrl: string;
+  name?: string;
+}

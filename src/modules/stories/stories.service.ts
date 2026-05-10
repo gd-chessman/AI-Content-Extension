@@ -1,13 +1,13 @@
 import {
   BadRequestException,
-  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
-import { CreateStoryDto } from './stories.dto';
+import { CreateStoryDto, UpsertStorySourceDto } from './stories.dto';
+import { StorySource, StorySourceDocument } from './story-source.schema';
 import { Story, StoryDocument } from './story.schema';
 import { StoryTopic, StoryTopicDocument } from './story-topic.schema';
 
@@ -16,6 +16,8 @@ export class StoriesService {
   constructor(
     @InjectModel(Story.name)
     private readonly storyModel: Model<StoryDocument>,
+    @InjectModel(StorySource.name)
+    private readonly storySourceModel: Model<StorySourceDocument>,
     @InjectModel(StoryTopic.name)
     private readonly storyTopicModel: Model<StoryTopicDocument>,
   ) {}
@@ -23,11 +25,15 @@ export class StoriesService {
   async listForUser(userId: string) {
     const rows = await this.storyModel
       .find({ userId: new Types.ObjectId(userId) })
+      .populate({
+        path: 'storySourceId',
+        select: 'sourceContent sourceReelUrl name usageCount',
+      })
       .sort({ createdAt: -1 })
       .limit(200)
       .lean();
 
-    return rows.map((row) => this.serializeStory(row));
+    return rows.map((row) => this.serializeStory(row as unknown as Record<string, unknown>));
   }
 
   async createForUser(userId: string, dto: CreateStoryDto) {
@@ -44,16 +50,12 @@ export class StoriesService {
 
     const canonicalReelUrl = this.canonicalSourceReelUrl(sourceReelUrl);
     const userOid = new Types.ObjectId(userId);
-    /** Dedup scope: same reel URL may exist for other users; only blocked per userId. */
-    const duplicate = await this.storyModel
-      .findOne({ userId: userOid, sourceReelUrl: canonicalReelUrl })
-      .select('_id')
-      .lean();
-    if (duplicate) {
-      throw new ConflictException(
-        'You already saved a story with this reel URL.',
-      );
-    }
+
+    const sourceDoc = await this.upsertStorySourceDoc(userOid, {
+      sourceReelUrl: canonicalReelUrl,
+      sourceContent,
+      name: (dto.name || '').trim().slice(0, 200),
+    });
 
     let topicId: Types.ObjectId | undefined;
     if (dto.topicId?.trim()) {
@@ -77,12 +79,37 @@ export class StoriesService {
     const created = await this.storyModel.create({
       userId: userOid,
       topicId,
+      storySourceId: sourceDoc._id,
       name,
-      sourceContent,
-      sourceReelUrl: canonicalReelUrl,
     });
 
-    return this.serializeStory(created.toObject() as unknown as Record<string, unknown>);
+    const plain = created.toObject() as unknown as Record<string, unknown>;
+    plain.storySourceId = sourceDoc.toObject() as unknown as Record<string, unknown>;
+    return this.serializeStory(plain);
+  }
+
+  /** Lưu/cập nhật nội dung nguồn khi quét caption từ reel (không tạo Story). */
+  async upsertStorySourceForUser(userId: string, dto: UpsertStorySourceDto) {
+    const sourceContent = (dto.sourceContent || '').trim();
+    const sourceReelUrl = this.normalizeHttpUrl((dto.sourceReelUrl || '').trim());
+
+    if (!sourceContent) {
+      throw new BadRequestException('Source content is required.');
+    }
+    if (!sourceReelUrl) {
+      throw new BadRequestException('Invalid reel URL.');
+    }
+    this.assertFacebookReelUrl(sourceReelUrl);
+
+    const canonicalReelUrl = this.canonicalSourceReelUrl(sourceReelUrl);
+    const userOid = new Types.ObjectId(userId);
+    const doc = await this.upsertStorySourceDoc(userOid, {
+      sourceReelUrl: canonicalReelUrl,
+      sourceContent,
+      name: (dto.name || '').trim().slice(0, 200),
+    });
+
+    return this.serializeStorySource(doc.toObject() as unknown as Record<string, unknown>);
   }
 
   /** Same canonical URL rules as create; scope per user. */
@@ -91,6 +118,7 @@ export class StoriesService {
     rawUrl: string,
   ): Promise<{
     saved: boolean;
+    storySourceId?: string;
     storyId?: string;
     canonicalUrl?: string;
     myUsageCount: number;
@@ -106,24 +134,41 @@ export class StoriesService {
       return { saved: false, myUsageCount: 0, globalUsageCount: 0 };
     }
     const canonical = this.canonicalSourceReelUrl(normalized);
-    const globalUsageCount = await this.sumUsageAcrossStoriesForReel(canonical);
-    const doc = await this.storyModel
-      .findOne({
-        userId: new Types.ObjectId(userId),
-        sourceReelUrl: canonical,
-      })
+    const globalUsageCount = await this.sumUsageAcrossStorySourcesForReel(canonical);
+    const userOid = new Types.ObjectId(userId);
+
+    const sourceDoc = await this.storySourceModel
+      .findOne({ userId: userOid, sourceReelUrl: canonical })
       .select('_id usageCount')
       .lean();
+
+    let latestStory = sourceDoc
+      ? await this.storyModel
+          .findOne({ userId: userOid, storySourceId: sourceDoc._id })
+          .sort({ createdAt: -1 })
+          .select('_id')
+          .lean()
+      : null;
+    if (!latestStory) {
+      latestStory = await this.storyModel
+        .findOne({ userId: userOid, sourceReelUrl: canonical })
+        .sort({ createdAt: -1 })
+        .select('_id')
+        .lean();
+    }
+
     return {
-      saved: Boolean(doc),
-      storyId: doc ? String(doc._id) : undefined,
+      /** Đã có bản ghi story nguồn (đã đồng bộ caption). */
+      saved: Boolean(sourceDoc),
+      storySourceId: sourceDoc ? String(sourceDoc._id) : undefined,
+      storyId: latestStory ? String(latestStory._id) : undefined,
       canonicalUrl: canonical,
-      myUsageCount: doc ? Number(doc.usageCount) || 0 : 0,
+      myUsageCount: sourceDoc ? Number(sourceDoc.usageCount) || 0 : 0,
       globalUsageCount,
     };
   }
 
-  /** +1 vào Story của user; tổng hệ thống = tổng usageCount mọi Story cùng reel (URL chuẩn). */
+  /** +1 vào StorySource của user (theo story để xác định reel); tổng hệ thống = ∑ usageCount mọi StorySource cùng URL chuẩn. */
   async incrementUsage(userId: string, storyId: string) {
     if (!Types.ObjectId.isValid(storyId)) {
       throw new BadRequestException('Invalid story id.');
@@ -132,29 +177,57 @@ export class StoriesService {
     const userOid = new Types.ObjectId(userId);
     const story = await this.storyModel
       .findOne({ _id: oid, userId: userOid })
-      .select('sourceReelUrl')
+      .populate({ path: 'storySourceId', select: 'sourceReelUrl' })
       .lean();
-    if (!story?.sourceReelUrl) {
+    const row = story as Record<string, unknown> | null;
+
+    let sourceOid: Types.ObjectId | null = null;
+    let canonical = '';
+    const src = row?.storySourceId;
+    if (src && typeof src === 'object' && !Array.isArray(src) && '_id' in src) {
+      const so = src as Record<string, unknown>;
+      sourceOid = new Types.ObjectId(String(so._id));
+      canonical = this.canonicalSourceReelUrl(String(so.sourceReelUrl || ''));
+    } else if (row?.storySourceId) {
+      sourceOid = new Types.ObjectId(String(row.storySourceId));
+      const full = await this.storySourceModel.findById(sourceOid).select('sourceReelUrl').lean();
+      if (full?.sourceReelUrl) {
+        canonical = this.canonicalSourceReelUrl(String(full.sourceReelUrl));
+      }
+    }
+    if ((!sourceOid || !canonical) && row?.sourceReelUrl) {
+      canonical = this.canonicalSourceReelUrl(String(row.sourceReelUrl));
+      const found = await this.storySourceModel
+        .findOne({ userId: userOid, sourceReelUrl: canonical })
+        .select('_id')
+        .lean();
+      if (found?._id) {
+        sourceOid = found._id as Types.ObjectId;
+      }
+    }
+    if (!sourceOid || !canonical) {
       throw new NotFoundException('Story not found.');
     }
-    const canonical = this.canonicalSourceReelUrl(story.sourceReelUrl);
 
-    await this.storyModel.updateOne({ _id: oid, userId: userOid }, { $inc: { usageCount: 1 } });
+    await this.storySourceModel.updateOne(
+      { _id: sourceOid, userId: userOid },
+      { $inc: { usageCount: 1 } },
+    );
 
-    const updated = await this.storyModel.findById(oid).select('usageCount').lean();
-    const globalUsageCount = await this.sumUsageAcrossStoriesForReel(canonical);
+    const updatedSrc = await this.storySourceModel.findById(sourceOid).select('usageCount').lean();
+    const globalUsageCount = await this.sumUsageAcrossStorySourcesForReel(canonical);
 
     return {
       storyId: String(oid),
       canonicalUrl: canonical,
-      myUsageCount: Number(updated?.usageCount) || 0,
+      myUsageCount: Number(updatedSrc?.usageCount) || 0,
       globalUsageCount,
     };
   }
 
-  /** Tổng lượt dùng toàn hệ thống cho một reel = ∑ usageCount của mọi Story trùng sourceReelUrl. */
-  private async sumUsageAcrossStoriesForReel(canonicalReelUrl: string): Promise<number> {
-    const agg = await this.storyModel
+  /** Tổng lượt dùng toàn hệ thống cho một reel = ∑ usageCount trên mọi StorySource trùng sourceReelUrl. */
+  private async sumUsageAcrossStorySourcesForReel(canonicalReelUrl: string): Promise<number> {
+    const agg = await this.storySourceModel
       .aggregate<{ total?: number }>([
         { $match: { sourceReelUrl: canonicalReelUrl } },
         { $group: { _id: null, total: { $sum: '$usageCount' } } },
@@ -163,20 +236,78 @@ export class StoriesService {
     return Number(agg[0]?.total) || 0;
   }
 
+  private async upsertStorySourceDoc(
+    userOid: Types.ObjectId,
+    params: { sourceReelUrl: string; sourceContent: string; name: string },
+  ) {
+    const name = params.name.slice(0, 200);
+    const doc = await this.storySourceModel.findOneAndUpdate(
+      { userId: userOid, sourceReelUrl: params.sourceReelUrl },
+      {
+        $set: {
+          sourceContent: params.sourceContent,
+          name,
+        },
+      },
+      { upsert: true, new: true },
+    );
+    if (!doc) {
+      throw new NotFoundException('Could not upsert story source.');
+    }
+    return doc;
+  }
+
+  private serializeStorySource(row: Record<string, unknown>) {
+    const id = String(row._id || '');
+    const userId = row.userId ? String(row.userId) : '';
+    return {
+      _id: id,
+      id,
+      userId,
+      name: (row.name as string) || '',
+      sourceContent: (row.sourceContent as string) || '',
+      sourceReelUrl: (row.sourceReelUrl as string) || '',
+      usageCount: Number(row.usageCount) || 0,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+    };
+  }
+
   private serializeStory(row: Record<string, unknown>) {
     const id = String(row._id || '');
     const userId = row.userId ? String(row.userId) : '';
     const topicId = row.topicId ? String(row.topicId) : '';
+    const ss = row.storySourceId;
+    let storySourceIdStr = '';
+    let sourceContent = '';
+    let sourceReelUrl = '';
+    let usageCount = 0;
+    if (ss && typeof ss === 'object' && !Array.isArray(ss)) {
+      const o = ss as Record<string, unknown>;
+      storySourceIdStr = o._id ? String(o._id) : '';
+      sourceContent = (o.sourceContent as string) || '';
+      sourceReelUrl = (o.sourceReelUrl as string) || '';
+      usageCount = Number(o.usageCount) || 0;
+    } else if (ss) {
+      storySourceIdStr = String(ss);
+    }
+    if (!sourceContent && row.sourceContent) {
+      sourceContent = (row.sourceContent as string) || '';
+    }
+    if (!sourceReelUrl && row.sourceReelUrl) {
+      sourceReelUrl = (row.sourceReelUrl as string) || '';
+    }
     return {
       _id: id,
       id,
       userId,
       topicId,
+      storySourceId: storySourceIdStr,
       name: (row.name as string) || '',
       shortContent: (row.shortContent as string) || '',
       longContent: (row.longContent as string) || '',
-      sourceContent: (row.sourceContent as string) || '',
-      sourceReelUrl: (row.sourceReelUrl as string) || '',
+      sourceContent,
+      sourceReelUrl,
       blogPostUrl: (row.blogPostUrl as string) || '',
       fbReelUrl: (row.fbReelUrl as string) || '',
       imageStorageAddresses: Array.isArray(row.imageStorageAddresses)
@@ -187,7 +318,7 @@ export class StoriesService {
       videoStorageAddresses: Array.isArray(row.videoStorageAddresses)
         ? row.videoStorageAddresses
         : [],
-      usageCount: Number(row.usageCount) || 0,
+      usageCount,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
     };

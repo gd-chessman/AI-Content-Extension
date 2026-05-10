@@ -5,7 +5,7 @@ import { JwtPayload } from '../auth/jwt.strategy';
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
 import { UserRole } from '../users/users.schema';
-import { CreateStoryDto } from './stories.dto';
+import { CreateStoryDto, UpsertStorySourceDto } from './stories.dto';
 import { StoriesService } from './stories.service';
 
 @Controller('stories')
@@ -24,6 +24,12 @@ export class StoriesController {
   checkReel(@Req() req: Request, @Query('url') url?: string) {
     const user = req.user as JwtPayload;
     return this.storiesService.checkSourceReelSaved(user.sub, url || '');
+  }
+
+  @Post('sources/sync')
+  syncStorySource(@Req() req: Request, @Body() dto: UpsertStorySourceDto) {
+    const user = req.user as JwtPayload;
+    return this.storiesService.upsertStorySourceForUser(user.sub, dto);
   }
 
   @Post()
