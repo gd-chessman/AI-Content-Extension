@@ -298,8 +298,8 @@ export default function FacebookScreen() {
   })
   /** Đã có StorySource cho reel (GET …/sources/check-reel). */
   const hasStorySourceSynced = reelSavedCheck?.saved === true
-  /** Tick / khóa nút Lưu khi đã có story nguồn hoặc vừa lưu xong. */
-  const reelSaveLockedAsSynced = hasStorySourceSynced || storySaveStatus === 'ok'
+  /** Hiển thị tick khi đã có nguồn trên server hoặc vừa lưu xong. */
+  const reelSaveHasSyncedState = hasStorySourceSynced || storySaveStatus === 'ok'
 
   const { data: myStorySources = [] } = useQuery({
     queryKey: ['stories', 'sources', 'my'],
@@ -830,26 +830,12 @@ export default function FacebookScreen() {
     if (
       !urlRaw ||
       !contentText.trim() ||
-      storySaveStatus === 'saving' ||
-      hasStorySourceSynced ||
-      storySaveStatus === 'ok'
+      storySaveStatus === 'saving'
     ) {
       return
     }
     setStorySaveStatus('saving')
     try {
-      const canonicalKey = canonicalSourceReelUrl(urlRaw)
-      const freshCheck = await queryClient.fetchQuery({
-        queryKey: ['stories', 'sources', 'check-reel', canonicalKey],
-        queryFn: () => checkStorySourceForReel(urlRaw),
-      })
-      if (freshCheck?.saved) {
-        void queryClient.invalidateQueries({ queryKey: ['stories', 'sources', 'check-reel'] })
-        void queryClient.invalidateQueries({ queryKey: ['stories', 'sources', 'my'] })
-        setStorySaveStatus('idle')
-        return
-      }
-
       await syncStorySourceFromReel({
         sourceContent: contentText.trim(),
         sourceReelUrl: urlRaw,
@@ -2563,17 +2549,16 @@ export default function FacebookScreen() {
                 disabled={
                   !selectedReel ||
                   !contentText.trim() ||
-                  storySaveStatus === 'saving' ||
-                  reelSaveLockedAsSynced
+                  storySaveStatus === 'saving'
                 }
                 aria-label={
                   hasStorySourceSynced
-                    ? 'Đã có story nguồn trên máy chủ — không lưu lại từ đây'
+                    ? 'Lưu lại story nguồn trên máy chủ (cập nhật nội dung nếu đã có)'
                     : 'Lưu nội dung và link reel vào máy chủ (story nguồn)'
                 }
                 title={
                   hasStorySourceSynced
-                    ? 'Caption reel đã lưu ở story nguồn. Tạo Story (pipeline) trên ChatGPT khi cần.'
+                    ? 'Story nguồn đã có. Bấm để cập nhật lại caption/URL mới nhất.'
                     : 'Lưu caption + URL reel vào story nguồn (không tạo bản ghi Story).'
                 }
                 className={`relative inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg transition disabled:cursor-not-allowed ${
@@ -2591,7 +2576,7 @@ export default function FacebookScreen() {
                 ) : (
                   <FiSave className="h-4 w-4" aria-hidden />
                 )}
-                {storySaveStatus !== 'saving' && reelSaveLockedAsSynced ? (
+                {storySaveStatus !== 'saving' && reelSaveHasSyncedState ? (
                   <span
                     className="pointer-events-none absolute -right-0.5 -top-0.5 flex h-3.5 w-3.5 items-center justify-center rounded-full border border-neutral-900/90 bg-emerald-500 text-white shadow-sm"
                     aria-hidden

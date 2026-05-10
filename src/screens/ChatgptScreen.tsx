@@ -102,8 +102,20 @@ function isChatgptWorkflowStep2(step: { id: string; stepNo?: number }): boolean 
   return step.id === 'step-2' || Number(step.stepNo) === 2
 }
 
-function isChatgptWorkflowStep1(step: { id: string; stepNo?: number }): boolean {
-  return step.id === 'step-1' || Number(step.stepNo) === 1
+/** Ưu tiên actionType mới cho bước gộp nội dung, fallback step 1 cũ để tương thích dữ liệu hiện tại. */
+function isChatgptRewriteContentStep(step: { id: string; stepNo?: number; actionType?: string }): boolean {
+  const action = (step.actionType || '').trim().toLowerCase()
+  return action === 'chatgpt_rewrite_content'
+}
+
+function isChatgptExtractVideosStep(step: { actionType?: string }): boolean {
+  const action = (step.actionType || '').trim().toLowerCase()
+  return action === 'chatgpt_extract_content_videos'
+}
+
+function isChatgptExtractContentStep(step: { actionType?: string }): boolean {
+  const action = (step.actionType || '').trim().toLowerCase()
+  return action === 'chatgpt_extract_content'
 }
 
 /** Story mới nhất cùng StorySource (để gắn lưu videoPrompts cuối workflow). */
@@ -575,7 +587,7 @@ export default function ChatgptScreen() {
       setCopiedPart(null)
     }
 
-    if (!isChatgptWorkflowStep1(step)) {
+    if (!isChatgptRewriteContentStep(step)) {
       return await runProcess(step, { autoSend: true, fast: true, preferredTabId: lockedWorkflowTabIdRef.current || undefined })
     }
 
@@ -611,7 +623,7 @@ export default function ChatgptScreen() {
       setCopiedPart(null)
     }
 
-    if (!isChatgptWorkflowStep1(step)) {
+    if (!isChatgptRewriteContentStep(step)) {
       return await runProcess(step, { autoSend: false, fast: false })
     }
 
@@ -1109,7 +1121,7 @@ export default function ChatgptScreen() {
     // User-required behavior: every workflow step in ChatGPT screen
     // runs exactly like "Chạy nhanh", then waits for response completion.
     const action = (step.actionType || '').trim().toLowerCase()
-    const isGenerateImageStep = action === 'generate_image'
+    const isGenerateImageStep = action === 'chatgpt_generate_images'
     const baselineImageCount = isGenerateImageStep ? await getAssistantImageCount(lockedWorkflowTabIdRef.current || undefined) : 0
 
     const sent = await runFastProcess(step)
@@ -1128,7 +1140,7 @@ export default function ChatgptScreen() {
       )
     }
 
-    if (isChatgptWorkflowStep2(step)) {
+    if (isChatgptExtractVideosStep(step)) {
       const pref = lockedWorkflowTabIdRef.current || undefined
       const pv1 = await extractVideoContentFromStep2(1, { copyToClipboard: false, preferredTabId: pref })
       const pv2 = await extractVideoContentFromStep2(2, { copyToClipboard: false, preferredTabId: pref })
@@ -1317,11 +1329,9 @@ export default function ChatgptScreen() {
             storyIdToSave = await resolveLatestStoryIdForSource(top._id)
             if (
               !storyIdToSave &&
-              (top.sourceContent || '').trim() &&
               (top.sourceReelUrl || '').trim()
             ) {
               const created = await createStoryFromReel({
-                sourceContent: top.sourceContent.trim(),
                 sourceReelUrl: top.sourceReelUrl.trim(),
                 name: (top.name || '').trim().slice(0, 200),
               })
@@ -1683,6 +1693,13 @@ export default function ChatgptScreen() {
     options?: { copyToClipboard?: boolean },
   ) => {
     const copyToClipboard = options?.copyToClipboard !== false
+    const hasExtractContentAction = processSteps.some((step) => isChatgptExtractContentStep(step))
+    if (!hasExtractContentAction) {
+      if (copyToClipboard) {
+        setStatus('Chưa cấu hình bước actionType = chatgpt_extract_content trong workflow ChatGPT.')
+      }
+      return ''
+    }
     const extensionChrome = getChrome()
     if (!extensionChrome?.tabs?.query || !extensionChrome.scripting?.executeScript) {
       const kindLabel =

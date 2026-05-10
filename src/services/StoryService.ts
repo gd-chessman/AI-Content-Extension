@@ -22,7 +22,6 @@ export type StoryItem = {
 }
 
 export const createStoryFromReel = async (payload: {
-  sourceContent: string
   sourceReelUrl: string
   name?: string
   topicId?: string
