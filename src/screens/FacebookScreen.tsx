@@ -440,11 +440,18 @@ export default function FacebookScreen() {
 
   const normalizeUrl = (value: string) => (value.endsWith('/') ? value.slice(0, -1) : value)
 
+  /** `www`/`web`/apex Facebook coi là một — dùng cho quét reels & workflow khớp fanpage. */
+  const normalizeFacebookFanpageHost = (hostname: string) => {
+    const h = hostname.replace(/^www\./i, '').toLowerCase()
+    if (h === 'facebook.com' || h === 'web.facebook.com') return '__fb_desktop__'
+    return h
+  }
+
   const tabMatchesFanpageUrl = (tabUrl: string, fanpageUrl: string) => {
     try {
       const current = new URL(tabUrl)
       const allowed = new URL(fanpageUrl)
-      if (current.hostname !== allowed.hostname) return false
+      if (normalizeFacebookFanpageHost(current.hostname) !== normalizeFacebookFanpageHost(allowed.hostname)) return false
       const currentPath = normalizeUrl(current.pathname)
       const allowedPath = normalizeUrl(allowed.pathname)
       const currentId = current.searchParams.get('id')
