@@ -200,6 +200,19 @@ const formatViewInput = (value: string) => {
   return Number(digits).toLocaleString('en-US')
 }
 
+const FB_REELS_SCAN_MIN_LS_KEY = 'facebookReelsScanMinViews'
+const FB_REELS_SCAN_MAX_LS_KEY = 'facebookReelsScanMaxViews'
+
+function readStoredScanViewInput(key: string, fallback: string): string {
+  try {
+    const v = localStorage.getItem(key)
+    if (v === null) return fallback
+    return v
+  } catch {
+    return fallback
+  }
+}
+
 export default function FacebookScreen() {
   const [activeView, setActiveView] = useState<'fanpages' | 'reels' | 'content'>('fanpages')
   const [openedFacebookUrls, setOpenedFacebookUrls] = useState<Set<string>>(new Set())
@@ -208,8 +221,12 @@ export default function FacebookScreen() {
   const hasMoreReelsRef = useRef(false)
   const [scanStatus, setScanStatus] = useState('')
   const [isScanning, setIsScanning] = useState(false)
-  const [minViewInput, setMinViewInput] = useState(formatViewInput(String(MIN_VIEW_COUNT)))
-  const [maxViewInput, setMaxViewInput] = useState('')
+  const [minViewInput, setMinViewInput] = useState(() =>
+    readStoredScanViewInput(FB_REELS_SCAN_MIN_LS_KEY, formatViewInput(String(MIN_VIEW_COUNT))),
+  )
+  const [maxViewInput, setMaxViewInput] = useState(() =>
+    readStoredScanViewInput(FB_REELS_SCAN_MAX_LS_KEY, ''),
+  )
   const [selectedReel, setSelectedReel] = useState<ScannedReel | null>(null)
   const [contentText, setContentText] = useState('')
   const [originalContentText, setOriginalContentText] = useState('')
@@ -347,6 +364,22 @@ export default function FacebookScreen() {
     : fanpageStatusLower.includes('đã ')
       ? 'success'
       : 'info'
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(FB_REELS_SCAN_MIN_LS_KEY, minViewInput)
+    } catch {
+      /* ignore */
+    }
+  }, [minViewInput])
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(FB_REELS_SCAN_MAX_LS_KEY, maxViewInput)
+    } catch {
+      /* ignore */
+    }
+  }, [maxViewInput])
 
   useEffect(() => {
     isContentDirtyRef.current = isContentDirty
