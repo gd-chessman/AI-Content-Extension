@@ -1985,7 +1985,12 @@ export default function FacebookScreen() {
         {activeView === 'fanpages' ? (
           <section className="glass-panel rounded-3xl p-3">
           <div className="flex items-center justify-between gap-2">
-            <h2 className="text-sm font-semibold text-white">Fanpage nguồn</h2>
+            <div>
+              <h2 className="text-sm font-semibold text-white">Fanpage nguồn</h2>
+              <p className="mt-0.5 text-[10px] leading-snug text-slate-500">
+                Từ trên xuống: STT 1 = pickIndex 0, STT 2 = pickIndex 1… (mới thêm nằm trên cùng).
+              </p>
+            </div>
             <div className="flex items-center gap-1.5">
               <button
                 type="button"
@@ -2036,7 +2041,7 @@ export default function FacebookScreen() {
               <p className="rounded-xl border border-amber-300/20 bg-amber-400/10 px-3 py-2 text-[11px] text-slate-400">
                 Chưa có fanpage nào. Hãy thêm mới
               </p>
-            ) : fanpages.map((page) => {
+            ) : fanpages.map((page, index) => {
               const isSelected = page._id === selectedFanpageId
               const isOpen = openedFacebookUrls.has(normalizeUrl(page.url))
               const workflowRow = isFbWorkflowRunning && isSelected
@@ -2055,11 +2060,19 @@ export default function FacebookScreen() {
                   setSelectedFanpageId(page._id)
                   openFanpage(page.url)
                 }}
-                className={`flex w-full cursor-pointer items-center justify-between rounded-2xl px-3 py-3 text-left transition ${cardClass}`}
+                className={`flex w-full cursor-pointer items-center justify-between gap-2 rounded-2xl px-3 py-3 text-left transition ${cardClass}`}
               >
-                <div>
-                  <p className="text-xs font-semibold text-slate-100">{page.name}</p>
-                  <p className="mt-0.5 line-clamp-1 break-all text-[11px] text-slate-500">{page.url}</p>
+                <div className="flex min-w-0 flex-1 items-start gap-2.5">
+                  <span
+                    className="flex h-7 min-w-7 shrink-0 items-center justify-center rounded-lg bg-slate-800/90 text-[11px] font-bold tabular-nums text-slate-200 ring-1 ring-white/10"
+                    title={`pickIndex=${index} (workflow facebook_open_fanpage)`}
+                  >
+                    {index + 1}
+                  </span>
+                  <div className="min-w-0">
+                    <p className="text-xs font-semibold text-slate-100">{page.name}</p>
+                    <p className="mt-0.5 line-clamp-1 break-all text-[11px] text-slate-500">{page.url}</p>
+                  </div>
                 </div>
                 {workflowRow ? (
                   <span className="whitespace-nowrap rounded-lg bg-violet-500/25 px-2 py-1 text-[10px] font-semibold text-violet-200">

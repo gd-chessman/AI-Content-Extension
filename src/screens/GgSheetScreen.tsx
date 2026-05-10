@@ -381,6 +381,45 @@ export default function GgSheetScreen() {
     return extracted
   }
 
+  /** Bật tab trình duyệt trỏ tới Google Sheet đã cấu hình (hoặc mở tab mới nếu chưa có). */
+  const focusBrowserTabOnConfiguredSheet = () => {
+    const raw = (sheetUrl || '').trim()
+    if (!raw) return
+    const extensionChrome = (globalThis as { chrome?: ExtensionChrome }).chrome
+    if (!extensionChrome?.tabs?.query || !extensionChrome.tabs.update || !extensionChrome.tabs.create) return
+
+    let urlToOpen = raw
+    try {
+      if (!/^https?:\/\//i.test(raw)) {
+        urlToOpen = new URL(`https://${raw}`).href
+      }
+    } catch {
+      return
+    }
+
+    const sid = extractSheetId(urlToOpen)
+    const patterns: string[] = sid
+      ? [`*://docs.google.com/spreadsheets/d/${sid}/*`]
+      : (() => {
+          try {
+            return [`${new URL(urlToOpen).origin}/*`]
+          } catch {
+            return []
+          }
+        })()
+    if (!patterns.length) return
+
+    extensionChrome.tabs.query({ url: patterns, currentWindow: true }, (tabs) => {
+      const list = tabs || []
+      const existing = list.find((t) => t.active && t.id) || list.find((t) => t.id)
+      if (existing?.id) {
+        extensionChrome.tabs?.update?.(existing.id, { active: true })
+        return
+      }
+      extensionChrome.tabs?.create?.({ url: urlToOpen, active: true })
+    })
+  }
+
   const openPushPreview = async (values: CollectedData) => {
     setIsSaving(true)
     setStatus('Đang kiểm tra dòng đẩy dữ liệu trên GG Sheet...')
@@ -422,6 +461,7 @@ export default function GgSheetScreen() {
       return
     }
 
+    focusBrowserTabOnConfiguredSheet()
     await openPushPreview(data)
   }
 
