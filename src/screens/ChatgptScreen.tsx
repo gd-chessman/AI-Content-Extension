@@ -957,78 +957,18 @@ export default function ChatgptScreen() {
       return ''
     }
 
-    const result = await extensionChrome.scripting.executeScript({
-      target: { tabId: target.id },
-      func: ((videoPart: number) => {
-        const normalize = (text: string) => text.replace(/\r/g, '')
+    const maxVideoExtractAttempts = 3
+    let extracted = ''
 
-        const extractByHeading = (source: string, headingRegex: RegExp, stopRegexes: RegExp[]) => {
-          const match = source.match(headingRegex)
-          if (!match || match.index === undefined) return ''
-          const start = match.index + match[0].length
-          const tail = source.slice(start)
+    for (let attempt = 1; attempt <= maxVideoExtractAttempts; attempt += 1) {
+      if (attempt > 1) {
+        await updateTab(target.id)
+        await sleep(420)
+      }
 
-          let end = tail.length
-          for (const rg of stopRegexes) {
-            const m = tail.match(rg)
-            if (m && m.index !== undefined) {
-              end = Math.min(end, m.index)
-            }
-          }
-
-          return tail.slice(0, end).trim()
-        }
-        const trimVideoTail = (raw: string) => {
-          const source = (raw || '').trim()
-          if (!source) return ''
-
-          const startMarkers = [
-            /(?:^|\n)\s*🎬\s*scene\s*1\b/i,
-            /(?:^|\n)\s*scene\s*1\b/i,
-          ]
-          let start = 0
-          for (const rg of startMarkers) {
-            const m = source.match(rg)
-            if (m && m.index !== undefined) {
-              start = m.index
-              break
-            }
-          }
-          const normalizedSource = source.slice(start).trim()
-
-          const stopMarkers = [
-            /(?:^|\n)\s*structure\s*:\s*3\s*scenes\b/i,
-            /(?:^|\n)\s*🎯\s*production\s*notes\b/i,
-            /(?:^|\n)\s*🎯\s*notes?\s*for\s*ai\s*generation\b/i,
-            /(?:^|\n)\s*(?:🔥\s*)?notes?\s*for\s*ai\s*video\s*tools\b/i,
-            /(?:^|\n)\s*⚡\s*cinematic\s*rules\b/i,
-            /(?:^|\n)\s*cinematic\s*rules\b/i,
-            /(?:^|\n)\s*(?:🔁\s*)?continuity\s*notes\b/i,
-            /(?:^|\n)\s*if\s+you\s+want\s+next\b/i,
-            /(?:^|\n)\s*if\s+you\s+want[, ]+i\s+can\s+next\b/i,
-            /(?:^|\n)\s*just\s+tell\s+me\b/i,
-            /(?:^|\n)\s*✅\s*/i,
-            /(?:^|\n)\s*i\s+can\s+generate\b/i,
-            /(?:^|\n)\s*or\s+convert\b/i,
-            /(?:^|\n)\s*facebook\s*$/i,
-            /(?:^|\n)\s*chatgpt\s*$/i,
-            /(?:^|\n)\s*(?:🎬\s*)?idea\s*\d+\b/i,
-            /(?:^|\n)\s*(?:🖼️\s*)?image\s*\d+\b/i,
-            /(?:^|\n)\s*(?:🎥\s*)?video\s*\d+\b/i,
-            // Generic fallback: cut at an uppercase heading line (e.g. "NOTES FOR AI GENERATION").
-            /(?:^|\n)\s*[A-Z][A-Z0-9&/,'’()\-]*(?:\s+[A-Z0-9&/,'’()\-]+){1,}\s*$/m,
-          ]
-
-          let end = normalizedSource.length
-          for (const rg of stopMarkers) {
-            const m = normalizedSource.match(rg)
-            if (m && m.index !== undefined && m.index > 0) {
-              end = Math.min(end, m.index)
-            }
-          }
-
-          return normalizedSource.slice(0, end).trim()
-        }
+      const result = await extensionChrome.scripting.executeScript({
+        target: { tabId: target.id },
+        func: ((videoPart: number) => {
         const compactLines = (raw: string) => {
           const source = (raw || '').replace(/\r/g, '').trim()
           if (!source) return ''
@@ -1038,36 +978,78 @@ export default function ChatgptScreen() {
             .filter(Boolean)
             .join('\n')
         }
-        const trimToSceneScript = (raw: string) => {
-          const source = (raw || '').replace(/\r/g, '').trim()
-          if (!source) return ''
-          const lines = source.split('\n')
-          const out: string[] = []
-          let started = false
-          const isSceneLine = (line: string) => /^(?:🎬\s*)?scene\b/i.test(line)
-          const isHardStop = (line: string) =>
-            /^(?:🎯|🔥|⚡|✅|🔁)/.test(line) ||
-            /^(?:notes?|production\s+notes?|cinematic\s+rules?)\b/i.test(line) ||
-            /^if\s+you\s+want\b/i.test(line) ||
-            /^i\s+can\s+generate\b/i.test(line) ||
-            /^or\s+convert\b/i.test(line) ||
-            /^(?:idea|image|video)\s*\d+\b/i.test(line) ||
-            /^(?:facebook|chatgpt)\s*$/i.test(line) ||
-            /^[A-Z][A-Z0-9&/,'’()\-]*(?:\s+[A-Z0-9&/,'’()\-]+){1,}\s*$/.test(line)
 
-          for (const lineRaw of lines) {
-            const line = lineRaw.trim()
-            if (!line) continue
-            if (!started) {
-              if (!isSceneLine(line)) continue
-              started = true
-              out.push(line)
-              continue
+        /**
+         * Tiêu đề khối video: `🎬 VIDEO N` hoặc `🎥 VIDEO N` (ChatGPT hay đổi emoji).
+         * Kết thúc VIDEO 1: `🖼️ IMAGE 2`, `🎬/🎥 VIDEO 2`. VIDEO 2: `🔥`, `✅ NOTES`, `If you want`.
+         */
+        const extractVideoBlockByLines = (full: string, part: number) => {
+          const lines = full.replace(/\r/g, '').split('\n')
+          const headerRe = new RegExp(`^\\s*(?:🎬|🎥)\\s*VIDEO\\s*${part}\\b`, 'i')
+          const headerRePlain = new RegExp(`^\\s*VIDEO\\s*${part}\\b`, 'i')
+          let start = -1
+          for (let i = 0; i < lines.length; i++) {
+            const L = lines[i]
+            if (headerRe.test(L) || headerRePlain.test(L)) {
+              start = i
+              break
             }
-            if (isHardStop(line)) break
-            out.push(line)
+          }
+          if (start < 0) return ''
+
+          const isStopLine = (L: string) => {
+            const t = L.trim()
+            if (part === 1) {
+              if (/^🖼️\s*IMAGE\s*2\b/i.test(t)) return true
+              if (/^🎬\s*IMAGE\s*2\b/i.test(t)) return true
+              if (/^(?:🎬|🎥)\s*VIDEO\s*2\b/i.test(t)) return true
+            }
+            if (part === 2) {
+              if (/^✅/.test(t)) return true
+            }
+            if (/^🔥/.test(t)) return true
+            if (/^If you want\b/i.test(t)) return true
+            return false
+          }
+
+          const out: string[] = []
+          for (let i = start; i < lines.length; i++) {
+            if (i > start && isStopLine(lines[i])) break
+            out.push(lines[i])
           }
           return out.join('\n').trim()
+        }
+
+        /** Fallback khi DOM gộp ít dòng: cắt theo regex trên toàn văn bản. */
+        const extractVideoBlockRegex = (full: string, part: number) => {
+          const t = full.replace(/\r/g, '')
+          const startRe = new RegExp(`(?:🎬|🎥)\\s*VIDEO\\s*${part}\\b`, 'i')
+          const startM = t.match(startRe)
+          const startIdx =
+            startM?.index ??
+            (() => {
+              const m2 = t.match(new RegExp(`(^|\\n)\\s*VIDEO\\s*${part}\\b`, 'i'))
+              return m2 && m2.index !== undefined ? m2.index + (m2[1] === '\n' ? 1 : 0) : -1
+            })()
+          if (startIdx < 0) return ''
+
+          const tail = t.slice(startIdx)
+          let stop = tail.length
+          if (part === 1) {
+            const candidates = [
+              tail.search(/\n\s*🖼️\s*IMAGE\s*2\b/i),
+              tail.search(/\n\s*🎬\s*IMAGE\s*2\b/i),
+              tail.search(/\n\s*(?:🎬|🎥)\s*VIDEO\s*2\b/i),
+            ]
+            for (const c of candidates) {
+              if (c >= 0) stop = Math.min(stop, c)
+            }
+          }
+          for (const rg of [/\n\s*✅/i, /\n\s*🔥/i, /\n\s*If you want\b/i]) {
+            const c = tail.search(rg)
+            if (c >= 0) stop = Math.min(stop, c)
+          }
+          return tail.slice(0, stop).trim()
         }
 
         const assistantNodes = Array.from(
@@ -1077,103 +1059,31 @@ export default function ChatgptScreen() {
           .reverse()
 
         const candidateNode =
-          assistantNodes.find((el) => /idea\s*1|idea\s*2|video\s*1|video\s*2/i.test(el.innerText || '')) ||
-          assistantNodes[0]
+          assistantNodes.find((el) =>
+            /VIDEO\s*[12]|IMAGE\s*[12]|🎬\s*VIDEO|🎥\s*VIDEO|🖼️\s*IMAGE/i.test(el.innerText || ''),
+          ) || assistantNodes[0]
         if (!candidateNode) return ''
 
-        // Scroll to the relevant assistant response block first.
         candidateNode.scrollIntoView({ block: 'start', behavior: 'instant' })
 
-        // Then attempt to scroll closer to the exact section heading.
-        const headingNodes = Array.from(candidateNode.querySelectorAll<HTMLElement>('h1, h2, h3, h4, h5, h6, p, strong'))
-        const getText = (node: HTMLElement) => (node.innerText || '').replace(/\s+/g, ' ').trim()
-        const findHeading = (regex: RegExp) =>
-          headingNodes
-            .filter((node) => regex.test(getText(node)))
-            .sort((a, b) => getText(a).length - getText(b).length)[0]
+        const text = candidateNode.innerText || ''
 
-        // VIDEO 2 is usually inside IDEA 2, so scroll to IDEA 2 first for better accuracy.
-        if (videoPart === 2) {
-          const idea2Heading = findHeading(/\bidea\s*2\b/i)
-          idea2Heading?.scrollIntoView({ block: 'start', behavior: 'instant' })
-        }
+        let block = extractVideoBlockByLines(text, videoPart)
+        if (!block) block = extractVideoBlockRegex(text, videoPart)
 
-        const targetHeading = findHeading(new RegExp(`\\bvideo\\s*${videoPart}\\b`, 'i'))
-        targetHeading?.scrollIntoView({ block: 'start', behavior: 'instant' })
+        return compactLines(block)
+        }) as (...args: unknown[]) => unknown,
+        args: [part],
+      })
 
-        const text = normalize(candidateNode.innerText || '')
+      extracted = ((result?.[0]?.result as string | undefined) || '').trim()
+      if (extracted) break
 
-        // Strategy A: extract inside IDEA block (common format).
-        const idea1Block = extractByHeading(
-          text,
-          /(?:^|\n)\s*#{0,6}\s*(?:🎬\s*)?idea\s*1\b[^\n]*\n/i,
-          [/(?:^|\n)\s*#{0,6}\s*(?:🎬\s*)?idea\s*2\b[^\n]*\n/i, /(?:^|\n)\s*#{0,6}\s*🔁\s*continuity\s*notes\b/i],
-        )
-        const idea2Block = extractByHeading(
-          text,
-          /(?:^|\n)\s*#{0,6}\s*(?:🎬\s*)?idea\s*2\b[^\n]*\n/i,
-          [/(?:^|\n)\s*#{0,6}\s*🔁\s*continuity\s*notes\b/i],
-        )
+      if (copyToClipboard && attempt < maxVideoExtractAttempts) {
+        setStatus(`Chưa lấy được VIDEO ${part}, tự thử lại (${attempt}/${maxVideoExtractAttempts})…`)
+      }
+    }
 
-        const pickIdeaVideo = (ideaBlock: string, n: number) => {
-          if (!ideaBlock) return ''
-          const headingStopsForVideo1 = [
-            /(?:^|\n)\s*#{1,6}\s*(?:🎬\s*)?idea\s*2\b/i,
-            /(?:^|\n)\s*#{1,6}\s*(?:🖼️\s*)?image\s*2\b/i,
-            /(?:^|\n)\s*#{1,6}\s*(?:🎥\s*)?video\s*2\b/i,
-            /(?:^|\n)\s*#{1,6}\s*🔁\s*continuity\s*notes\b/i,
-          ]
-          const headingStopsForVideo2 = [
-            /(?:^|\n)\s*#{1,6}\s*🔁\s*continuity\s*notes\b/i,
-            /(?:^|\n)\s*#{1,6}\s*(?:🎬\s*)?idea\s*3\b/i,
-            /(?:^|\n)\s*#{1,6}\s*(?:🎥\s*)?video\s*3\b/i,
-          ]
-          const plainLineStopsForVideo1 = [
-            /(?:^|\n)\s*(?:🖼️\s*)?image\s*2\b[^\n]*/i,
-            /(?:^|\n)\s*(?:🎬\s*)?idea\s*2\b[^\n]*/i,
-            /(?:^|\n)\s*(?:🔥\s*)?notes?\s*for\s*ai\s*video\s*tools\b[^\n]*/i,
-            /(?:^|\n)\s*(?:🔁\s*)?continuity\s*notes\b[^\n]*/i,
-          ]
-          const plainLineStopsForVideo2 = [
-            /(?:^|\n)\s*(?:🔥\s*)?notes?\s*for\s*ai\s*video\s*tools\b[^\n]*/i,
-            /(?:^|\n)\s*(?:🔁\s*)?continuity\s*notes\b[^\n]*/i,
-            /(?:^|\n)\s*(?:🎬\s*)?idea\s*3\b[^\n]*/i,
-            /(?:^|\n)\s*(?:🖼️\s*)?image\s*3\b[^\n]*/i,
-          ]
-
-          const directVideo = extractByHeading(
-            ideaBlock,
-            new RegExp(`(?:^|\\n)\\s*#{0,6}\\s*(?:🎥\\s*)?video\\s*${n}\\b[^\\n]*\\n`, 'i'),
-            [...(n === 1 ? headingStopsForVideo1 : headingStopsForVideo2), ...(n === 1 ? plainLineStopsForVideo1 : plainLineStopsForVideo2)],
-          )
-          return trimVideoTail(directVideo || ideaBlock.trim())
-        }
-
-        // Strategy B: generic video heading fallback.
-        const genericVideo = extractByHeading(
-          text,
-          new RegExp(`(?:^|\\n)\\s*(?:\\*{0,2})?(?:#{0,6}\\s*)?(?:🎥\\s*)?video\\s*${videoPart}\\b[^\\n]*\\n`, 'i'),
-          [
-            new RegExp(`(?:^|\\n)\\s*(?:\\*{0,2})?(?:#{0,6}\\s*)?(?:🎥\\s*)?video\\s*${videoPart === 1 ? 2 : 3}\\b`, 'i'),
-            /(?:^|\n)\s*#{1,6}\s*(?:🎬\s*)?idea\s*\d+\b/i,
-            /(?:^|\n)\s*#{1,6}\s*(?:🖼️\s*)?image\s*\d+\b/i,
-            /(?:^|\n)\s*#{1,6}\s*🔁\s*continuity\s*notes\b/i,
-            /(?:^|\n)\s*(?:🔥\s*)?notes?\s*for\s*ai\s*video\s*tools\b[^\n]*/i,
-            /(?:^|\n)\s*(?:🔁\s*)?continuity\s*notes\b[^\n]*/i,
-            /(?:^|\n)\s*(?:🖼️\s*)?image\s*\d+\b[^\n]*/i,
-            /(?:^|\n)\s*(?:🎬\s*)?idea\s*\d+\b[^\n]*/i,
-          ],
-        )
-
-        if (videoPart === 1) {
-          return compactLines(trimToSceneScript(trimVideoTail(pickIdeaVideo(idea1Block, 1) || genericVideo)))
-        }
-        return compactLines(trimToSceneScript(trimVideoTail(pickIdeaVideo(idea2Block, 2) || genericVideo)))
-      }) as (...args: unknown[]) => unknown,
-      args: [part],
-    })
-
-    const extracted = ((result?.[0]?.result as string | undefined) || '').trim()
     if (!extracted) {
       if (copyToClipboard) {
         setStatus(`Không tìm thấy nội dung VIDEO ${part}. Hãy đảm bảo đã có output Tiến trình 2 trong hội thoại.`)
