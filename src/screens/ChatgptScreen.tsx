@@ -306,6 +306,38 @@ export default function ChatgptScreen() {
 
   const sleep = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms))
 
+  /** Chat dài: scrollbar thường nằm trong main/phần `[role=log]`, đứng đầu thread là không đọc được bubble dưới. */
+  const snapChatgptThreadToBottomBeforeRead = async (tabId: number) => {
+    const extensionChrome = getChrome()
+    const exec = extensionChrome?.scripting?.executeScript
+    if (!extensionChrome?.tabs?.query || typeof exec !== 'function') return
+    await exec({
+      target: { tabId },
+      func: () => {
+        const z = (e: HTMLElement | null | undefined) => {
+          if (!e) return
+          try {
+            e.scrollTop = Math.max(0, e.scrollHeight - e.clientHeight)
+          } catch {
+            /* ignore */
+          }
+        }
+        window.scrollTo(0, Math.max(document.documentElement.scrollHeight, document.body.scrollHeight))
+        z(document.documentElement as unknown as HTMLElement)
+        z(document.body)
+        document.querySelectorAll<HTMLElement>('main, [role="log"], section').forEach((el) => {
+          const oy = window.getComputedStyle(el).overflowY
+          if ((oy === 'auto' || oy === 'scroll' || oy === 'overlay') && el.scrollHeight > el.clientHeight + 40) z(el)
+        })
+        const turns = [...document.querySelectorAll<HTMLElement>('[data-message-author-role]')].filter((el) =>
+          Boolean((el.innerText || '').trim()),
+        )
+        turns[turns.length - 1]?.scrollIntoView({ block: 'end', behavior: 'instant' })
+      },
+    })
+    await sleep(100)
+  }
+
   const injectPrompt = async (tabId: number, prompt: string, autoSend: boolean) => {
     const extensionChrome = getChrome()
     if (!extensionChrome?.scripting?.executeScript) return false
@@ -969,6 +1001,8 @@ export default function ChatgptScreen() {
       return ''
     }
 
+    await snapChatgptThreadToBottomBeforeRead(target.id)
+
     const maxVideoExtractAttempts = 3
     let extracted = ''
 
@@ -976,6 +1010,7 @@ export default function ChatgptScreen() {
       if (attempt > 1) {
         await updateTab(target.id)
         await sleep(420)
+        await snapChatgptThreadToBottomBeforeRead(target.id)
       }
 
       const result = await extensionChrome.scripting.executeScript({
@@ -1753,6 +1788,8 @@ export default function ChatgptScreen() {
       return ''
     }
 
+    await snapChatgptThreadToBottomBeforeRead(target.id)
+
     const result = await extensionChrome.scripting.executeScript({
       target: { tabId: target.id },
       func: ((extractKind: 'title_plain' | 'title_styled' | 'content_short' | 'content_full') => {
@@ -2044,6 +2081,8 @@ export default function ChatgptScreen() {
       setStatus('Không tìm thấy tab ChatGPT để lấy ảnh.')
       return
     }
+
+    await snapChatgptThreadToBottomBeforeRead(target.id)
 
     const locateResult = await extensionChrome.scripting.executeScript({
       target: { tabId: target.id },
