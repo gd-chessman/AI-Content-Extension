@@ -5,6 +5,8 @@ export type StoryItem = {
   id: string
   userId: string
   topicId: string
+  /** Story nguồn (reel) — nhiều story có thể cùng một nguồn */
+  storySourceId?: string
   name: string
   sourceContent: string
   sourceReelUrl: string
@@ -12,7 +14,7 @@ export type StoryItem = {
   longContent?: string
   blogPostUrl?: string
   fbReelUrl?: string
-  /** Lượt ghi nhận của user đối với story này */
+  /** Lượt ghi nhận trên story nguồn (reel) — chung cho mọi story cùng nguồn */
   usageCount?: number
   createdAt?: string
   updatedAt?: string
@@ -34,10 +36,12 @@ export const getMyStories = async () => {
 }
 
 export type StoryReelCheckResult = {
+  /** Đã có bản ghi story nguồn (đã đồng bộ caption từ reel). */
   saved: boolean
+  storySourceId?: string
   storyId?: string
   canonicalUrl?: string
-  /** Lượt dùng đã ghi nhận cho story của user (0 nếu chưa lưu) */
+  /** Lượt dùng đã ghi nhận trên story nguồn của user (0 nếu chưa có nguồn) */
   myUsageCount: number
   /** Tổng lượt dùng toàn hệ thống cho cùng reel (URL chuẩn) */
   globalUsageCount: number
@@ -60,4 +64,23 @@ export const checkStoryReelSaved = async (sourceReelUrl: string) => {
 export const incrementStoryUsage = async (storyId: string) => {
   const response = await axiosClient.post(`/stories/${storyId}/increment-usage`)
   return response.data as IncrementStoryUsageResult
+}
+
+export const syncStorySourceFromReel = async (payload: {
+  sourceContent: string
+  sourceReelUrl: string
+  name?: string
+}) => {
+  const response = await axiosClient.post('/stories/sources/sync', payload)
+  return response.data as {
+    _id: string
+    id: string
+    userId: string
+    name: string
+    sourceContent: string
+    sourceReelUrl: string
+    usageCount?: number
+    createdAt?: string
+    updatedAt?: string
+  }
 }

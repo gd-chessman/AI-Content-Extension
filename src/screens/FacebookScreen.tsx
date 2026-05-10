@@ -35,6 +35,7 @@ import {
   createStoryFromReel,
   getMyStories,
   incrementStoryUsage,
+  syncStorySourceFromReel,
 } from '@/services/StoryService'
 import {
   createStepRun,
@@ -277,7 +278,8 @@ export default function FacebookScreen() {
     enabled: Boolean(selectedReel?.url?.trim()),
     staleTime: 20_000,
   })
-  const reelAlreadySaved = reelSavedCheck?.saved === true
+  /** Đã đồng bộ caption vào story nguồn (không chặn lưu thêm story). */
+  const hasStorySourceSynced = reelSavedCheck?.saved === true
 
   const { data: myStories = [] } = useQuery({
     queryKey: ['stories', 'my'],
@@ -786,7 +788,7 @@ export default function FacebookScreen() {
     try {
       await navigator.clipboard.writeText(contentText)
       localStorage.setItem(FACEBOOK_REEL_MEMORY_KEY, contentText.trim())
-      if (reelAlreadySaved && reelSavedCheck?.storyId) {
+      if (reelSavedCheck?.storyId) {
         try {
           await incrementStoryUsage(reelSavedCheck.storyId)
           void queryClient.invalidateQueries({
@@ -808,8 +810,7 @@ export default function FacebookScreen() {
     if (
       !selectedReel?.url?.trim() ||
       !contentText.trim() ||
-      storySaveStatus === 'saving' ||
-      reelAlreadySaved
+      storySaveStatus === 'saving'
     ) {
       return
     }
@@ -1039,6 +1040,19 @@ export default function FacebookScreen() {
           setOriginalContentText(content)
           setIsContentTranslated(false)
         }
+        void syncStorySourceFromReel({
+          sourceReelUrl: targetReel.url.trim(),
+          sourceContent: description.trim(),
+          name: (targetReel.title || '').trim().slice(0, 200),
+        })
+          .then(() => {
+            void queryClient.invalidateQueries({
+              queryKey: ['stories', 'check-reel', targetReel.url],
+            })
+          })
+          .catch(() => {
+            /* chưa đăng nhập hoặc lỗi mạng — bỏ qua */
+          })
       } catch {
         // ignore
       }
@@ -2484,29 +2498,24 @@ export default function FacebookScreen() {
               <button
                 type="button"
                 onClick={() => void saveStoryToServer()}
-                disabled={
-                  !selectedReel ||
-                  !contentText.trim() ||
-                  storySaveStatus === 'saving' ||
-                  reelAlreadySaved
-                }
+                disabled={!selectedReel || !contentText.trim() || storySaveStatus === 'saving'}
                 aria-label={
-                  reelAlreadySaved
-                    ? 'Reel đã được lưu vào máy chủ'
+                  hasStorySourceSynced
+                    ? 'Tạo thêm story từ reel này (đã có nguồn đồng bộ)'
                     : 'Lưu nội dung và link reel vào máy chủ'
                 }
                 title={
-                  reelAlreadySaved
-                    ? 'Đã lưu nội dung nguồn và đường dẫn reel'
-                    : 'Lưu nội dung nguồn và đường dẫn reel vào database'
+                  hasStorySourceSynced
+                    ? 'Mỗi lần lưu tạo một story mới; caption reel đã được lưu ở story nguồn'
+                    : 'Lưu story (nội dung + link reel). Nhiều story có thể cùng một reel.'
                 }
                 className={`relative inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg transition disabled:cursor-not-allowed ${
-                  reelAlreadySaved
-                    ? 'bg-amber-500/20 text-amber-100 opacity-90'
-                    : storySaveStatus === 'ok'
-                      ? 'bg-amber-500/25 text-amber-100 disabled:opacity-40'
-                      : storySaveStatus === 'error'
-                        ? 'bg-rose-500/80 text-white disabled:opacity-40'
+                  storySaveStatus === 'ok'
+                    ? 'bg-amber-500/25 text-amber-100 disabled:opacity-40'
+                    : storySaveStatus === 'error'
+                      ? 'bg-rose-500/80 text-white disabled:opacity-40'
+                      : hasStorySourceSynced
+                        ? 'bg-amber-500/20 text-amber-100 hover:bg-amber-500/30'
                         : 'bg-amber-500/25 text-amber-100 hover:bg-amber-500/35 disabled:opacity-40'
                 }`}
               >
@@ -2516,7 +2525,7 @@ export default function FacebookScreen() {
                   <FiSave className="h-4 w-4" aria-hidden />
                 )}
                 {storySaveStatus !== 'saving' &&
-                (reelAlreadySaved || storySaveStatus === 'ok') ? (
+                (hasStorySourceSynced || storySaveStatus === 'ok') ? (
                   <span
                     className="pointer-events-none absolute -right-0.5 -top-0.5 flex h-3.5 w-3.5 items-center justify-center rounded-full border border-neutral-900/90 bg-emerald-500 text-white shadow-sm"
                     aria-hidden
