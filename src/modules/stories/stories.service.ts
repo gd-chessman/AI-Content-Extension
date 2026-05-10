@@ -190,14 +190,15 @@ export class StoriesService {
     return this.serializeStory(res as unknown as Record<string, unknown>);
   }
 
-  /** Same canonical URL rules as create; scope per user. */
-  async checkSourceReelSaved(
+  /**
+   * Đã có **StorySource** (story nguồn) cho URL reel này hay chưa — không đọc collection Story.
+   */
+  async checkStorySourceForReel(
     userId: string,
     rawUrl: string,
   ): Promise<{
     saved: boolean;
     storySourceId?: string;
-    storyId?: string;
     canonicalUrl?: string;
     myUsageCount: number;
     globalUsageCount: number;
@@ -220,26 +221,9 @@ export class StoriesService {
       .select('_id usageCount')
       .lean();
 
-    let latestStory = sourceDoc
-      ? await this.storyModel
-          .findOne({ userId: userOid, storySourceId: sourceDoc._id })
-          .sort({ createdAt: -1 })
-          .select('_id')
-          .lean()
-      : null;
-    if (!latestStory) {
-      latestStory = await this.storyModel
-        .findOne({ userId: userOid, sourceReelUrl: canonical })
-        .sort({ createdAt: -1 })
-        .select('_id')
-        .lean();
-    }
-
     return {
-      /** Đã có bản ghi story nguồn (đã đồng bộ caption). */
       saved: Boolean(sourceDoc),
       storySourceId: sourceDoc ? String(sourceDoc._id) : undefined,
-      storyId: latestStory ? String(latestStory._id) : undefined,
       canonicalUrl: canonical,
       myUsageCount: sourceDoc ? Number(sourceDoc.usageCount) || 0 : 0,
       globalUsageCount,

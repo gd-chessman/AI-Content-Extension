@@ -26,10 +26,11 @@ export class StoriesController {
     return this.storiesService.listSourcesForUser(user.sub);
   }
 
-  @Get('check-reel')
-  checkReel(@Req() req: Request, @Query('url') url?: string) {
+  /** Đã có StorySource cho reel này chưa (chỉ story nguồn, không kiểm tra Story). */
+  @Get('sources/check-reel')
+  checkStorySourceForReel(@Req() req: Request, @Query('url') url?: string) {
     const user = req.user as JwtPayload;
-    return this.storiesService.checkSourceReelSaved(user.sub, url || '');
+    return this.storiesService.checkStorySourceForReel(user.sub, url || '');
   }
 
   @Post('sources/sync')
