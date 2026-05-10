@@ -11,6 +11,8 @@ import { StorySource, StorySourceDocument } from './story-source.schema';
 import { Story, StoryDocument } from './story.schema';
 import { StoryTopic, StoryTopicDocument } from './story-topic.schema';
 
+const MIN_SOURCE_CONTENT_LENGTH = 256;
+
 @Injectable()
 export class StoriesService {
   constructor(
@@ -64,12 +66,8 @@ export class StoriesService {
   }
 
   async createForUser(userId: string, dto: CreateStoryDto) {
-    const sourceContent = (dto.sourceContent || '').trim();
     const sourceReelUrl = this.normalizeHttpUrl((dto.sourceReelUrl || '').trim());
 
-    if (!sourceContent) {
-      throw new BadRequestException('Source content is required.');
-    }
     if (!sourceReelUrl) {
       throw new BadRequestException('Invalid reel URL.');
     }
@@ -77,12 +75,13 @@ export class StoriesService {
 
     const canonicalReelUrl = this.canonicalSourceReelUrl(sourceReelUrl);
     const userOid = new Types.ObjectId(userId);
-
-    const sourceDoc = await this.upsertStorySourceDoc(userOid, {
-      sourceReelUrl: canonicalReelUrl,
-      sourceContent,
-      name: (dto.name || '').trim().slice(0, 200),
-    });
+    const sourceDoc = await this.storySourceModel
+      .findOne({ userId: userOid, sourceReelUrl: canonicalReelUrl })
+      .select('_id')
+      .lean();
+    if (!sourceDoc?._id) {
+      throw new NotFoundException('Story source not found. Please sync source content first.');
+    }
 
     let topicId: Types.ObjectId | undefined;
     if (dto.topicId?.trim()) {
@@ -106,7 +105,7 @@ export class StoriesService {
     const created = await this.storyModel.create({
       userId: userOid,
       topicId,
-      storySourceId: sourceDoc._id,
+      storySourceId: new Types.ObjectId(String(sourceDoc._id)),
       name,
     });
 
@@ -118,7 +117,7 @@ export class StoriesService {
       .lean();
 
     const plain = created.toObject() as unknown as Record<string, unknown>;
-    plain.storySourceId = (sourceAfterUsage || sourceDoc.toObject()) as unknown as Record<string, unknown>;
+    plain.storySourceId = (sourceAfterUsage || sourceDoc) as unknown as Record<string, unknown>;
     return this.serializeStory(plain);
   }
 
@@ -129,6 +128,9 @@ export class StoriesService {
 
     if (!sourceContent) {
       throw new BadRequestException('Source content is required.');
+    }
+    if (sourceContent.length < MIN_SOURCE_CONTENT_LENGTH) {
+      throw new BadRequestException(`Source content must be at least ${MIN_SOURCE_CONTENT_LENGTH} characters.`);
     }
     if (!sourceReelUrl) {
       throw new BadRequestException('Invalid reel URL.');

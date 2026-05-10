@@ -1,7 +1,4 @@
 export class CreateStoryDto {
-  /** Nội dung lấy từ reel (caption, script…) */
-  sourceContent: string;
-
   /** URL reel Facebook */
   sourceReelUrl: string;
 
