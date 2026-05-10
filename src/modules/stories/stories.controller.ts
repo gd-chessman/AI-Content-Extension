@@ -1,11 +1,11 @@
-import { Body, Controller, Get, Param, Post, Query, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { Request } from 'express';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { JwtPayload } from '../auth/jwt.strategy';
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
 import { UserRole } from '../users/users.schema';
-import { CreateStoryDto, UpsertStorySourceDto } from './stories.dto';
+import { CreateStoryDto, PatchStoryDto, UpsertStorySourceDto } from './stories.dto';
 import { StoriesService } from './stories.service';
 
 @Controller('stories')
@@ -42,6 +42,12 @@ export class StoriesController {
   create(@Req() req: Request, @Body() dto: CreateStoryDto) {
     const user = req.user as JwtPayload;
     return this.storiesService.createForUser(user.sub, dto);
+  }
+
+  @Patch(':id')
+  patchStory(@Req() req: Request, @Param('id') id: string, @Body() dto: PatchStoryDto) {
+    const user = req.user as JwtPayload;
+    return this.storiesService.patchForUser(user.sub, id, dto);
   }
 
   @Post(':id/increment-usage')

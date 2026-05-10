@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
-import { CreateStoryDto, UpsertStorySourceDto } from './stories.dto';
+import { CreateStoryDto, PatchStoryDto, UpsertStorySourceDto } from './stories.dto';
 import { StorySource, StorySourceDocument } from './story-source.schema';
 import { Story, StoryDocument } from './story.schema';
 import { StoryTopic, StoryTopicDocument } from './story-topic.schema';
@@ -22,18 +22,31 @@ export class StoriesService {
     private readonly storyTopicModel: Model<StoryTopicDocument>,
   ) {}
 
-  /** URL reel chuẩn đã có story nguồn — dùng cho checklist UI (không phụ thuộc populate Story). */
+  /**
+   * Danh sách StorySource của user — mặc định:
+   * mới nhất trước (`createdAt` desc), cùng thời điểm ưu tiên `usageCount` thấp.
+   */
   async listSourcesForUser(userId: string) {
     const rows = await this.storySourceModel
       .find({ userId: new Types.ObjectId(userId) })
-      .select('sourceReelUrl')
-      .sort({ updatedAt: -1 })
+      .select('_id sourceContent sourceReelUrl name usageCount createdAt updatedAt')
+      .sort({ createdAt: -1, usageCount: 1 })
       .limit(500)
       .lean();
 
-    return rows.map((r) => ({
-      sourceReelUrl: String(r.sourceReelUrl || ''),
-    }));
+    return rows.map((r) => {
+      const row = r as Record<string, unknown>;
+      return {
+        _id: String(row._id || ''),
+        id: String(row._id || ''),
+        sourceContent: String(row.sourceContent || ''),
+        sourceReelUrl: String(row.sourceReelUrl || ''),
+        name: String(row.name || ''),
+        usageCount: Number(row.usageCount) || 0,
+        createdAt: row.createdAt,
+        updatedAt: row.updatedAt,
+      };
+    });
   }
 
   async listForUser(userId: string) {
@@ -97,8 +110,15 @@ export class StoriesService {
       name,
     });
 
+    const sourceAfterUsage = await this.storySourceModel.findOneAndUpdate(
+      { _id: sourceDoc._id, userId: userOid },
+      { $inc: { usageCount: 1 } },
+      { new: true },
+    )
+      .lean();
+
     const plain = created.toObject() as unknown as Record<string, unknown>;
-    plain.storySourceId = sourceDoc.toObject() as unknown as Record<string, unknown>;
+    plain.storySourceId = (sourceAfterUsage || sourceDoc.toObject()) as unknown as Record<string, unknown>;
     return this.serializeStory(plain);
   }
 
@@ -124,6 +144,50 @@ export class StoriesService {
     });
 
     return this.serializeStorySource(doc.toObject() as unknown as Record<string, unknown>);
+  }
+
+  async patchForUser(userId: string, storyId: string, dto: PatchStoryDto) {
+    if (!Types.ObjectId.isValid(storyId)) {
+      throw new BadRequestException('Invalid story id.');
+    }
+    const oid = new Types.ObjectId(storyId);
+    const userOid = new Types.ObjectId(userId);
+    const update: Record<string, unknown> = {};
+    if (dto.videoPrompts !== undefined) {
+      if (!Array.isArray(dto.videoPrompts)) {
+        throw new BadRequestException('videoPrompts must be an array.');
+      }
+      const maxItems = 32;
+      update.videoPrompts = dto.videoPrompts
+        .slice(0, maxItems)
+        .map((s) => String(s ?? '').trim().slice(0, 50_000));
+    }
+    if (Object.keys(update).length === 0) {
+      throw new BadRequestException('No fields to update.');
+    }
+    const res = await this.storyModel
+      .findOneAndUpdate({ _id: oid, userId: userOid }, { $set: update }, { new: true })
+      .populate({
+        path: 'storySourceId',
+        select: 'sourceContent sourceReelUrl name usageCount',
+      })
+      .lean();
+    if (!res) {
+      throw new NotFoundException('Story not found.');
+    }
+
+    const sourceOid = this.extractStorySourceObjectId(res as Record<string, unknown>);
+    if (sourceOid) {
+      await this.storySourceModel.updateOne({ _id: sourceOid, userId: userOid }, { $inc: { usageCount: 1 } });
+      const row = res as Record<string, unknown>;
+      const ss = row.storySourceId;
+      if (ss && typeof ss === 'object' && !Array.isArray(ss)) {
+        const o = ss as Record<string, unknown>;
+        o.usageCount = Number(o.usageCount || 0) + 1;
+      }
+    }
+
+    return this.serializeStory(res as unknown as Record<string, unknown>);
   }
 
   /** Same canonical URL rules as create; scope per user. */
@@ -269,6 +333,20 @@ export class StoriesService {
       throw new NotFoundException('Could not upsert story source.');
     }
     return doc;
+  }
+
+  private extractStorySourceObjectId(row: Record<string, unknown>): Types.ObjectId | null {
+    const ss = row.storySourceId;
+    if (ss && typeof ss === 'object' && !Array.isArray(ss) && '_id' in ss) {
+      const id = (ss as Record<string, unknown>)._id;
+      if (id && Types.ObjectId.isValid(String(id))) {
+        return new Types.ObjectId(String(id));
+      }
+    }
+    if (ss && Types.ObjectId.isValid(String(ss))) {
+      return new Types.ObjectId(String(ss));
+    }
+    return null;
   }
 
   private serializeStorySource(row: Record<string, unknown>) {

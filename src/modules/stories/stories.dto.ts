@@ -18,3 +18,8 @@ export class UpsertStorySourceDto {
   sourceReelUrl: string;
   name?: string;
 }
+
+export class PatchStoryDto {
+  /** Prompt/script video (VD: Video 1, Video 2). */
+  videoPrompts?: string[];
+}
