@@ -3,9 +3,9 @@
  * Phải tự chứa (không import) vì được inject qua chrome.scripting.executeScript.
  */
 
-export type ChatgptStep4ClipboardKind = 'title_plain' | 'title_styled' | 'content_short' | 'content_full'
+export type ChatgptExtractContentClipboardKind = 'title_plain' | 'title_styled' | 'content_short' | 'content_full'
 
-export type ChatgptStep4CollectedForSheet = {
+export type ChatgptExtractContentCollectedForSheet = {
   title: string
   shortContent: string
   fullContent: string
@@ -15,10 +15,10 @@ export type ChatgptStep4CollectedForSheet = {
  * args[0]: 'collect' → trả `{ title (styled), shortContent, fullContent } | null`
  * args[0]: 'clipboard', args[1]: kind → trả string (rỗng nếu không tìm thấy)
  */
-export function chatgptExtractContent(...args: unknown[]): ChatgptStep4CollectedForSheet | string | null {
+export function chatgptExtractContent(...args: unknown[]): ChatgptExtractContentCollectedForSheet | string | null {
   const mode = args[0] as string
   const extractKind =
-    mode === 'clipboard' ? (args[1] as ChatgptStep4ClipboardKind | undefined) : undefined
+    mode === 'clipboard' ? (args[1] as ChatgptExtractContentClipboardKind | undefined) : undefined
 
   const normalize = (text: string) => text.replace(/\r/g, '').trim()
   const splitParagraphs = (text: string) =>
