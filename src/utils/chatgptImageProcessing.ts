@@ -1,5 +1,5 @@
 /**
- * Tiện ích xử lý ảnh ChatGPT: chờ tạo ảnh, đếm ảnh assistant, chụp/cắt đôi, lưu tải xuống, ghép ảnh vào nội dung.
+ * Tiện ích xử lý ảnh ChatGPT: chờ tạo ảnh, đếm ảnh assistant, chụp/cắt đôi, lưu tải xuống.
  * Các hàm `*PageScript` dùng với chrome.scripting.executeScript (tự chứa, không import).
  */
 
@@ -14,46 +14,6 @@ export function hashDataUrl(dataUrl: string): string {
     h = ((h << 5) + h) ^ dataUrl.charCodeAt(i)
   }
   return `${(h >>> 0).toString(16)}_${dataUrl.length}`
-}
-
-export function injectImagesIntoLongContent(content: string, image1: string, image2: string): string {
-  const base = (content || '').trim()
-  if (!base) return ''
-
-  const sentenceUnits = base
-    .split(/(?<=[.!?])\s+/)
-    .map((unit) => unit.trim())
-    .filter(Boolean)
-  const units = sentenceUnits.length >= 6 ? sentenceUnits : base.split('\n').map((line) => line.trim()).filter(Boolean)
-  if (units.length < 3) {
-    return `${base}\n\n<p><img src="${image1}" alt="Ảnh 1" /></p>\n\n<p><img src="${image2}" alt="Ảnh 2" /></p>`
-  }
-
-  const n = units.length
-  const start = Math.max(1, Math.floor(n * 0.2))
-  const end = Math.min(n - 2, Math.ceil(n * 0.8))
-  const range = Array.from({ length: Math.max(0, end - start + 1) }, (_, i) => start + i)
-  const minGap = Math.max(2, Math.floor(n * 0.2))
-
-  const pick = (arr: number[]) => arr[Math.floor(Math.random() * arr.length)]
-  const i1 = range.length > 0 ? pick(range) : Math.max(1, Math.floor(n * 0.35))
-  let i2Candidates = range.filter((idx) => Math.abs(idx - i1) >= minGap)
-  if (i2Candidates.length === 0) {
-    i2Candidates = range.filter((idx) => Math.abs(idx - i1) >= 2)
-  }
-  const i2 = i2Candidates.length > 0 ? pick(i2Candidates) : Math.min(n - 2, i1 + minGap)
-  const [firstIdx, secondIdx] = [i1, i2].sort((a, b) => a - b)
-
-  const image1Block = `<p><img src="${image1}" alt="Ảnh 1" /></p>`
-  const image2Block = `<p><img src="${image2}" alt="Ảnh 2" /></p>`
-
-  const out: string[] = []
-  units.forEach((unit, idx) => {
-    out.push(unit)
-    if (idx === firstIdx) out.push(image1Block)
-    if (idx === secondIdx) out.push(image2Block)
-  })
-  return out.join('\n\n')
 }
 
 export type SplitCaptureRect = {

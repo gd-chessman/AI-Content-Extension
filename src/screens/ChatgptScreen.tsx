@@ -41,11 +41,15 @@ import {
 } from '@/services/StoryService'
 import { chatgptExtractContent } from '@/utils/chatgptExtractContent'
 import {
+  chatgptExtractVideoBlockPageScript,
+  getChatgptStep4ContentKindLabel,
+  injectImagesIntoLongContent,
+} from '@/utils/chatgptContentProcessing'
+import {
   chatgptAssistantImageCountPageScript,
   chatgptCloseImageLightboxPageScript,
   chatgptLocateLatestChatImageForCapturePageScript,
   chatgptWaitGeneratedImageDonePageScript,
-  injectImagesIntoLongContent,
   saveCopiedSplitImageIfNew,
   splitCapturedImage,
   SPLIT_IMAGE_DOWNLOAD_FOLDER,
@@ -903,111 +907,7 @@ export default function ChatgptScreen() {
 
       const result = await extensionChrome.scripting.executeScript({
         target: { tabId: target.id },
-        func: ((videoPart: number) => {
-        const compactLines = (raw: string) => {
-          const source = (raw || '').replace(/\r/g, '').trim()
-          if (!source) return ''
-          return source
-            .split('\n')
-            .map((line) => line.replace(/\s+/g, ' ').trim())
-            .filter(Boolean)
-            .join('\n')
-        }
-
-        /**
-         * Tiêu đề khối video: `🎬 VIDEO N` hoặc `🎥 VIDEO N` (ChatGPT hay đổi emoji).
-         * Kết thúc VIDEO 1: `🖼️ IMAGE 2`, `🎬/🎥 VIDEO 2`. VIDEO 2: `🔥`, `✅ NOTES`, `If you want`.
-         */
-        const extractVideoBlockByLines = (full: string, part: number) => {
-          const lines = full.replace(/\r/g, '').split('\n')
-          const headerRe = new RegExp(`^\\s*(?:🎬|🎥)\\s*VIDEO\\s*${part}\\b`, 'i')
-          const headerRePlain = new RegExp(`^\\s*VIDEO\\s*${part}\\b`, 'i')
-          let start = -1
-          for (let i = 0; i < lines.length; i++) {
-            const L = lines[i]
-            if (headerRe.test(L) || headerRePlain.test(L)) {
-              start = i
-              break
-            }
-          }
-          if (start < 0) return ''
-
-          const isStopLine = (L: string) => {
-            const t = L.trim()
-            if (part === 1) {
-              if (/^🖼️\s*IMAGE\s*2\b/i.test(t)) return true
-              if (/^🎬\s*IMAGE\s*2\b/i.test(t)) return true
-              if (/^(?:🎬|🎥)\s*VIDEO\s*2\b/i.test(t)) return true
-            }
-            if (part === 2) {
-              if (/^✅/.test(t)) return true
-            }
-            if (/^🔥/.test(t)) return true
-            if (/^If you want\b/i.test(t)) return true
-            return false
-          }
-
-          const out: string[] = []
-          for (let i = start; i < lines.length; i++) {
-            if (i > start && isStopLine(lines[i])) break
-            out.push(lines[i])
-          }
-          return out.join('\n').trim()
-        }
-
-        /** Fallback khi DOM gộp ít dòng: cắt theo regex trên toàn văn bản. */
-        const extractVideoBlockRegex = (full: string, part: number) => {
-          const t = full.replace(/\r/g, '')
-          const startRe = new RegExp(`(?:🎬|🎥)\\s*VIDEO\\s*${part}\\b`, 'i')
-          const startM = t.match(startRe)
-          const startIdx =
-            startM?.index ??
-            (() => {
-              const m2 = t.match(new RegExp(`(^|\\n)\\s*VIDEO\\s*${part}\\b`, 'i'))
-              return m2 && m2.index !== undefined ? m2.index + (m2[1] === '\n' ? 1 : 0) : -1
-            })()
-          if (startIdx < 0) return ''
-
-          const tail = t.slice(startIdx)
-          let stop = tail.length
-          if (part === 1) {
-            const candidates = [
-              tail.search(/\n\s*🖼️\s*IMAGE\s*2\b/i),
-              tail.search(/\n\s*🎬\s*IMAGE\s*2\b/i),
-              tail.search(/\n\s*(?:🎬|🎥)\s*VIDEO\s*2\b/i),
-            ]
-            for (const c of candidates) {
-              if (c >= 0) stop = Math.min(stop, c)
-            }
-          }
-          for (const rg of [/\n\s*✅/i, /\n\s*🔥/i, /\n\s*If you want\b/i]) {
-            const c = tail.search(rg)
-            if (c >= 0) stop = Math.min(stop, c)
-          }
-          return tail.slice(0, stop).trim()
-        }
-
-        const assistantNodes = Array.from(
-          document.querySelectorAll<HTMLElement>('[data-message-author-role="assistant"], article'),
-        )
-          .filter((el) => (el.innerText || '').trim().length > 0)
-          .reverse()
-
-        const candidateNode =
-          assistantNodes.find((el) =>
-            /VIDEO\s*[12]|IMAGE\s*[12]|🎬\s*VIDEO|🎥\s*VIDEO|🖼️\s*IMAGE/i.test(el.innerText || ''),
-          ) || assistantNodes[0]
-        if (!candidateNode) return ''
-
-        candidateNode.scrollIntoView({ block: 'start', behavior: 'instant' })
-
-        const text = candidateNode.innerText || ''
-
-        let block = extractVideoBlockByLines(text, videoPart)
-        if (!block) block = extractVideoBlockRegex(text, videoPart)
-
-        return compactLines(block)
-        }) as (...args: unknown[]) => unknown,
+        func: chatgptExtractVideoBlockPageScript as (...args: unknown[]) => unknown,
         args: [part],
       })
 
@@ -1430,28 +1330,14 @@ export default function ChatgptScreen() {
     }
     const extensionChrome = getChrome()
     if (!extensionChrome?.tabs?.query || !extensionChrome.scripting?.executeScript) {
-      const kindLabel =
-        kind === 'title_plain'
-          ? 'tiêu đề'
-          : kind === 'title_styled'
-            ? 'tiêu đề font kiểu'
-            : kind === 'content_short'
-              ? 'nội dung ngắn'
-              : 'nội dung toàn bộ'
+      const kindLabel = getChatgptStep4ContentKindLabel(kind)
       if (copyToClipboard) {
         setStatus(`Môi trường hiện tại không hỗ trợ lấy ${kindLabel} Tiến trình 4.`)
       }
       return ''
     }
 
-    const kindLabel =
-      kind === 'title_plain'
-        ? 'tiêu đề'
-        : kind === 'title_styled'
-          ? 'tiêu đề font kiểu'
-          : kind === 'content_short'
-            ? 'nội dung ngắn'
-            : 'nội dung toàn bộ'
+    const kindLabel = getChatgptStep4ContentKindLabel(kind)
 
     if (copyToClipboard) {
       setStatus(`Đang lấy ${kindLabel} từ Tiến trình 4...`)
