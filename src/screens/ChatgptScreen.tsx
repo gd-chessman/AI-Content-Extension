@@ -835,7 +835,6 @@ export default function ChatgptScreen() {
         let imageDetected = false
         let firstDetectAt = 0
         let lastCount = baseCount
-        let assistantChanged = false
 
         const isVisible = (el: Element | null): el is HTMLElement => {
           if (!(el instanceof HTMLElement)) return false
@@ -844,7 +843,20 @@ export default function ChatgptScreen() {
           return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden'
         }
 
+        /** ChatGPT đang tạo ảnh: halftone dots + canvas (data-testid từ UI thật). */
+        const isImageGenLoadingUi = () => {
+          const el = document.querySelector(
+            '[data-testid="image-gen-loading-state-dots"], [data-testid="loading-halftone-dots-animation"]',
+          ) as HTMLElement | null
+          if (!el) return false
+          const st = window.getComputedStyle(el)
+          if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) < 0.05) return false
+          const r = el.getBoundingClientRect()
+          return r.width > 4 && r.height > 4
+        }
+
         const isGenerating = () => {
+          if (isImageGenLoadingUi()) return true
           const stopBtn =
             (document.querySelector('button[data-testid="stop-button"]') as HTMLButtonElement | null) ||
             (document.querySelector('button[aria-label*="Stop"]') as HTMLButtonElement | null) ||
@@ -884,8 +896,7 @@ export default function ChatgptScreen() {
           }
         }
 
-        const initialSig = getAssistantSignature()
-        let prevSig = initialSig
+        let prevSig = getAssistantSignature()
 
         while (Date.now() - startedAt < maxWaitMs) {
           const currentCount = countAssistantImages()
@@ -894,9 +905,6 @@ export default function ChatgptScreen() {
           if (currentCount > baseCount) {
             imageDetected = true
             if (!firstDetectAt) firstDetectAt = Date.now()
-          }
-          if (currentSig.count !== initialSig.count || currentSig.textLen !== initialSig.textLen) {
-            assistantChanged = true
           }
 
           if (
@@ -908,18 +916,23 @@ export default function ChatgptScreen() {
             stableSince = Date.now()
           }
 
-          // Success condition A: image count increased and DOM stabilized.
-          if (imageDetected && Date.now() - stableSince >= stableMs) {
+          // Có ảnh mới (đếm > baseline), UI không còn tạo ảnh (dots halftone / stop / turn loading), DOM ổn định.
+          if (
+            imageDetected &&
+            currentCount > baseCount &&
+            !generatingNow &&
+            Date.now() - stableSince >= stableMs
+          ) {
             return { ok: true, reason: 'image_done', imageCount: currentCount }
           }
-          // Success condition A2: no detectable new img element, but assistant output changed
-          // and UI stabilized (covers alternate render paths).
-          if (assistantChanged && Date.now() - stableSince >= stableMs) {
-            return { ok: true, reason: 'assistant_done', imageCount: currentCount }
-          }
-          // Success condition B: image detected and enough settle time passed,
-          // even if UI still reports generating (avoid stuck waiting).
-          if (imageDetected && firstDetectAt && Date.now() - firstDetectAt >= settleAfterDetectMs && !generatingNow) {
+          // Dự phòng: đã thấy ảnh mới đủ lâu, generating tắt (gồm hết image-gen loading).
+          if (
+            imageDetected &&
+            currentCount > baseCount &&
+            firstDetectAt &&
+            Date.now() - firstDetectAt >= settleAfterDetectMs &&
+            !generatingNow
+          ) {
             return { ok: true, reason: 'image_done_settle', imageCount: currentCount }
           }
 
