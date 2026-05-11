@@ -577,49 +577,68 @@ export default function GgSheetScreen() {
         </div>
       </div>
       {showPreviewModal && previewData ? (
-        <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/50 p-3">
-          <div className="w-full max-w-md rounded-2xl border border-blue-300/40 bg-slate-950/95 p-3">
-            <p className="text-sm font-semibold text-white">Xác nhận đẩy GG Sheet</p>
-            <p className="mt-2 text-[11px] text-slate-300">
-              Dữ liệu sẽ được ghi vào dòng <span className="font-semibold text-emerald-200">{previewData.targetRow}</span> ({previewData.targetRange})
-            </p>
-            <p className="mt-1 text-[10px] text-slate-400">
-              Cột ghi: Tiêu đề {previewData.columns.title || 'bỏ qua'} | Ngắn {previewData.columns.shortContent || 'bỏ qua'} | Dài {previewData.columns.full || 'bỏ qua'}
-            </p>
-            <div className="mt-2 space-y-1 rounded-xl border border-white/10 bg-black/25 p-2 text-[11px] text-slate-200">
-              <p><span className="text-slate-400">Tiêu đề:</span> {previewData.data.title || '...'}</p>
-              <p className="whitespace-pre-wrap">
-                <span className="text-slate-400">Nội dung ngắn:</span>{' '}
-                {previewData.data.shortContent ? formatPreviewLines(previewData.data.shortContent, 5) : '...'}
-              </p>
-              <p className="whitespace-pre-wrap">
-                <span className="text-slate-400">Nội dung dài:</span>{' '}
-                {previewData.data.fullContent ? formatPreviewLines(previewData.data.fullContent, 8) : '...'}
-              </p>
-            </div>
-            <div className="mt-3 flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => {
-                  setShowPreviewModal(false)
-                  setPreviewData(null)
-                }}
-                className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-white/10 text-slate-200 transition hover:bg-white/20"
-                title="Hủy"
-                aria-label="Hủy"
-              >
-                <FiX className="h-3.5 w-3.5" />
-              </button>
-              <button
-                type="button"
-                onClick={() => void confirmPushToSheet()}
-                disabled={isSaving}
-                className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-emerald-500/25 text-emerald-100 transition hover:bg-emerald-500/35 disabled:opacity-50"
-                title="Xác nhận đẩy"
-                aria-label="Xác nhận đẩy"
-              >
-                <FiCheck className="h-3.5 w-3.5" />
-              </button>
+        <div
+          className="absolute inset-0 z-20 overflow-y-auto overscroll-contain bg-black/50 p-3"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="ggsheet-push-preview-title"
+        >
+          <div className="flex min-h-full items-center justify-center py-2 sm:py-4">
+            <div className="flex min-h-0 w-full max-w-md max-h-[min(88dvh,calc(100vh-1.5rem))] flex-col overflow-hidden rounded-2xl border border-blue-300/40 bg-slate-950/95 shadow-xl">
+              <div className="shrink-0 border-b border-white/10 p-3 pb-2">
+                <p id="ggsheet-push-preview-title" className="text-sm font-semibold text-white">
+                  Xác nhận đẩy GG Sheet
+                </p>
+                <p className="mt-2 wrap-break-word text-[11px] text-slate-300">
+                  Dữ liệu sẽ được ghi vào dòng{' '}
+                  <span className="font-semibold text-emerald-200">{previewData.targetRow}</span> ({previewData.targetRange})
+                </p>
+                <p className="mt-1 wrap-break-word text-[10px] text-slate-400">
+                  Cột ghi: Tiêu đề {previewData.columns.title || 'bỏ qua'} | Ngắn{' '}
+                  {previewData.columns.shortContent || 'bỏ qua'} | Dài {previewData.columns.full || 'bỏ qua'}
+                </p>
+              </div>
+              <div className="min-h-0 flex-1 overflow-y-auto px-3 py-2">
+                <div className="space-y-2 rounded-xl border border-white/10 bg-black/25 p-2 text-[11px] text-slate-200">
+                  <p className="wrap-break-word">
+                    <span className="text-slate-400">Tiêu đề:</span> {previewData.data.title || '...'}
+                  </p>
+                  <p className="whitespace-pre-wrap wrap-break-word">
+                    <span className="text-slate-400">Nội dung ngắn:</span>{' '}
+                    {previewData.data.shortContent ? formatPreviewLines(previewData.data.shortContent, 5) : '...'}
+                  </p>
+                  <p className="whitespace-pre-wrap wrap-break-word">
+                    <span className="text-slate-400">Nội dung dài:</span>{' '}
+                    {previewData.data.fullContent ? formatPreviewLines(previewData.data.fullContent, 8) : '...'}
+                  </p>
+                </div>
+              </div>
+              <div className="shrink-0 border-t border-white/10 p-3 pt-2">
+                <div className="flex justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowPreviewModal(false)
+                      setPreviewData(null)
+                    }}
+                    className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-white/10 text-slate-200 transition hover:bg-white/20"
+                    title="Hủy"
+                    aria-label="Hủy"
+                  >
+                    <FiX className="h-3.5 w-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void confirmPushToSheet()}
+                    disabled={isSaving}
+                    className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-emerald-500/25 text-emerald-100 transition hover:bg-emerald-500/35 disabled:opacity-50"
+                    title="Xác nhận đẩy"
+                    aria-label="Xác nhận đẩy"
+                  >
+                    <FiCheck className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         </div>
