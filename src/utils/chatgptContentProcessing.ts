@@ -58,7 +58,7 @@ export function getChatgptStep4ContentKindLabel(kind: ChatgptExtractContentClipb
   }
 }
 
-/** Trích khối VIDEO 1 hoặc 2: định dạng 🎬/🎥 VIDEO N hoặc VIDEO N (6 SECONDS); dừng trước IMAGE 2 / VIDEO 2 / CONTINUITY / dòng phân cách chỉ gồm dấu = (không lấy dòng = và phần bên dưới). */
+/** Trích khối VIDEO 1/2; dừng theo marker; gỡ đoạn “These N prompts are optimized…story-accurate suspense progression.” nếu vẫn nằm trong text. */
 export function chatgptExtractVideoBlockPageScript(videoPart: number): string {
   const part = videoPart === 2 ? 2 : 1
 
@@ -92,9 +92,20 @@ export function chatgptExtractVideoBlockPageScript(videoPart: number): string {
       return /^={10,}$/.test(t)
     }
 
+    const isMetadataOrFooterLine = (t: string) => {
+      if (/^AI GENERATION SETTINGS\b/i.test(t)) return true
+      if (/^STYLE TAGS\b/i.test(t)) return true
+      if (/^NEGATIVE PROMPT\b/i.test(t)) return true
+      if (/^Apply to all assets\b/i.test(t)) return true
+      if (/^This structure ensures\b/i.test(t)) return true
+      if (/^(?:Facebook|ChatGPT|Grok|GGSheet|WebBlog)\s*$/i.test(t)) return true
+      return false
+    }
+
     const isStopLine = (L: string) => {
       const t = L.trim()
       if (isEqualsSeparatorLine(L)) return true
+      if (isMetadataOrFooterLine(t)) return true
       if (p === 1) {
         if (/^🖼️\s*IMAGE\s*2\b/i.test(t)) return true
         if (/^🎬\s*IMAGE\s*2\b/i.test(t)) return true
@@ -136,6 +147,17 @@ export function chatgptExtractVideoBlockPageScript(videoPart: number): string {
     let stop = tail.length
     const eqSep = tail.search(/\n={10,}\s*(?:\n|$)/)
     if (eqSep >= 0) stop = Math.min(stop, eqSep)
+    for (const rg of [
+      /\n\s*AI GENERATION SETTINGS\b/i,
+      /\n\s*STYLE TAGS\b/i,
+      /\n\s*NEGATIVE PROMPT\b/i,
+      /\n\s*Apply to all assets\b/i,
+      /\n\s*This structure ensures\b/i,
+      /\n\s*(?:Facebook|ChatGPT|Grok|GGSheet|WebBlog)\s*(?=\n|$)/i,
+    ]) {
+      const c = tail.search(rg)
+      if (c >= 0) stop = Math.min(stop, c)
+    }
     if (p === 1) {
       const candidates = [
         tail.search(/\n\s*🖼️\s*IMAGE\s*2\b/i),
@@ -182,5 +204,15 @@ export function chatgptExtractVideoBlockPageScript(videoPart: number): string {
   let block = extractVideoBlockByLines(text, part)
   if (!block) block = extractVideoBlockRegex(text, part)
 
-  return compactLines(block)
+  /** Xóa đoạn boilerplate dạng “These N prompts are optimized for Runway … progression.” nếu vẫn còn lọt trong block (inject: tự chứa). */
+  const stripThesePromptsOptimizedAppendix = (raw: string) =>
+    raw
+      .replace(
+        /These\s+\d+\s+prompts\s+are\s+optimized\s+for\s+Runway[\s\S]*?story-accurate\s+suspense\s+progression\.?/gi,
+        '',
+      )
+      .replace(/\n{3,}/g, '\n\n')
+      .trim()
+
+  return compactLines(stripThesePromptsOptimizedAppendix(block))
 }
