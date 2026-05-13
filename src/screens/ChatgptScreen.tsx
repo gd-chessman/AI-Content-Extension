@@ -8,6 +8,7 @@ import {
   FiDownload,
   FiEdit3,
   FiFileText,
+  FiLayers,
   FiFilm,
   FiImage,
   FiInfo,
@@ -29,6 +30,7 @@ import {
   getUserWorkflowDetail,
   getUserWorkflows,
   getWorkflowRunById,
+  type WorkflowItem,
   type WorkflowRunStreamEvent,
   updateStepRun,
   updateWorkflowRun,
@@ -115,6 +117,7 @@ const CHATGPT_URL = 'https://chatgpt.com/'
 const CHATGPT_PATTERNS = ['*://chatgpt.com/*', '*://chat.openai.com/*']
 
 const FACEBOOK_REEL_MEMORY_KEY = 'facebookReelCopiedContent'
+const CHATGPT_SELECTED_WORKFLOW_STORAGE_KEY = 'chatgptSelectedWorkflowId'
 
 /** Tiến trình tách Video 1/2: backend map `id` = step-{stepNo} hoặc chỉ khớp stepNo. */
 function isChatgptWorkflowStep2(step: { id: string; stepNo?: number }): boolean {
@@ -204,6 +207,7 @@ export default function ChatgptScreen() {
   }, [refreshRoleOnly])
 
   const [status, setStatus] = useState('Chọn một tiến trình để gửi prompt tự động vào ChatGPT.')
+  const [selectedWorkflowId, setSelectedWorkflowId] = useState('')
   const [selectedStepId, setSelectedStepId] = useState('')
   const [splitImages, setSplitImages] = useState<{ left: string; right: string } | null>(null)
   const [copiedPart, setCopiedPart] = useState<'left' | 'right' | null>(null)
@@ -219,11 +223,16 @@ export default function ChatgptScreen() {
   const chatgptDraftVideoPromptsRef = useRef<string[] | null>(null)
   /** Tiến trình 1: gán lúc bắt đầu workflow — mặc định story (`sourceContent`). */
   const step1ContentSourceRef = useRef<'localstorage' | 'stories'>('stories')
+  const { data: workflows = [], isLoading: isLoadingWorkflows } = useQuery<WorkflowItem[]>({
+    queryKey: ['chatgpt-workflows'],
+    queryFn: async () => await getUserWorkflows({ platform: 'chatgpt' }),
+    staleTime: 60_000,
+  })
   const { data: processSteps = [], isLoading: isLoadingProcessSteps } = useQuery<ProcessStep[]>({
-    queryKey: ['chatgpt-process-steps'],
+    queryKey: ['chatgpt-process-steps', selectedWorkflowId],
+    enabled: Boolean(selectedWorkflowId),
     queryFn: async () => {
-      const workflows = await getUserWorkflows({ platform: 'chatgpt' })
-      const target = workflows[0] || null
+      const target = workflows.find((workflow) => workflow._id === selectedWorkflowId) || null
       if (!target?._id) return []
       const detail = await getUserWorkflowDetail(target._id)
       return (detail.steps || [])
@@ -246,6 +255,25 @@ export default function ChatgptScreen() {
   })
 
   const getChrome = () => (globalThis as { chrome?: ExtensionChrome }).chrome
+
+  useEffect(() => {
+    if (!workflows.length) {
+      setSelectedWorkflowId('')
+      return
+    }
+
+    setSelectedWorkflowId((prev) => {
+      if (prev && workflows.some((workflow) => workflow._id === prev)) return prev
+      const saved = localStorage.getItem(CHATGPT_SELECTED_WORKFLOW_STORAGE_KEY) || ''
+      if (saved && workflows.some((workflow) => workflow._id === saved)) return saved
+      return workflows[0]._id
+    })
+  }, [workflows])
+
+  useEffect(() => {
+    if (!selectedWorkflowId) return
+    localStorage.setItem(CHATGPT_SELECTED_WORKFLOW_STORAGE_KEY, selectedWorkflowId)
+  }, [selectedWorkflowId])
 
   useEffect(() => {
     if (!processSteps.length) {
@@ -1303,6 +1331,32 @@ export default function ChatgptScreen() {
 
   return (
     <section className="glass-panel flex h-full min-h-0 flex-col rounded-3xl p-4">
+      <div className="mb-2 shrink-0 rounded-xl border border-white/10 bg-black/30 p-1.5">
+        <div className="flex gap-1 overflow-x-auto px-0.5 py-0.5">
+          {workflows.map((workflow, idx) => (
+            <button
+              key={workflow._id}
+              type="button"
+              onClick={() => setSelectedWorkflowId(workflow._id)}
+              className={`relative inline-flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-lg transition ${
+                selectedWorkflowId === workflow._id
+                  ? 'bg-cyan-500/25 text-cyan-100 ring-1 ring-cyan-300/40'
+                  : 'bg-white/10 text-slate-300 hover:bg-cyan-500/20'
+              }`}
+              title={workflow.name || `Workflow ${idx + 1}`}
+              aria-label={`Chọn workflow ${idx + 1}`}
+            >
+              <FiLayers className="h-3.5 w-3.5" />
+              <span className="absolute right-0.5 top-0.5 inline-flex h-3 min-w-3 items-center justify-center rounded-full bg-cyan-500 px-0.5 text-[7px] font-bold leading-none text-white">
+                {idx + 1}
+              </span>
+            </button>
+          ))}
+          {!isLoadingWorkflows && workflows.length === 0 ? (
+            <span className="rounded-lg bg-white/10 px-2 py-1 text-[10px] text-slate-400">--</span>
+          ) : null}
+        </div>
+      </div>
       <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_92px] gap-3">
         <div className="flex min-h-0 flex-col rounded-2xl border border-white/10 bg-black/30 p-3">
           <h2 className="text-sm font-semibold text-white">{selectedStep?.label || 'Tiến trình'}</h2>
@@ -1369,7 +1423,7 @@ export default function ChatgptScreen() {
                 <button
                   type="button"
                   onClick={() => void runWorkflow()}
-                  disabled={!processSteps.length || isLoadingProcessSteps}
+                  disabled={!processSteps.length || isLoadingProcessSteps || isLoadingWorkflows}
                   className="inline-flex h-8 w-full cursor-pointer items-center justify-center rounded-lg bg-violet-500/20 text-violet-100 transition hover:bg-violet-500/30 disabled:cursor-not-allowed disabled:opacity-50"
                   title="Chạy toàn bộ workflow"
                   aria-label="Chạy workflow"
