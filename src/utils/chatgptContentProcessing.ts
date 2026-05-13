@@ -58,7 +58,7 @@ export function getChatgptStep4ContentKindLabel(kind: ChatgptExtractContentClipb
   }
 }
 
-/** Trích nội dung khối VIDEO 1 hoặc 2 từ turn assistant gần nhất có marker VIDEO/IMAGE. */
+/** Trích khối VIDEO 1 hoặc 2: định dạng 🎬/🎥 VIDEO N hoặc VIDEO N (6 SECONDS); dừng trước IMAGE 2 / VIDEO 2 / CONTINUITY / dòng phân cách chỉ gồm dấu = (không lấy dòng = và phần bên dưới). */
 export function chatgptExtractVideoBlockPageScript(videoPart: number): string {
   const part = videoPart === 2 ? 2 : 1
 
@@ -74,6 +74,7 @@ export function chatgptExtractVideoBlockPageScript(videoPart: number): string {
 
   const extractVideoBlockByLines = (full: string, p: number) => {
     const lines = full.replace(/\r/g, '').split('\n')
+    /** Tiêu đề kiểu cũ: 🎬 VIDEO 1 — hoặc kiểu mới: VIDEO 1 (6 SECONDS) */
     const headerRe = new RegExp(`^\\s*(?:🎬|🎥)\\s*VIDEO\\s*${p}\\b`, 'i')
     const headerRePlain = new RegExp(`^\\s*VIDEO\\s*${p}\\b`, 'i')
     let start = -1
@@ -86,15 +87,25 @@ export function chatgptExtractVideoBlockPageScript(videoPart: number): string {
     }
     if (start < 0) return ''
 
+    const isEqualsSeparatorLine = (L: string) => {
+      const t = L.trim()
+      return /^={10,}$/.test(t)
+    }
+
     const isStopLine = (L: string) => {
       const t = L.trim()
+      if (isEqualsSeparatorLine(L)) return true
       if (p === 1) {
         if (/^🖼️\s*IMAGE\s*2\b/i.test(t)) return true
         if (/^🎬\s*IMAGE\s*2\b/i.test(t)) return true
+        if (/^IMAGE\s*2\b/i.test(t)) return true
         if (/^(?:🎬|🎥)\s*VIDEO\s*2\b/i.test(t)) return true
+        if (/^VIDEO\s*2\b/i.test(t)) return true
       }
       if (p === 2) {
         if (/^✅/.test(t)) return true
+        if (/CONTINUITY\s+NOTES\b/i.test(t)) return true
+        if (/^CONTINUITY\b/i.test(t)) return true
       }
       if (/^🔥/.test(t)) return true
       if (/^If you want\b/i.test(t)) return true
@@ -111,25 +122,35 @@ export function chatgptExtractVideoBlockPageScript(videoPart: number): string {
 
   const extractVideoBlockRegex = (full: string, p: number) => {
     const t = full.replace(/\r/g, '')
-    const startRe = new RegExp(`(?:🎬|🎥)\\s*VIDEO\\s*${p}\\b`, 'i')
-    const startM = t.match(startRe)
-    const startIdx =
-      startM?.index ??
-      (() => {
-        const m2 = t.match(new RegExp(`(^|\\n)\\s*VIDEO\\s*${p}\\b`, 'i'))
-        return m2 && m2.index !== undefined ? m2.index + (m2[1] === '\n' ? 1 : 0) : -1
-      })()
-    if (startIdx < 0) return ''
+    const starts: number[] = []
+    const mEmoji = t.match(new RegExp(`(?:🎬|🎥)\\s*VIDEO\\s*${p}\\b`, 'i'))
+    if (mEmoji?.index !== undefined) starts.push(mEmoji.index)
+    const mPlain = t.match(new RegExp(`(^|\\n)\\s*VIDEO\\s*${p}\\b`, 'i'))
+    if (mPlain && mPlain.index !== undefined) {
+      starts.push(mPlain.index + (mPlain[1] === '\n' ? 1 : 0))
+    }
+    if (!starts.length) return ''
+    const startIdx = Math.min(...starts)
 
     const tail = t.slice(startIdx)
     let stop = tail.length
+    const eqSep = tail.search(/\n={10,}\s*(?:\n|$)/)
+    if (eqSep >= 0) stop = Math.min(stop, eqSep)
     if (p === 1) {
       const candidates = [
         tail.search(/\n\s*🖼️\s*IMAGE\s*2\b/i),
         tail.search(/\n\s*🎬\s*IMAGE\s*2\b/i),
+        tail.search(/\n\s*IMAGE\s*2\b/i),
         tail.search(/\n\s*(?:🎬|🎥)\s*VIDEO\s*2\b/i),
+        tail.search(/\n\s*VIDEO\s*2\b/i),
       ]
       for (const c of candidates) {
+        if (c >= 0) stop = Math.min(stop, c)
+      }
+    }
+    if (p === 2) {
+      for (const rg of [/\n\s*CONTINUITY\s+NOTES\b/i, /\n\s*CONTINUITY\b/i]) {
+        const c = tail.search(rg)
         if (c >= 0) stop = Math.min(stop, c)
       }
     }
@@ -148,7 +169,9 @@ export function chatgptExtractVideoBlockPageScript(videoPart: number): string {
 
   const candidateNode =
     assistantNodes.find((el) =>
-      /VIDEO\s*[12]|IMAGE\s*[12]|🎬\s*VIDEO|🎥\s*VIDEO|🖼️\s*IMAGE/i.test(el.innerText || ''),
+      /VIDEO\s*[12]|IMAGE\s*[12]|🎬\s*VIDEO|🎥\s*VIDEO|🖼️\s*IMAGE|CONTINUITY|6\s*SECONDS|CONNECTS TO VIDEO/i.test(
+        el.innerText || '',
+      ),
     ) || assistantNodes[0]
   if (!candidateNode) return ''
 
