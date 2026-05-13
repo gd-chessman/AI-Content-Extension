@@ -58,7 +58,7 @@ export function getChatgptStep4ContentKindLabel(kind: ChatgptExtractContentClipb
   }
 }
 
-/** Trích khối VIDEO 1/2; dừng theo marker; gỡ đoạn “These N prompts are optimized…story-accurate suspense progression.” nếu vẫn nằm trong text. */
+/** Trích khối VIDEO 1/2; dừng theo marker; gỡ đoạn boilerplate “These … prompts are optimized for Runway…” (có/không số; kết …progression hoặc …locking). */
 export function chatgptExtractVideoBlockPageScript(videoPart: number): string {
   const part = videoPart === 2 ? 2 : 1
 
@@ -98,6 +98,7 @@ export function chatgptExtractVideoBlockPageScript(videoPart: number): string {
       if (/^NEGATIVE PROMPT\b/i.test(t)) return true
       if (/^Apply to all assets\b/i.test(t)) return true
       if (/^This structure ensures\b/i.test(t)) return true
+      if (/^These\s+(?:\d+\s+)?prompts\s+are\s+optimized\b/i.test(t)) return true
       if (/^(?:Facebook|ChatGPT|Grok|GGSheet|WebBlog)\s*$/i.test(t)) return true
       return false
     }
@@ -153,6 +154,7 @@ export function chatgptExtractVideoBlockPageScript(videoPart: number): string {
       /\n\s*NEGATIVE PROMPT\b/i,
       /\n\s*Apply to all assets\b/i,
       /\n\s*This structure ensures\b/i,
+      /\n\s*These\s+(?:\d+\s+)?prompts\s+are\s+optimized\b/i,
       /\n\s*(?:Facebook|ChatGPT|Grok|GGSheet|WebBlog)\s*(?=\n|$)/i,
     ]) {
       const c = tail.search(rg)
@@ -191,7 +193,7 @@ export function chatgptExtractVideoBlockPageScript(videoPart: number): string {
 
   const candidateNode =
     assistantNodes.find((el) =>
-      /VIDEO\s*[12]|IMAGE\s*[12]|🎬\s*VIDEO|🎥\s*VIDEO|🖼️\s*IMAGE|CONTINUITY|6\s*SECONDS|CONNECTS TO VIDEO/i.test(
+      /VIDEO\s*[12]|IMAGE\s*[12]|🎬\s*VIDEO|🎥\s*VIDEO|🖼️\s*IMAGE|CONTINUITY|6\s*SECONDS|CONNECTS TO VIDEO|prompts\s+are\s+optimized/i.test(
         el.innerText || '',
       ),
     ) || assistantNodes[0]
@@ -204,11 +206,19 @@ export function chatgptExtractVideoBlockPageScript(videoPart: number): string {
   let block = extractVideoBlockByLines(text, part)
   if (!block) block = extractVideoBlockRegex(text, part)
 
-  /** Xóa đoạn boilerplate dạng “These N prompts are optimized for Runway … progression.” nếu vẫn còn lọt trong block (inject: tự chứa). */
+  /** Gỡ đoạn kết kiểu ChatGPT: “These [4 ] prompts are optimized for Runway …” (nhiều biến thể kết câu). */
   const stripThesePromptsOptimizedAppendix = (raw: string) =>
     raw
       .replace(
         /These\s+\d+\s+prompts\s+are\s+optimized\s+for\s+Runway[\s\S]*?story-accurate\s+suspense\s+progression\.?/gi,
+        '',
+      )
+      .replace(
+        /These\s+prompts\s+are\s+optimized\s+for\s+Runway[\s\S]*?continuity-safe\s+character\s+locking\.?/gi,
+        '',
+      )
+      .replace(
+        /These\s+(?:\d+\s+)?prompts\s+are\s+optimized\s+for\s+Runway[\s\S]*?(?:story-accurate\s+suspense\s+progression|continuity-safe\s+character\s+locking)\.?/gi,
         '',
       )
       .replace(/\n{3,}/g, '\n\n')
