@@ -96,7 +96,7 @@ export class GgSheetService {
     const setting = await this.getMySetting(userId);
     const ggSheetPath = (setting?.ggSheetPath || '').trim();
     const sheetId = this.extractSheetId(ggSheetPath);
-    const sheetGid = this.extractSheetGid(ggSheetPath);
+    const sheetGid = this.extractSheetGidFromUrl(ggSheetPath);
     if (!sheetId) {
       throw new BadRequestException('Google Sheet path is not configured.');
     }
@@ -238,7 +238,7 @@ export class GgSheetService {
     const setting = await this.getMySetting(userId);
     const ggSheetPath = (setting?.ggSheetPath || '').trim();
     const sheetId = this.extractSheetId(ggSheetPath);
-    const sheetGid = this.extractSheetGid(ggSheetPath);
+    const sheetGid = this.extractSheetGidFromUrl(ggSheetPath);
     if (!sheetId) {
       throw new BadRequestException('Google Sheet path is not configured.');
     }
@@ -328,17 +328,32 @@ export class GgSheetService {
     return matched?.[1] || '';
   }
 
-  private extractSheetGid(url: string) {
+  /**
+   * `null` = URL không chỉ định gid → dùng tab đầu trong file.
+   * `0` = gid hợp lệ (tab đầu thường có sheetId 0); không được dùng `!gid` vì 0 là falsy.
+   */
+  private extractSheetGidFromUrl(url: string): number | null {
     const value = (url || '').trim();
-    if (!value) return 0;
+    if (!value) return null;
     try {
       const parsed = new URL(value);
-      const gid = Number(parsed.searchParams.get('gid') || parsed.hash.match(/gid=(\d+)/)?.[1] || 0);
-      return Number.isFinite(gid) ? gid : 0;
+      if (parsed.searchParams.has('gid')) {
+        const raw = parsed.searchParams.get('gid');
+        if (raw === null || raw === '') return null;
+        const gid = Number(raw);
+        return Number.isFinite(gid) ? gid : null;
+      }
+      const hashMatch = parsed.hash.match(/gid=(\d+)/i);
+      if (hashMatch) {
+        const gid = Number(hashMatch[1]);
+        return Number.isFinite(gid) ? gid : null;
+      }
+      return null;
     } catch {
-      const matched = value.match(/gid=(\d+)/);
-      const gid = Number(matched?.[1] || 0);
-      return Number.isFinite(gid) ? gid : 0;
+      const matched = value.match(/[?&#]gid=(\d+)/i);
+      if (!matched) return null;
+      const gid = Number(matched[1]);
+      return Number.isFinite(gid) ? gid : null;
     }
   }
 
@@ -365,7 +380,7 @@ export class GgSheetService {
   private async getSheetTitle(
     sheets: ReturnType<typeof google.sheets>,
     spreadsheetId: string,
-    sheetGid: number,
+    sheetGid: number | null,
   ) {
     let meta;
     try {
@@ -381,7 +396,7 @@ export class GgSheetService {
     if (tabs.length === 0) {
       throw new BadRequestException('No sheet tab found in this spreadsheet.');
     }
-    if (!sheetGid) {
+    if (sheetGid === null) {
       return tabs[0]?.properties?.title || 'Sheet1';
     }
     const found = tabs.find((tab) => Number(tab?.properties?.sheetId || 0) === sheetGid);
