@@ -209,6 +209,84 @@ export async function chatgptWaitAssistantResponseDonePageScript(maxWaitMs: numb
   }
 }
 
+export type ChatgptLastStepReadyResult = { ok: boolean; reason: string }
+
+/**
+ * Kiểm tra đồng bộ (một lần): user cuối chứa đoạn đầu prompt bước cuối, đã có assistant đáp sau đó,
+ * không còn trạng thái generating, lượt cuối là assistant.
+ * Chạy trong trang ChatGPT qua executeScript; args[0] = prompt đầy đủ (sẽ tự cắt đầu để so khớp).
+ */
+export function chatgptVerifyLastStepReadyPageScript(...args: unknown[]): ChatgptLastStepReadyResult {
+  const rawPrompt = String(args[0] ?? '').trim()
+  const normalize = (s: string) => s.replace(/\r/g, '').replace(/\s+/g, ' ').trim()
+  const collapse = (s: string) => s.replace(/\r/g, '').replace(/\s+/g, ' ').trim()
+
+  const isVisible = (el: Element | null): el is HTMLElement => {
+    if (!(el instanceof HTMLElement)) return false
+    const rect = el.getBoundingClientRect()
+    const style = window.getComputedStyle(el)
+    return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden'
+  }
+
+  const isGenerating = () => {
+    const stopBtn =
+      (document.querySelector('button[data-testid="stop-button"]') as HTMLButtonElement | null) ||
+      (document.querySelector('button[aria-label*="Stop"]') as HTMLButtonElement | null) ||
+      (document.querySelector('button[aria-label*="Dừng"]') as HTMLButtonElement | null)
+    if (stopBtn && !stopBtn.disabled && isVisible(stopBtn)) return true
+    return Boolean(document.querySelector('[data-testid="conversation-turn-loading"]'))
+  }
+
+  if (!rawPrompt) return { ok: false, reason: 'empty_prompt' }
+
+  const firstLine = rawPrompt.split('\n').find((l) => collapse(l).length > 0) || rawPrompt
+  const needleA = normalize(firstLine).slice(0, 220)
+  const needleB = normalize(rawPrompt).slice(0, 220)
+  const needle = needleA.length >= 16 ? needleA : needleB
+  if (needle.length < 16) return { ok: false, reason: 'prompt_too_short' }
+
+  const turns = Array.from(document.querySelectorAll<HTMLElement>('[data-message-author-role]')).filter(
+    (el) => (el.innerText || '').trim().length > 0,
+  )
+  if (!turns.length) return { ok: false, reason: 'no_messages' }
+
+  let lastUserIndex = -1
+  for (let i = turns.length - 1; i >= 0; i -= 1) {
+    const r = (turns[i].getAttribute('data-message-author-role') || '').toLowerCase()
+    if (r === 'user') {
+      lastUserIndex = i
+      break
+    }
+  }
+  if (lastUserIndex < 0) return { ok: false, reason: 'no_user_message' }
+
+  const userText = normalize(turns[lastUserIndex].innerText || '')
+  const needleCompact = needle.replace(/\s+/g, ' ')
+  const userCompact = userText.replace(/\s+/g, ' ')
+  const matchNeedle = userCompact.includes(needleCompact) || userText.includes(needle.slice(0, 120))
+  if (!matchNeedle) return { ok: false, reason: 'last_user_prompt_mismatch' }
+
+  let assistantOk = false
+  for (let j = lastUserIndex + 1; j < turns.length; j += 1) {
+    const r = (turns[j].getAttribute('data-message-author-role') || '').toLowerCase()
+    if (r === 'user') break
+    if (r === 'assistant') {
+      const t = (turns[j].innerText || '').trim()
+      if (t.length > 40) assistantOk = true
+      break
+    }
+  }
+  if (!assistantOk) return { ok: false, reason: 'no_assistant_after_last_send' }
+
+  if (isGenerating()) return { ok: false, reason: 'still_generating' }
+
+  const last = turns[turns.length - 1]
+  const lastRole = (last?.getAttribute('data-message-author-role') || '').toLowerCase()
+  if (lastRole !== 'assistant') return { ok: false, reason: 'last_turn_not_assistant' }
+
+  return { ok: true, reason: 'ready' }
+}
+
 /** Bấm New chat; nếu không tìm thấy thì chuyển về chatgpt.com. Trả true nếu đã click nút. */
 export async function chatgptOpenNewChatPageScript(): Promise<boolean> {
   const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))

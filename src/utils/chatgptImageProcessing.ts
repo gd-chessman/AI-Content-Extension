@@ -210,6 +210,8 @@ export async function chatgptLocateLatestChatImageForCapturePageScript(): Promis
     return rect.width > 120 && rect.height > 120 && style.display !== 'none' && style.visibility !== 'hidden'
   }
 
+  const rectArea = (r: DOMRect) => Math.max(0, r.width) * Math.max(0, r.height)
+
   const imageCandidates = Array.from(document.querySelectorAll<HTMLImageElement>('article img, [data-message-author-role] img, main img'))
     .filter((img) => isVisible(img))
     .map((img) => {
@@ -222,21 +224,88 @@ export async function chatgptLocateLatestChatImageForCapturePageScript(): Promis
   const candidate = imageCandidates[0]
   if (!candidate) return null
 
+  const initialArea = rectArea(candidate.rect)
+  /** Cần lớn hơn ảnh inline đáng kể = lightbox / viewer đã mở (tránh đo rect quá sớm → cắt lệch). */
+  const minModalArea = Math.max(initialArea * 1.22, 180 * 180)
+
   candidate.img.scrollIntoView({ block: 'center', behavior: 'instant' })
-  await sleep(120)
+  await sleep(200)
   candidate.img.click()
-  await sleep(260)
+  await sleep(350)
 
-  const modalCandidates = Array.from(document.querySelectorAll<HTMLImageElement>('img'))
-    .filter((img) => isVisible(img))
-    .map((img) => {
-      const rect = img.getBoundingClientRect()
-      const score = rect.width * rect.height
-      return { img, rect, score }
-    })
-    .sort((a, b) => b.score - a.score)
+  const pickLargestInDialogs = (): { img: HTMLImageElement; rect: DOMRect } | null => {
+    const roots = document.querySelectorAll<HTMLElement>(
+      '[role="dialog"], [aria-modal="true"], [data-state="open"][role="dialog"]',
+    )
+    let best: { img: HTMLImageElement; rect: DOMRect; area: number } | null = null
+    for (let i = 0; i < roots.length; i += 1) {
+      const root = roots[i]
+      const rs = window.getComputedStyle(root)
+      if (rs.display === 'none' || rs.visibility === 'hidden') continue
+      const imgs = root.querySelectorAll<HTMLImageElement>('img')
+      for (let j = 0; j < imgs.length; j += 1) {
+        const img = imgs[j]
+        if (!isVisible(img)) continue
+        const r = img.getBoundingClientRect()
+        const a = rectArea(r)
+        if (a < minModalArea) continue
+        if (!best || a > best.area) best = { img, rect: r, area: a }
+      }
+    }
+    if (!best) return null
+    return { img: best.img, rect: best.rect }
+  }
 
-  const selected = modalCandidates[0] || candidate
+  const pickLargestChatImage = (): { img: HTMLImageElement; rect: DOMRect } | null => {
+    const list = Array.from(document.querySelectorAll<HTMLImageElement>('article img, [data-message-author-role] img, main img'))
+      .filter((img) => isVisible(img))
+      .map((img) => {
+        const r = img.getBoundingClientRect()
+        return { img, rect: r, area: rectArea(r) }
+      })
+      .filter((x) => x.area >= minModalArea)
+      .sort((a, b) => b.area - a.area)
+    const top = list[0]
+    return top ? { img: top.img, rect: top.rect } : null
+  }
+
+  let openedModal = false
+  let selected: { img: HTMLImageElement; rect: DOMRect } | null = null
+  const deadline = Date.now() + 3200
+  let stable: { img: HTMLImageElement; rect: DOMRect; area: number } | null = null
+  let stableTicks = 0
+
+  while (Date.now() < deadline) {
+    const fromDialog = pickLargestInDialogs()
+    const fromChat = fromDialog || pickLargestChatImage()
+    if (fromChat) {
+      openedModal = Boolean(fromDialog)
+      const a = rectArea(fromChat.rect)
+      if (stable && stable.img === fromChat.img && Math.abs(stable.area - a) < a * 0.02) {
+        stableTicks += 1
+        if (stableTicks >= 2) {
+          selected = { img: fromChat.img, rect: fromChat.img.getBoundingClientRect() }
+          break
+        }
+      } else {
+        stable = { img: fromChat.img, rect: fromChat.rect, area: a }
+        stableTicks = 0
+      }
+    } else {
+      stable = null
+      stableTicks = 0
+    }
+    await sleep(140)
+  }
+
+  if (!selected) {
+    candidate.img.scrollIntoView({ block: 'center', behavior: 'instant' })
+    await sleep(160)
+    const r = candidate.img.getBoundingClientRect()
+    selected = { img: candidate.img, rect: r }
+    openedModal = false
+  }
+
   const rect = selected.rect
   return {
     x: Math.max(0, rect.left),
@@ -245,7 +314,7 @@ export async function chatgptLocateLatestChatImageForCapturePageScript(): Promis
     height: rect.height,
     viewportWidth: window.innerWidth,
     viewportHeight: window.innerHeight,
-    openedModal: true,
+    openedModal,
   }
 }
 

@@ -10,11 +10,13 @@ import {
   FiFileText,
   FiLayers,
   FiFilm,
+  FiFolder,
   FiImage,
   FiInfo,
   FiItalic,
   FiPlay,
   FiRefreshCw,
+  FiSave,
   FiScissors,
   FiSquare,
   FiType,
@@ -50,6 +52,7 @@ import {
 import {
   chatgptInjectPromptPageScript,
   chatgptOpenNewChatPageScript,
+  chatgptVerifyLastStepReadyPageScript,
   chatgptWaitAssistantResponseDonePageScript,
   type ChatgptWaitAssistantResponsePageResult,
 } from '@/utils/chatgptPageScripts'
@@ -61,6 +64,14 @@ import {
   splitCapturedImage,
   type SplitCaptureRect,
 } from '@/utils/chatgptImageProcessing'
+import {
+  ensureStoryWorkspaceLayout,
+  getStoriesFolderSegmentFromStorage,
+  loadContentRootDirectoryHandle,
+  sanitizeWorkspaceFolderSegment,
+  writeBlobToFile,
+  writeUtf8File,
+} from '@/utils/localWorkspacePersistence'
 
 type BrowserTab = { id?: number; url?: string; active?: boolean; windowId?: number }
 type ExtensionChrome = {
@@ -151,6 +162,23 @@ async function resolveLatestStoryIdForSource(storySourceId: string): Promise<str
   return (linked[0]?._id || '').trim()
 }
 
+/** Lưu cục bộ khi không có story trên API — `storyId` dạng `local-…` để phân biệt trong meta.json. */
+function buildLocalOnlyStoryContextFromTitle(titlePlain: string): {
+  storyId: string
+  folderSegment: string
+  titleDisplay: string
+  sourceReelUrl: string
+} {
+  const trimmed = titlePlain.trim()
+  const storyId = `local-${Date.now()}`
+  return {
+    storyId,
+    folderSegment: sanitizeWorkspaceFolderSegment(trimmed, `story-local-${Date.now()}`),
+    titleDisplay: trimmed,
+    sourceReelUrl: '',
+  }
+}
+
 /**
  * Mặc định **story DB** — ghép `sourceContent`. Ép **localStorage** (`facebookReelCopiedContent`) bằng
  * `chatgptStep1Source` trên payload run hoặc khi gọi `runWorkflow({ chatgptStep1Source: 'localstorage' })`.
@@ -210,6 +238,7 @@ export default function ChatgptScreen() {
   const [splitImages, setSplitImages] = useState<{ left: string; right: string } | null>(null)
   const [copiedPart, setCopiedPart] = useState<'left' | 'right' | null>(null)
   const [copiedTool, setCopiedTool] = useState<string | null>(null)
+  const [isSavingStoryLocal, setIsSavingStoryLocal] = useState(false)
   const [isWorkflowRunning, setIsWorkflowRunning] = useState(false)
   const [isWorkflowStopping, setIsWorkflowStopping] = useState(false)
   const workflowStopRef = useRef(false)
@@ -341,6 +370,69 @@ export default function ChatgptScreen() {
     })
 
   const sleep = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms))
+
+  type CaptureSplitPairResult =
+    | { ok: true; left: string; right: string }
+    | { ok: false; reason: 'unsupported' | 'no_rect' | 'no_screenshot' | 'split_failed' | 'exception' }
+
+  /** Định vị ảnh mới nhất trong luồng ChatGPT, chụp tab, cắt đôi — dùng chung cho nút tiến trình 3 và lưu local. */
+  const captureSplitPairFromChatgptTab = async (
+    tabId: number,
+    windowId: number | undefined,
+  ): Promise<CaptureSplitPairResult> => {
+    const extensionChrome = getChrome()
+    if (!extensionChrome?.scripting?.executeScript || !extensionChrome.tabs?.captureVisibleTab) {
+      return { ok: false, reason: 'unsupported' }
+    }
+    const locateResult = await extensionChrome.scripting.executeScript({
+      target: { tabId },
+      func: chatgptLocateLatestChatImageForCapturePageScript as (...args: unknown[]) => unknown,
+    })
+    const rect = (locateResult?.[0]?.result as SplitCaptureRect | null) || null
+    if (!rect || rect.width < 2 || rect.height < 2) {
+      return { ok: false, reason: 'no_rect' }
+    }
+
+    const tryWindowIds = Array.from(new Set<number | undefined>([windowId, undefined]))
+    let screenshotDataUrl: string | null = null
+    for (let attempt = 0; attempt < 4 && !screenshotDataUrl; attempt += 1) {
+      if (tabId) {
+        // eslint-disable-next-line no-await-in-loop
+        await updateTab(tabId)
+      }
+      if (attempt > 0) {
+        // eslint-disable-next-line no-await-in-loop
+        await sleep(120 + attempt * 120)
+      }
+      for (const wid of tryWindowIds) {
+        // eslint-disable-next-line no-await-in-loop
+        const shot = await captureVisibleTab(wid)
+        if (shot) {
+          screenshotDataUrl = shot
+          break
+        }
+      }
+    }
+    if (!screenshotDataUrl) {
+      return { ok: false, reason: 'no_screenshot' }
+    }
+
+    try {
+      const parts = await splitCapturedImage(screenshotDataUrl, rect)
+      if (!parts.left || !parts.right) {
+        return { ok: false, reason: 'split_failed' }
+      }
+      if (rect.openedModal) {
+        await extensionChrome.scripting.executeScript({
+          target: { tabId },
+          func: chatgptCloseImageLightboxPageScript as (...args: unknown[]) => unknown,
+        })
+      }
+      return { ok: true, left: parts.left, right: parts.right }
+    } catch {
+      return { ok: false, reason: 'exception' }
+    }
+  }
 
   /** Chat dài: scrollbar thường nằm trong main/phần `[role=log]`, đứng đầu thread là không đọc được bubble dưới. */
   const snapChatgptThreadToBottomBeforeRead = async (tabId: number) => {
@@ -1174,6 +1266,198 @@ export default function ChatgptScreen() {
     return extracted
   }
 
+  const resolveStoryContextForLocalSave = async (): Promise<{
+    storyId: string
+    folderSegment: string
+    titleDisplay: string
+    sourceReelUrl: string
+  } | null> => {
+    const storyFromId = async (storyId: string) => {
+      const list = await getMyStories()
+      const s = list.find((x) => (x._id || x.id || '').trim() === storyId.trim())
+      if (!s) return null
+      const id = (s._id || s.id || '').trim()
+      const rawName = (s.name || '').trim()
+      const folderSegment = sanitizeWorkspaceFolderSegment(
+        rawName,
+        `story-${id.replace(/[^a-zA-Z0-9]/g, '').slice(-12) || 'id'}`,
+      )
+      return {
+        storyId: id,
+        folderSegment,
+        titleDisplay: rawName || id,
+        sourceReelUrl: (s.sourceReelUrl || '').trim(),
+      }
+    }
+
+    const cur = chatgptPipelineStoryIdRef.current.trim()
+    if (cur) {
+      const r = await storyFromId(cur)
+      if (r) return r
+    }
+    try {
+      const sources = await getMyStorySources()
+      const top = sources[0]
+      if (!top?._id) return null
+      const sid = await resolveLatestStoryIdForSource(top._id)
+      if (!sid) return null
+      return await storyFromId(sid)
+    } catch {
+      return null
+    }
+  }
+
+  const saveStoryBundleToLocal = async () => {
+    const sorted = [...processSteps].sort((a, b) => (a.stepNo || 0) - (b.stepNo || 0))
+    const lastStep = sorted[sorted.length - 1]
+    if (!lastStep?.prompt?.trim()) {
+      setStatus('Workflow không có bước cuối hoặc thiếu prompt.')
+      return
+    }
+
+    setIsSavingStoryLocal(true)
+    try {
+      const extensionChrome = getChrome()
+      if (!extensionChrome?.tabs?.query || !extensionChrome.scripting?.executeScript) {
+        setStatus('Môi trường không hỗ trợ kiểm tra / lưu qua tab ChatGPT.')
+        return
+      }
+
+      const currentActive = await queryTabs(undefined, true, true)
+      const activeTab = currentActive[0]
+      const isActiveChatgpt = Boolean(activeTab?.url && /chatgpt\.com|chat\.openai\.com/i.test(activeTab.url))
+      const activeTabs = isActiveChatgpt ? [activeTab] : await queryTabs(CHATGPT_PATTERNS, true, true)
+      const allTabs = activeTabs.length > 0 ? activeTabs : await queryTabs(CHATGPT_PATTERNS)
+      let target: BrowserTab | null | undefined = allTabs[0]
+
+      if (!target?.id) {
+        setStatus('Không tìm thấy tab ChatGPT để kiểm tra bước cuối.')
+        return
+      }
+
+      target = await updateTab(target.id)
+      await sleep(240)
+
+      if (!target?.id) {
+        setStatus('Không thể kích hoạt tab ChatGPT.')
+        return
+      }
+
+      await snapChatgptThreadToBottomBeforeRead(target.id)
+
+      setStatus('Đang kiểm tra: prompt bước cuối đã gửi và ChatGPT đã phản hồi xong...')
+      const verifyRes = await extensionChrome.scripting.executeScript({
+        target: { tabId: target.id },
+        func: chatgptVerifyLastStepReadyPageScript as (...args: unknown[]) => unknown,
+        args: [lastStep.prompt],
+      })
+      const vr = (verifyRes?.[0]?.result || null) as { ok?: boolean; reason?: string } | null
+      if (!vr?.ok) {
+        const key = String(vr?.reason || 'unknown')
+        const human: Record<string, string> = {
+          empty_prompt: 'Thiếu prompt bước cuối.',
+          prompt_too_short: 'Prompt bước cuối quá ngắn để so khớp với tin nhắn.',
+          no_messages: 'Không đọc được luồng tin nhắn trên ChatGPT.',
+          no_user_message: 'Chưa có tin nhắn user — hãy gửi prompt bước cuối trên ChatGPT.',
+          last_user_prompt_mismatch:
+            'Tin user cuối không khớp đầu prompt bước cuối (có thể chưa gửi đúng bước cuối hoặc đã sửa quá nhiều).',
+          no_assistant_after_last_send: 'Chưa có phản hồi assistant sau lần gửi cuối.',
+          still_generating: 'ChatGPT vẫn đang sinh câu trả lời — đợi xong rồi bấm Lưu lại.',
+          last_turn_not_assistant: 'Lượt tin nhắn cuối chưa phải assistant (còn chờ hoặc lỗi luồng).',
+        }
+        setStatus(`Chưa lưu được: ${human[key] || key}`)
+        return
+      }
+
+      const root = await loadContentRootDirectoryHandle()
+      if (!root) {
+        setStatus('Chưa chọn thư mục gốc workspace. Vào Hồ sơ → Cấu hình → Chọn thư mục gốc.')
+        return
+      }
+
+      let storyCtx = await resolveStoryContextForLocalSave()
+      let titlePlain = ''
+      if (!storyCtx) {
+        setStatus(
+          'Chưa gắn story trên hệ thống (reel/Hồ sơ) — đang lấy tiêu đề bước 4 trên ChatGPT để đặt tên thư mục...',
+        )
+        titlePlain = (await extractStep4Content('title_plain', { copyToClipboard: false })).trim()
+        if (!titlePlain) {
+          setStatus(
+            'Không đặt tên thư mục được: chưa có story trên API và không đọc được tiêu đề từ ChatGPT. Gợi ý: chạy workflow với bước 1 nguồn «story», hoặc hoàn thành bước 4 có block tiêu đề.',
+          )
+          return
+        }
+        storyCtx = buildLocalOnlyStoryContextFromTitle(titlePlain)
+      }
+
+      const ext = getChrome()
+      const storiesSeg = await getStoriesFolderSegmentFromStorage(ext?.storage?.local)
+
+      setStatus(`Đang lưu bundle story «${storyCtx.folderSegment}» vào máy...`)
+
+      const dirs = await ensureStoryWorkspaceLayout(root, storiesSeg, storyCtx.folderSegment)
+
+      const shortText = await extractStep4Content('content_short', { copyToClipboard: false })
+      const longText = await extractStep4Content('content_full', { copyToClipboard: false })
+      if (!titlePlain) {
+        titlePlain = (await extractStep4Content('title_plain', { copyToClipboard: false })).trim()
+      }
+
+      if (!shortText || !longText || !titlePlain) {
+        setStatus(
+          'Không lấy đủ nội dung Tiến trình 4 (tiêu đề / ngắn / dài). Hãy đảm bảo đã có output bước 4 trên ChatGPT.',
+        )
+        return
+      }
+
+      let left = (splitImages?.left || '').trim()
+      let right = (splitImages?.right || '').trim()
+      if ((!left || !right) && extensionChrome.tabs?.captureVisibleTab && target?.id) {
+        setStatus('Đang lấy ảnh 1/2 từ luồng ChatGPT (tiến trình 3) để lưu cùng bundle...')
+        await snapChatgptThreadToBottomBeforeRead(target.id)
+        const cap = await captureSplitPairFromChatgptTab(target.id, target.windowId)
+        if (cap.ok) {
+          left = cap.left
+          right = cap.right
+          setSplitImages({ left, right })
+        }
+      }
+
+      await writeUtf8File(dirs.contentDir, 'noi-dung-ngan.txt', shortText)
+      await writeUtf8File(dirs.contentDir, 'noi-dung-dai.txt', longText)
+
+      const infoPayload = {
+        storyId: storyCtx.storyId,
+        title: titlePlain,
+        storyDisplayName: storyCtx.titleDisplay,
+        sourceReelUrl: storyCtx.sourceReelUrl || '',
+        workflowId: selectedWorkflowId,
+        savedAt: new Date().toISOString(),
+        hasSplitImages: Boolean(left && right),
+      }
+      await writeUtf8File(dirs.infoDir, 'meta.json', JSON.stringify(infoPayload, null, 2))
+
+      if (left) {
+        const blobL = await (await fetch(left)).blob()
+        await writeBlobToFile(dirs.imagesDir, 'anh-1.png', blobL)
+      }
+      if (right) {
+        const blobR = await (await fetch(right)).blob()
+        await writeBlobToFile(dirs.imagesDir, 'anh-2.png', blobR)
+      }
+
+      setStatus(
+        `Đã lưu cục bộ: …/${storiesSeg}/${storyCtx.folderSegment}/ — content (noi-dung-ngan, noi-dung-dai), info/meta.json${left && right ? ', images/anh-1.png & anh-2.png' : ' (chưa có ảnh cắt đôi — bỏ qua images)'}.`,
+      )
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      setStatus(`Lưu vào local thất bại: ${msg}`)
+    } finally {
+      setIsSavingStoryLocal(false)
+    }
+  }
+
   const pushStep4ToWebBlog = async () => {
     if (!splitImages?.left || !splitImages?.right) {
       setStatus('Chưa có ảnh 1/2 từ Tiến trình 3. Hãy cắt ảnh trước khi gửi WebBlog.')
@@ -1245,59 +1529,20 @@ export default function ChatgptScreen() {
 
     await snapChatgptThreadToBottomBeforeRead(target.id)
 
-    const locateResult = await extensionChrome.scripting.executeScript({
-      target: { tabId: target.id },
-      func: chatgptLocateLatestChatImageForCapturePageScript as (...args: unknown[]) => unknown,
-    })
-
-    const rect = (locateResult?.[0]?.result as SplitCaptureRect | null) || null
-    if (!rect || rect.width < 2 || rect.height < 2) {
-      setStatus('Không tìm thấy ảnh phù hợp từ hội thoại (tiến trình 3).')
+    const cap = await captureSplitPairFromChatgptTab(target.id, target.windowId)
+    if (!cap.ok) {
+      const human: Record<Exclude<CaptureSplitPairResult, { ok: true }>['reason'], string> = {
+        unsupported: 'Môi trường hiện tại không hỗ trợ chụp tab.',
+        no_rect: 'Không tìm thấy ảnh phù hợp từ hội thoại (tiến trình 3).',
+        no_screenshot: 'Không thể chụp ảnh màn hình tab ChatGPT.',
+        split_failed: 'Không thể tách ảnh thành 2 phần.',
+        exception: 'Xử lý ảnh thất bại. Hãy thử lại.',
+      }
+      setStatus(human[cap.reason])
       return
     }
-
-    const tryWindowIds = Array.from(new Set<number | undefined>([target.windowId, undefined]))
-    let screenshotDataUrl: string | null = null
-    for (let attempt = 0; attempt < 4 && !screenshotDataUrl; attempt += 1) {
-      // Ensure ChatGPT tab stays active before capture, MV3 can occasionally race here.
-      if (target.id) {
-        await updateTab(target.id)
-      }
-      if (attempt > 0) {
-        await sleep(120 + attempt * 120)
-      }
-      for (const windowId of tryWindowIds) {
-        // eslint-disable-next-line no-await-in-loop
-        const shot = await captureVisibleTab(windowId)
-        if (shot) {
-          screenshotDataUrl = shot
-          break
-        }
-      }
-    }
-    if (!screenshotDataUrl) {
-      setStatus('Không thể chụp ảnh màn hình tab ChatGPT.')
-      return
-    }
-
-    try {
-      const parts = await splitCapturedImage(screenshotDataUrl, rect)
-      if (!parts.left || !parts.right) {
-        setStatus('Không thể tách ảnh thành 2 phần.')
-        return
-      }
-      setSplitImages(parts)
-      setStatus('Đã lấy và cắt đôi ảnh thành công. Có thể sao chép ảnh 1/2.')
-
-      if (rect.openedModal) {
-        await extensionChrome.scripting.executeScript({
-          target: { tabId: target.id },
-          func: chatgptCloseImageLightboxPageScript as (...args: unknown[]) => unknown,
-        })
-      }
-    } catch {
-      setStatus('Xử lý ảnh thất bại. Hãy thử lại.')
-    }
+    setSplitImages({ left: cap.left, right: cap.right })
+    setStatus('Đã lấy và cắt đôi ảnh thành công. Có thể sao chép ảnh 1/2.')
   }
 
   const selectedStep = processSteps.find((step) => step.id === selectedStepId) || null
@@ -1598,12 +1843,11 @@ export default function ChatgptScreen() {
           </div>
         </aside>
       </div>
-      <div className="mt-3 rounded-2xl border border-white/10 bg-black/30 p-2">
-        <div className="grid grid-cols-4 gap-1.5 sm:grid-cols-8">
+      <div className="mt-3 flex w-full min-w-0 flex-nowrap items-stretch gap-1.5 rounded-2xl border border-white/10 bg-black/30 p-2">
         <button
           type="button"
           onClick={() => void fillGrokWithVideoImage(1)}
-          className="inline-flex h-8 cursor-pointer items-center justify-center rounded-lg bg-sky-500/20 px-2 text-sky-100 transition hover:bg-sky-500/30"
+          className="inline-flex min-h-8 min-w-0 flex-1 cursor-pointer items-center justify-center rounded-lg bg-sky-500/20 px-1 text-sky-100 transition hover:bg-sky-500/30 sm:px-2"
           title="Lấy ảnh 1 (VIDEO 1) và tự điền vào Grok"
         >
           <span className="relative inline-flex items-center justify-center gap-1">
@@ -1617,7 +1861,7 @@ export default function ChatgptScreen() {
         <button
           type="button"
           onClick={() => void fillGrokWithVideoImage(2)}
-          className="inline-flex h-8 cursor-pointer items-center justify-center rounded-lg bg-sky-500/20 px-2 text-sky-100 transition hover:bg-sky-500/30"
+          className="inline-flex min-h-8 min-w-0 flex-1 cursor-pointer items-center justify-center rounded-lg bg-sky-500/20 px-1 text-sky-100 transition hover:bg-sky-500/30 sm:px-2"
           title="Lấy ảnh 2 (VIDEO 2) và tự điền vào Grok"
         >
           <span className="relative inline-flex items-center justify-center gap-1">
@@ -1631,7 +1875,7 @@ export default function ChatgptScreen() {
         <button
           type="button"
           onClick={() => void pushStep4ToWebBlog()}
-          className="inline-flex h-8 cursor-pointer items-center justify-center rounded-lg bg-amber-500/20 px-2 text-amber-100 transition hover:bg-amber-500/30"
+          className="inline-flex min-h-8 min-w-0 flex-1 cursor-pointer items-center justify-center rounded-lg bg-amber-500/20 px-1 text-amber-100 transition hover:bg-amber-500/30 sm:px-2"
           title="Gửi tiêu đề + nội dung dài có chèn ảnh sang WebBlog"
         >
           <span className="relative inline-flex items-center justify-center gap-1">
@@ -1642,7 +1886,7 @@ export default function ChatgptScreen() {
         <button
           type="button"
           onClick={runGgSheetCollectTool}
-          className="inline-flex h-8 cursor-pointer items-center justify-center rounded-lg bg-green-500/20 px-2 text-green-100 transition hover:bg-green-500/30"
+          className="inline-flex min-h-8 min-w-0 flex-1 cursor-pointer items-center justify-center rounded-lg bg-green-500/20 px-1 text-green-100 transition hover:bg-green-500/30 sm:px-2"
           title="Gom dữ liệu GGSheet từ ChatGPT"
         >
           <span className="relative inline-flex items-center justify-center gap-1">
@@ -1650,7 +1894,32 @@ export default function ChatgptScreen() {
             <FiDownload className="h-3 w-3" />
           </span>
         </button>
-        </div>
+        <button
+          type="button"
+          onClick={() => void saveStoryBundleToLocal()}
+          disabled={!processSteps.length || isSavingStoryLocal}
+          className="inline-flex min-h-8 min-w-0 flex-1 cursor-pointer items-center justify-center rounded-lg bg-teal-500/25 px-1 text-teal-100 transition hover:bg-teal-500/35 disabled:cursor-not-allowed disabled:opacity-40 sm:px-2"
+          title={
+            processSteps.length
+              ? 'Lưu vào local: kiểm tra prompt bước cuối + phản hồi xong trên ChatGPT, rồi ghi content/images/info vào workspace (Hồ sơ).'
+              : 'Chưa có bước workflow.'
+          }
+          aria-label="Lưu vào local"
+        >
+          <span className="relative inline-flex items-center justify-center gap-1">
+            {isSavingStoryLocal ? (
+              <>
+                <FiSave className="h-3 w-3 opacity-40" aria-hidden />
+                <FiRefreshCw className="h-3 w-3 animate-spin" aria-hidden />
+              </>
+            ) : (
+              <>
+                <FiSave className="h-3 w-3" aria-hidden />
+                <FiFolder className="h-3 w-3" aria-hidden />
+              </>
+            )}
+          </span>
+        </button>
       </div>
     </section>
   )

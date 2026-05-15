@@ -146,3 +146,49 @@ export async function setStoriesFolderSegmentInStorage(
     set.call(area, { [WORKSPACE_STORIES_FOLDER_STORAGE_KEY]: seg }, () => resolve())
   })
 }
+
+export type StoryWorkspaceDirs = {
+  storyDir: FileSystemDirectoryHandle
+  imagesDir: FileSystemDirectoryHandle
+  contentDir: FileSystemDirectoryHandle
+  infoDir: FileSystemDirectoryHandle
+}
+
+/** Gốc → [stories] / [tên story] / images | content | info (tạo nếu thiếu). */
+export async function ensureStoryWorkspaceLayout(
+  root: FileSystemDirectoryHandle,
+  storiesSeg: string,
+  storyFolderSeg: string,
+): Promise<StoryWorkspaceDirs> {
+  const rootOk = await ensureDirectoryWritable(root)
+  if (!rootOk) throw new Error('Không có quyền ghi thư mục gốc (Hồ sơ → Cấu hình).')
+  const stories = sanitizeWorkspaceFolderSegment(storiesSeg, DEFAULT_STORIES_FOLDER_SEGMENT)
+  const storyName = sanitizeWorkspaceFolderSegment(storyFolderSeg, 'unnamed-story')
+  const storiesDir = await root.getDirectoryHandle(stories, { create: true })
+  const storyDir = await storiesDir.getDirectoryHandle(storyName, { create: true })
+  await ensureStoryWorkspaceChildDirs(storyDir)
+  const imagesDir = await storyDir.getDirectoryHandle('images', { create: true })
+  const contentDir = await storyDir.getDirectoryHandle('content', { create: true })
+  const infoDir = await storyDir.getDirectoryHandle('info', { create: true })
+  return { storyDir, imagesDir, contentDir, infoDir }
+}
+
+export async function writeUtf8File(parent: FileSystemDirectoryHandle, filename: string, text: string): Promise<void> {
+  const fh = await parent.getFileHandle(filename, { create: true })
+  const writable = await fh.createWritable()
+  try {
+    await writable.write(new Blob([text], { type: 'text/plain;charset=utf-8' }))
+  } finally {
+    await writable.close()
+  }
+}
+
+export async function writeBlobToFile(parent: FileSystemDirectoryHandle, filename: string, blob: Blob): Promise<void> {
+  const fh = await parent.getFileHandle(filename, { create: true })
+  const writable = await fh.createWritable()
+  try {
+    await writable.write(blob)
+  } finally {
+    await writable.close()
+  }
+}
