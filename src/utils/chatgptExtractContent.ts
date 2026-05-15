@@ -12,7 +12,7 @@ export type ChatgptExtractContentCollectedForSheet = {
 }
 
 /**
- * args[0]: 'collect' → trả `{ title (styled), shortContent, fullContent } | null`
+ * args[0]: 'collect' → trả `{ title (styled), shortContent, fullContent } | null` — `fullContent` gồm tiêu đề thường (không đậm) + phần thân khi thân được tách khỏi đoạn đầu ngắn.
  * args[0]: 'clipboard', args[1]: kind → trả string (rỗng nếu không tìm thấy)
  */
 export function chatgptExtractContent(...args: unknown[]): ChatgptExtractContentCollectedForSheet | string | null {
@@ -57,19 +57,34 @@ export function chatgptExtractContent(...args: unknown[]): ChatgptExtractContent
     const paragraphs = splitParagraphs(normalized)
     return cleanTitleEnd((paragraphs[0] || '').split('\n')[0] || '')
   }
-  const pickFull = (text: string) => {
+  /** Thân bài dài (bỏ đoạn đầu ngắn nếu coi là tiêu đề); dùng cho nội dung ngắn — không ghép tiêu đề vào. */
+  const pickFullBodyOnly = (text: string): { body: string; strippedShortHead: boolean } => {
     const normalized = normalize(text)
-    if (!normalized) return ''
+    if (!normalized) return { body: '', strippedShortHead: false }
     const blockContent = getLargestCodeBlock(normalized)
     const base = blockContent || normalized
     const paragraphs = splitParagraphs(base)
-    if (paragraphs.length <= 1) return base
+    if (paragraphs.length <= 1) return { body: base, strippedShortHead: false }
     const firstWords = (paragraphs[0].match(/\S+/g) || []).length
-    if (firstWords <= 26) return paragraphs.slice(1).join('\n\n').trim()
-    return base
+    if (firstWords <= 26) {
+      return { body: paragraphs.slice(1).join('\n\n').trim(), strippedShortHead: true }
+    }
+    return { body: base, strippedShortHead: false }
+  }
+
+  /** Nội dung dài: thân + tiêu đề thường (plain) ở đầu khi đã tách đoạn đầu ngắn — không dùng font kiểu đậm. */
+  const pickFull = (text: string) => {
+    const { body, strippedShortHead } = pickFullBodyOnly(text)
+    if (!strippedShortHead) return body
+    const plainTitle = pickTitle(text)
+    if (!plainTitle) return body
+    if (!body) return plainTitle
+    const bodyFirstLine = (body.split('\n')[0] || '').trim()
+    if (bodyFirstLine === plainTitle || cleanTitleEnd(bodyFirstLine) === plainTitle) return body
+    return `${plainTitle}\n\n${body}`.trim()
   }
   const pickShort = (text: string) => {
-    const full = pickFull(text)
+    const full = pickFullBodyOnly(text).body
     const MIN_LEN = 1000
     const MAX_SCAN = 3600
     if (!full) return ''
