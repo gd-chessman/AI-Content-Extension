@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   FiAlertTriangle,
   FiCheck,
@@ -8,6 +8,7 @@ import {
   FiInfo,
   FiRotateCcw,
   FiSave,
+  FiSearch,
   FiSettings,
 } from 'react-icons/fi'
 import { getMyWebBlogSetting, updateMyWebBlogSetting } from '@/services/WebBlogService'
@@ -108,10 +109,24 @@ export default function WebBlogScreen() {
   const [webPathInput, setWebPathInput] = useState('')
   const [showLocalImport, setShowLocalImport] = useState(false)
   const [localStoryEntries, setLocalStoryEntries] = useState<LocalStoryFolderEntry[]>([])
+  const [localStorySearch, setLocalStorySearch] = useState('')
   const [selectedLocalFolder, setSelectedLocalFolder] = useState('')
   const [isLoadingLocalList, setIsLoadingLocalList] = useState(false)
   const [isImportingLocal, setIsImportingLocal] = useState(false)
   const contentEditorRef = useRef<HTMLDivElement | null>(null)
+
+  const filteredLocalStoryEntries = useMemo(() => {
+    const q = localStorySearch.trim().toLowerCase()
+    if (!q) return localStoryEntries
+    return localStoryEntries.filter((entry) => {
+      const display = entry.displayName.toLowerCase()
+      const folder = entry.folderName.toLowerCase()
+      const savedLabel = entry.savedAt
+        ? new Date(entry.savedAt).toLocaleString('vi-VN').toLowerCase()
+        : ''
+      return display.includes(q) || folder.includes(q) || savedLabel.includes(q)
+    })
+  }, [localStoryEntries, localStorySearch])
 
   const applyWebBlogPayload = (payload: {
     title?: string
@@ -154,10 +169,17 @@ export default function WebBlogScreen() {
     return () => window.removeEventListener('fill-webblog-from-chatgpt', onFill as EventListener)
   }, [])
 
+  useEffect(() => {
+    if (!showLocalImport || isLoadingLocalList || !filteredLocalStoryEntries.length) return
+    const visible = filteredLocalStoryEntries.some((e) => e.folderName === selectedLocalFolder)
+    if (!visible) setSelectedLocalFolder(filteredLocalStoryEntries[0].folderName)
+  }, [showLocalImport, isLoadingLocalList, filteredLocalStoryEntries, selectedLocalFolder])
+
   const openLocalImportPicker = async () => {
     setShowLocalImport(true)
     setIsLoadingLocalList(true)
     setLocalStoryEntries([])
+    setLocalStorySearch('')
     setSelectedLocalFolder('')
     try {
       const root = await loadContentRootDirectoryHandle()
@@ -358,17 +380,37 @@ export default function WebBlogScreen() {
             <p className="mt-1 text-[10px] text-slate-400">Đang tải danh sách story…</p>
           ) : (
             <>
+              <div className="relative mt-1">
+                <FiSearch className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-500" />
+                <input
+                  type="search"
+                  value={localStorySearch}
+                  onChange={(e) => setLocalStorySearch(e.target.value)}
+                  placeholder="Tìm theo tên, thư mục, ngày lưu…"
+                  className="w-full rounded-lg bg-slate-900/80 py-1.5 pl-7 pr-2 text-[11px] text-slate-100 outline-none placeholder:text-slate-500"
+                />
+              </div>
+              <p className="mt-1 text-[10px] text-slate-500">
+                {filteredLocalStoryEntries.length} / {localStoryEntries.length} story
+                {localStorySearch.trim() ? ' (đã lọc)' : ''}
+              </p>
               <select
                 value={selectedLocalFolder}
                 onChange={(e) => setSelectedLocalFolder(e.target.value)}
-                className="mt-1 w-full rounded-lg bg-slate-900/80 px-2 py-1.5 text-[11px] text-slate-100 outline-none"
+                disabled={filteredLocalStoryEntries.length === 0}
+                className="mt-1 max-h-40 w-full rounded-lg bg-slate-900/80 px-2 py-1.5 text-[11px] text-slate-100 outline-none disabled:opacity-50"
+                size={Math.min(6, Math.max(3, filteredLocalStoryEntries.length))}
               >
-                {localStoryEntries.map((entry) => (
-                  <option key={entry.folderName} value={entry.folderName}>
-                    {entry.displayName}
-                    {entry.savedAt ? ` — ${new Date(entry.savedAt).toLocaleString('vi-VN')}` : ''}
-                  </option>
-                ))}
+                {filteredLocalStoryEntries.length === 0 ? (
+                  <option value="">Không có story khớp tìm kiếm</option>
+                ) : (
+                  filteredLocalStoryEntries.map((entry) => (
+                    <option key={entry.folderName} value={entry.folderName}>
+                      {entry.displayName}
+                      {entry.savedAt ? ` — ${new Date(entry.savedAt).toLocaleString('vi-VN')}` : ''}
+                    </option>
+                  ))
+                )}
               </select>
               <div className="mt-2 flex justify-end gap-1.5">
                 <button
@@ -381,7 +423,9 @@ export default function WebBlogScreen() {
                 <button
                   type="button"
                   onClick={() => void importFromLocalWorkspace()}
-                  disabled={!selectedLocalFolder || isImportingLocal}
+                  disabled={
+                    !selectedLocalFolder || isImportingLocal || filteredLocalStoryEntries.length === 0
+                  }
                   className="cursor-pointer rounded-lg bg-teal-500/30 px-2 py-1 text-[10px] font-semibold text-teal-50 transition hover:bg-teal-500/40 disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   {isImportingLocal ? 'Đang nhập…' : 'Nhập'}

@@ -849,6 +849,11 @@ export default function ChatgptScreen() {
       )
     }
 
+    if (isGenerateImageStep) {
+      setSplitImages(null)
+      setCopiedPart(null)
+    }
+
     if (isChatgptExtractVideosStep(step)) {
       const pref = lockedWorkflowTabIdRef.current || undefined
       const pv1 = await extractVideoContentFromStep2(1, { copyToClipboard: false, preferredTabId: pref })
@@ -1411,16 +1416,26 @@ export default function ChatgptScreen() {
         return
       }
 
-      let left = (splitImages?.left || '').trim()
-      let right = (splitImages?.right || '').trim()
-      if ((!left || !right) && extensionChrome.tabs?.captureVisibleTab && target?.id) {
-        setStatus('Đang lấy ảnh 1/2 từ luồng ChatGPT (tiến trình 3) để lưu cùng bundle...')
+      let left = ''
+      let right = ''
+      let usedStaleSplitFallback = false
+      if (extensionChrome.tabs?.captureVisibleTab && target?.id) {
+        setStatus('Đang chụp và cắt đôi ảnh mới nhất từ ChatGPT (tiến trình 3) để lưu...')
         await snapChatgptThreadToBottomBeforeRead(target.id)
         const cap = await captureSplitPairFromChatgptTab(target.id, target.windowId)
         if (cap.ok) {
           left = cap.left
           right = cap.right
           setSplitImages({ left, right })
+        }
+      }
+      if (!left || !right) {
+        const staleLeft = (splitImages?.left || '').trim()
+        const staleRight = (splitImages?.right || '').trim()
+        if (staleLeft && staleRight) {
+          left = staleLeft
+          right = staleRight
+          usedStaleSplitFallback = true
         }
       }
 
@@ -1447,8 +1462,13 @@ export default function ChatgptScreen() {
         await writeBlobToFile(dirs.imagesDir, 'anh-2.png', blobR)
       }
 
+      const imageNote = left && right
+        ? usedStaleSplitFallback
+          ? ', images/anh-1.png & anh-2.png (dùng ảnh cắt cũ — không chụp lại được từ ChatGPT)'
+          : ', images/anh-1.png & anh-2.png'
+        : ' (chưa có ảnh cắt đôi — bỏ qua images)'
       setStatus(
-        `Đã lưu cục bộ: …/${storiesSeg}/${storyCtx.folderSegment}/ — content (noi-dung-ngan, noi-dung-dai), info/meta.json${left && right ? ', images/anh-1.png & anh-2.png' : ' (chưa có ảnh cắt đôi — bỏ qua images)'}.`,
+        `Đã lưu cục bộ: …/${storiesSeg}/${storyCtx.folderSegment}/ — content (noi-dung-ngan, noi-dung-dai), info/meta.json${imageNote}.`,
       )
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
