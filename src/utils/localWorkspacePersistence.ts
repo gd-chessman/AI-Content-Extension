@@ -192,3 +192,187 @@ export async function writeBlobToFile(parent: FileSystemDirectoryHandle, filenam
     await writable.close()
   }
 }
+
+export async function ensureDirectoryReadable(handle: FileSystemDirectoryHandle): Promise<boolean> {
+  const h = handle as FileSystemDirectoryHandle & {
+    queryPermission?: (options: { mode: 'read' }) => Promise<PermissionState>
+    requestPermission?: (options: { mode: 'read' }) => Promise<PermissionState>
+  }
+  if (!h.queryPermission || !h.requestPermission) return true
+  let state = await h.queryPermission({ mode: 'read' })
+  if (state === 'granted') return true
+  state = await h.requestPermission({ mode: 'read' })
+  return state === 'granted'
+}
+
+async function readUtf8FileIfExists(parent: FileSystemDirectoryHandle, filename: string): Promise<string | null> {
+  try {
+    const fh = await parent.getFileHandle(filename)
+    const file = await fh.getFile()
+    return await file.text()
+  } catch {
+    return null
+  }
+}
+
+async function readBlobFileIfExists(parent: FileSystemDirectoryHandle, filename: string): Promise<Blob | null> {
+  try {
+    const fh = await parent.getFileHandle(filename)
+    const file = await fh.getFile()
+    return file
+  } catch {
+    return null
+  }
+}
+
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result || ''))
+    reader.onerror = () => reject(reader.error || new Error('Không đọc được file ảnh.'))
+    reader.readAsDataURL(blob)
+  })
+}
+
+export type LocalStoryFolderEntry = {
+  folderName: string
+  displayName: string
+  savedAt: string | null
+}
+
+/** `entries()` có trên Chrome nhưng chưa có trong lib DOM TypeScript mặc định. */
+type FileSystemDirectoryHandleWithEntries = FileSystemDirectoryHandle & {
+  entries: () => AsyncIterableIterator<[string, FileSystemHandle]>
+}
+
+async function* iterateDirectoryEntries(
+  dir: FileSystemDirectoryHandle,
+): AsyncGenerator<[string, FileSystemHandle]> {
+  const withEntries = dir as FileSystemDirectoryHandleWithEntries
+  if (typeof withEntries.entries !== 'function') {
+    throw new Error('Trình duyệt không hỗ trợ đọc danh sách thư mục (DirectoryHandle.entries).')
+  }
+  yield* withEntries.entries()
+}
+
+/** Liệt kê thư mục story trong workspace (mới lưu trước). */
+export async function listLocalStoryFolders(
+  root: FileSystemDirectoryHandle,
+  storiesSeg: string,
+): Promise<LocalStoryFolderEntry[]> {
+  const ok = await ensureDirectoryReadable(root)
+  if (!ok) throw new Error('Không có quyền đọc thư mục gốc workspace.')
+  const storiesName = sanitizeWorkspaceFolderSegment(storiesSeg, DEFAULT_STORIES_FOLDER_SEGMENT)
+  let storiesDir: FileSystemDirectoryHandle
+  try {
+    storiesDir = await root.getDirectoryHandle(storiesName)
+  } catch {
+    return []
+  }
+
+  const entries: LocalStoryFolderEntry[] = []
+  for await (const [name, handle] of iterateDirectoryEntries(storiesDir)) {
+    if (handle.kind !== 'directory') continue
+    const storyDir = handle as FileSystemDirectoryHandle
+    let displayName = name
+    let savedAt: string | null = null
+    try {
+      const infoDir = await storyDir.getDirectoryHandle('info')
+      const metaRaw = await readUtf8FileIfExists(infoDir, 'meta.json')
+      if (metaRaw) {
+        const meta = JSON.parse(metaRaw) as {
+          title?: string
+          storyDisplayName?: string
+          savedAt?: string
+        }
+        const t = String(meta.title || meta.storyDisplayName || '').trim()
+        if (t) displayName = t
+        const s = String(meta.savedAt || '').trim()
+        if (s) savedAt = s
+      }
+    } catch {
+      /* thư mục chưa đủ cấu trúc */
+    }
+    entries.push({ folderName: name, displayName, savedAt })
+  }
+
+  entries.sort((a, b) => {
+    const ta = a.savedAt ? new Date(a.savedAt).getTime() : 0
+    const tb = b.savedAt ? new Date(b.savedAt).getTime() : 0
+    if (tb !== ta) return tb - ta
+    return a.displayName.localeCompare(b.displayName, 'vi')
+  })
+  return entries
+}
+
+export type LoadedLocalStoryBundle = {
+  folderName: string
+  title: string
+  shortContent: string
+  longContent: string
+  longContentWithImages: string
+  image1: string
+  image2: string
+}
+
+/** Đọc bundle đã lưu (content + images + meta) để điền WebBlog. */
+export async function loadLocalStoryBundle(
+  root: FileSystemDirectoryHandle,
+  storiesSeg: string,
+  storyFolderName: string,
+  injectImages: (content: string, image1: string, image2: string) => string,
+): Promise<LoadedLocalStoryBundle> {
+  const ok = await ensureDirectoryReadable(root)
+  if (!ok) throw new Error('Không có quyền đọc thư mục gốc workspace.')
+  const storiesName = sanitizeWorkspaceFolderSegment(storiesSeg, DEFAULT_STORIES_FOLDER_SEGMENT)
+  const storyName = sanitizeWorkspaceFolderSegment(storyFolderName, 'unnamed-story')
+  const storiesDir = await root.getDirectoryHandle(storiesName)
+  const storyDir = await storiesDir.getDirectoryHandle(storyName)
+
+  const contentDir = await storyDir.getDirectoryHandle('content')
+  const longContent = (await readUtf8FileIfExists(contentDir, 'noi-dung-dai.txt'))?.trim() || ''
+  const shortContent = (await readUtf8FileIfExists(contentDir, 'noi-dung-ngan.txt'))?.trim() || ''
+  if (!longContent) {
+    throw new Error('Thiếu noi-dung-dai.txt trong thư mục story.')
+  }
+
+  let title = ''
+  try {
+    const infoDir = await storyDir.getDirectoryHandle('info')
+    const metaRaw = await readUtf8FileIfExists(infoDir, 'meta.json')
+    if (metaRaw) {
+      const meta = JSON.parse(metaRaw) as { title?: string; storyDisplayName?: string }
+      title = String(meta.title || meta.storyDisplayName || '').trim()
+    }
+  } catch {
+    /* ignore */
+  }
+  if (!title) title = storyName
+
+  let image1 = ''
+  let image2 = ''
+  try {
+    const imagesDir = await storyDir.getDirectoryHandle('images')
+    const b1 = await readBlobFileIfExists(imagesDir, 'anh-1.png')
+    const b2 = await readBlobFileIfExists(imagesDir, 'anh-2.png')
+    if (b1) image1 = await blobToDataUrl(b1)
+    if (b2) image2 = await blobToDataUrl(b2)
+  } catch {
+    /* chưa có images */
+  }
+
+  let longContentWithImages = longContent
+  if (image1 && image2 && !/<img\b/i.test(longContent)) {
+    longContentWithImages = injectImages(longContent, image1, image2)
+  }
+
+  return {
+    folderName: storyName,
+    title,
+    shortContent,
+    longContent,
+    longContentWithImages,
+    image1,
+    image2,
+  }
+}

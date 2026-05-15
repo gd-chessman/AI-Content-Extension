@@ -1,7 +1,27 @@
 import { useEffect, useRef, useState } from 'react'
-import { FiAlertTriangle, FiCheck, FiCopy, FiGlobe, FiInfo, FiRotateCcw, FiSave, FiSettings } from 'react-icons/fi'
+import {
+  FiAlertTriangle,
+  FiCheck,
+  FiCopy,
+  FiFolder,
+  FiGlobe,
+  FiInfo,
+  FiRotateCcw,
+  FiSave,
+  FiSettings,
+} from 'react-icons/fi'
 import { getMyWebBlogSetting, updateMyWebBlogSetting } from '@/services/WebBlogService'
+import { injectImagesIntoLongContent } from '@/utils/chatgptContentProcessing'
+import {
+  getStoriesFolderSegmentFromStorage,
+  listLocalStoryFolders,
+  loadContentRootDirectoryHandle,
+  loadLocalStoryBundle,
+  type LocalStoryFolderEntry,
+} from '@/utils/localWorkspacePersistence'
 import translate from 'translate'
+
+const getChrome = () => (globalThis as { chrome?: { storage?: { local?: unknown } } }).chrome
 
 type WebBlogPayload = {
   title?: string
@@ -86,7 +106,30 @@ export default function WebBlogScreen() {
   const [isContentTranslated, setIsContentTranslated] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
   const [webPathInput, setWebPathInput] = useState('')
+  const [showLocalImport, setShowLocalImport] = useState(false)
+  const [localStoryEntries, setLocalStoryEntries] = useState<LocalStoryFolderEntry[]>([])
+  const [selectedLocalFolder, setSelectedLocalFolder] = useState('')
+  const [isLoadingLocalList, setIsLoadingLocalList] = useState(false)
+  const [isImportingLocal, setIsImportingLocal] = useState(false)
   const contentEditorRef = useRef<HTMLDivElement | null>(null)
+
+  const applyWebBlogPayload = (payload: {
+    title?: string
+    longContent?: string
+    image1?: string
+    image2?: string
+  }) => {
+    const nextTitle = (payload.title || '').trim()
+    const nextLongContent = (payload.longContent || '').trim()
+    setTitle(nextTitle)
+    setLongContent(nextLongContent)
+    setOriginalTitle(nextTitle)
+    setOriginalLongContent(nextLongContent)
+    setIsTitleTranslated(false)
+    setIsContentTranslated(false)
+    setImage1(payload.image1 || '')
+    setImage2(payload.image2 || '')
+  }
 
   useEffect(() => {
     const loadSettings = async () => {
@@ -104,21 +147,84 @@ export default function WebBlogScreen() {
     const onFill = (event: Event) => {
       const custom = event as CustomEvent<WebBlogPayload>
       const payload = custom.detail || {}
-      const nextTitle = (payload.title || '').trim()
-      const nextLongContent = (payload.longContent || '').trim()
-      setTitle(nextTitle)
-      setLongContent(nextLongContent)
-      setOriginalTitle(nextTitle)
-      setOriginalLongContent(nextLongContent)
-      setIsTitleTranslated(false)
-      setIsContentTranslated(false)
-      setImage1(payload.image1 || '')
-      setImage2(payload.image2 || '')
+      applyWebBlogPayload(payload)
       setStatus('Đã nhận dữ liệu WebBlog từ ChatGPT.')
     }
     window.addEventListener('fill-webblog-from-chatgpt', onFill as EventListener)
     return () => window.removeEventListener('fill-webblog-from-chatgpt', onFill as EventListener)
   }, [])
+
+  const openLocalImportPicker = async () => {
+    setShowLocalImport(true)
+    setIsLoadingLocalList(true)
+    setLocalStoryEntries([])
+    setSelectedLocalFolder('')
+    try {
+      const root = await loadContentRootDirectoryHandle()
+      if (!root) {
+        setStatus('Chưa chọn thư mục gốc workspace. Vào Hồ sơ → Cấu hình → Chọn thư mục gốc.')
+        setShowLocalImport(false)
+        return
+      }
+      const storiesSeg = await getStoriesFolderSegmentFromStorage(
+        getChrome()?.storage?.local as Parameters<typeof getStoriesFolderSegmentFromStorage>[0],
+      )
+      const entries = await listLocalStoryFolders(root, storiesSeg)
+      if (!entries.length) {
+        setStatus('Chưa có story nào đã lưu trong workspace local.')
+        setShowLocalImport(false)
+        return
+      }
+      setLocalStoryEntries(entries)
+      setSelectedLocalFolder(entries[0].folderName)
+      setStatus(`Chọn story đã lưu (${entries.length} mục) rồi bấm Nhập.`)
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      setStatus(`Không đọc được danh sách local: ${msg}`)
+      setShowLocalImport(false)
+    } finally {
+      setIsLoadingLocalList(false)
+    }
+  }
+
+  const importFromLocalWorkspace = async () => {
+    const folder = selectedLocalFolder.trim()
+    if (!folder) {
+      setStatus('Chọn một story trong danh sách local.')
+      return
+    }
+    setIsImportingLocal(true)
+    try {
+      const root = await loadContentRootDirectoryHandle()
+      if (!root) {
+        setStatus('Chưa chọn thư mục gốc workspace. Vào Hồ sơ → Cấu hình.')
+        return
+      }
+      const storiesSeg = await getStoriesFolderSegmentFromStorage(
+        getChrome()?.storage?.local as Parameters<typeof getStoriesFolderSegmentFromStorage>[0],
+      )
+      const bundle = await loadLocalStoryBundle(root, storiesSeg, folder, injectImagesIntoLongContent)
+      applyWebBlogPayload({
+        title: bundle.title,
+        longContent: bundle.longContentWithImages,
+        image1: bundle.image1,
+        image2: bundle.image2,
+      })
+      setShowLocalImport(false)
+      const imgNote =
+        bundle.image1 && bundle.image2
+          ? ' (đã chèn ảnh 1/2 vào nội dung dài)'
+          : bundle.image1 || bundle.image2
+            ? ' (chỉ có một ảnh — chưa chèn đủ cặp)'
+            : ''
+      setStatus(`Đã nhập từ local: «${bundle.title}»${imgNote}.`)
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      setStatus(`Nhập từ local thất bại: ${msg}`)
+    } finally {
+      setIsImportingLocal(false)
+    }
+  }
 
   const statusLower = status.toLowerCase()
   const statusTone = statusLower.includes('không thể') || statusLower.includes('không') || statusLower.includes('lỗi')
@@ -223,16 +329,68 @@ export default function WebBlogScreen() {
     <section className="glass-panel flex h-full min-h-0 flex-col rounded-3xl p-3">
       <div className="flex items-center justify-between gap-2">
         <h2 className="text-sm font-semibold text-white">WebBlog</h2>
-        <button
-          type="button"
-          onClick={() => setShowSettings((prev) => !prev)}
-          className="inline-flex h-7 w-7 cursor-pointer items-center justify-center rounded-lg bg-blue-500/20 text-blue-100 transition hover:bg-blue-500/30"
-          title="Cài đặt đường dẫn web"
-          aria-label="Cài đặt đường dẫn web"
-        >
-          <FiSettings className="h-3.5 w-3.5" />
-        </button>
+        <div className="inline-flex items-center gap-1">
+          <button
+            type="button"
+            onClick={() => void openLocalImportPicker()}
+            disabled={isLoadingLocalList || isImportingLocal}
+            className="inline-flex h-7 w-7 cursor-pointer items-center justify-center rounded-lg bg-teal-500/20 text-teal-100 transition hover:bg-teal-500/30 disabled:cursor-not-allowed disabled:opacity-40"
+            title="Nhập tiêu đề, nội dung dài và ảnh từ workspace đã lưu (ChatGPT → Lưu local)"
+            aria-label="Nhập từ local"
+          >
+            <FiFolder className="h-3.5 w-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowSettings((prev) => !prev)}
+            className="inline-flex h-7 w-7 cursor-pointer items-center justify-center rounded-lg bg-blue-500/20 text-blue-100 transition hover:bg-blue-500/30"
+            title="Cài đặt đường dẫn web"
+            aria-label="Cài đặt đường dẫn web"
+          >
+            <FiSettings className="h-3.5 w-3.5" />
+          </button>
+        </div>
       </div>
+      {showLocalImport ? (
+        <div className="mt-2 rounded-xl border border-teal-300/30 bg-teal-500/10 p-2">
+          <p className="text-[10px] text-slate-300">Nhập từ workspace local</p>
+          {isLoadingLocalList ? (
+            <p className="mt-1 text-[10px] text-slate-400">Đang tải danh sách story…</p>
+          ) : (
+            <>
+              <select
+                value={selectedLocalFolder}
+                onChange={(e) => setSelectedLocalFolder(e.target.value)}
+                className="mt-1 w-full rounded-lg bg-slate-900/80 px-2 py-1.5 text-[11px] text-slate-100 outline-none"
+              >
+                {localStoryEntries.map((entry) => (
+                  <option key={entry.folderName} value={entry.folderName}>
+                    {entry.displayName}
+                    {entry.savedAt ? ` — ${new Date(entry.savedAt).toLocaleString('vi-VN')}` : ''}
+                  </option>
+                ))}
+              </select>
+              <div className="mt-2 flex justify-end gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setShowLocalImport(false)}
+                  className="cursor-pointer rounded-lg bg-white/10 px-2 py-1 text-[10px] text-slate-300 transition hover:bg-white/15"
+                >
+                  Hủy
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void importFromLocalWorkspace()}
+                  disabled={!selectedLocalFolder || isImportingLocal}
+                  className="cursor-pointer rounded-lg bg-teal-500/30 px-2 py-1 text-[10px] font-semibold text-teal-50 transition hover:bg-teal-500/40 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {isImportingLocal ? 'Đang nhập…' : 'Nhập'}
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      ) : null}
       {showSettings ? (
         <div className="mt-2 rounded-xl border border-blue-300/30 bg-blue-500/10 p-2">
           <p className="text-[10px] text-slate-300">Đường dẫn WebBlog</p>
