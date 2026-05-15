@@ -58,9 +58,7 @@ import {
   chatgptCloseImageLightboxPageScript,
   chatgptLocateLatestChatImageForCapturePageScript,
   chatgptWaitGeneratedImageDonePageScript,
-  saveCopiedSplitImageIfNew,
   splitCapturedImage,
-  SPLIT_IMAGE_DOWNLOAD_FOLDER,
   type SplitCaptureRect,
 } from '@/utils/chatgptImageProcessing'
 
@@ -1062,24 +1060,7 @@ export default function ChatgptScreen() {
       await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })])
       setCopiedPart(part)
       window.setTimeout(() => setCopiedPart((prev) => (prev === part ? null : prev)), 1200)
-
-      let saveNote = ''
-      try {
-        const saveResult = await saveCopiedSplitImageIfNew(getChrome(), dataUrl, part, blob)
-        if (saveResult.skipped) saveNote = ' Ảnh này đã được lưu trước đó, không lưu lại.'
-        else if (saveResult.saved)
-          saveNote = ` Đã lưu file: Downloads/${SPLIT_IMAGE_DOWNLOAD_FOLDER}/… (PNG).`
-        else if (saveResult.reason === 'not_extension')
-          saveNote =
-            ' Lưu file cần mở extension đã cài (icon puzzle → AI Content Extension), không mở giao diện bằng tab localhost. Sau khi thêm quyền Downloads, vào chrome://extensions và bấm Tải lại.'
-        else if (saveResult.reason === 'no_storage')
-          saveNote = ' (Không lưu file: thiếu chrome.storage trong môi trường này.)'
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : 'Lỗi không xác định'
-        saveNote = ` Không lưu được file: ${msg}`
-      }
-
-      setStatus(`Đã sao chép ${label} vào clipboard.${saveNote}`)
+      setStatus(`Đã sao chép ${label} vào clipboard (chỉ clipboard, không lưu file trên máy).`)
     } catch {
       setStatus(`Không thể sao chép ${label}. Hãy thử lại.`)
     }

@@ -3,6 +3,13 @@
  * Các hàm `*PageScript` dùng với chrome.scripting.executeScript (tự chứa, không import).
  */
 
+import {
+  DEFAULT_STORIES_FOLDER_SEGMENT,
+  ensureDirectoryWritable,
+  ensureStoryWorkspaceChildDirs,
+  sanitizeWorkspaceFolderSegment,
+} from './localWorkspacePersistence'
+
 export const SPLIT_IMAGE_DOWNLOAD_FOLDER = 'chatgpt-images'
 export const SAVED_SPLIT_IMAGE_HASHES_KEY = 'savedSplitImageCopyHashes'
 export const SAVED_SPLIT_IMAGE_HASHES_MAX = 150
@@ -289,8 +296,29 @@ export type ExtensionChromeForSplitSave = {
   }
 }
 
+export type SaveCopiedSplitImageWorkspaceTarget = {
+  rootHandle: FileSystemDirectoryHandle
+  storiesFolderSegment: string
+  storyFolderSegment: string
+}
+
+export type SaveCopiedSplitImageOptions = {
+  /** Ghi theo: gốc / [stories] / [story] / images / file.png — đồng thời tạo content & info. */
+  workspaceTarget?: SaveCopiedSplitImageWorkspaceTarget | null
+  /** @deprecated Chỉ một thư mục phẳng; ưu tiên workspaceTarget. */
+  directoryHandle?: FileSystemDirectoryHandle | null
+}
+
 export type SaveSplitImageResult =
-  | { saved: true; skipped: false; reason?: 'ok' }
+  | {
+      saved: true
+      skipped: false
+      reason?: 'ok'
+      destination?: 'workspace' | 'directory' | 'downloads'
+      directoryName?: string
+      /** Ví dụ stories/My-Story/images/part-1-abc.png */
+      relativePath?: string
+    }
   | { saved: false; skipped: true; reason: 'duplicate' }
   | { saved: false; skipped: false; reason: 'not_extension' | 'no_storage' }
 
@@ -299,6 +327,7 @@ export async function saveCopiedSplitImageIfNew(
   dataUrl: string,
   part: 'left' | 'right',
   imageBlob: Blob,
+  options?: SaveCopiedSplitImageOptions,
 ): Promise<SaveSplitImageResult> {
   if (!extensionChrome) {
     return { saved: false, skipped: false, reason: 'not_extension' }
@@ -328,6 +357,44 @@ export async function saveCopiedSplitImageIfNew(
   const safeHash = hashKey.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 40)
   const filename = `${SPLIT_IMAGE_DOWNLOAD_FOLDER}/part-${part === 'left' ? '1' : '2'}-${safeHash}.png`
   const baseFileName = filename.includes('/') ? filename.split('/').pop() || 'image.png' : filename
+
+  const tryWriteToChosenDirectory = async (): Promise<boolean> => {
+    const dir = options?.directoryHandle
+    if (!dir) return false
+    const writableOk = await ensureDirectoryWritable(dir)
+    if (!writableOk) return false
+    const name = `part-${part === 'left' ? '1' : '2'}-${safeHash}.png`
+    const fileHandle = await dir.getFileHandle(name, { create: true })
+    const writable = await fileHandle.createWritable()
+    try {
+      await writable.write(imageBlob)
+    } finally {
+      await writable.close()
+    }
+    return true
+  }
+
+  const tryWriteToWorkspace = async (): Promise<{ ok: boolean; relativePath?: string }> => {
+    const w = options?.workspaceTarget
+    if (!w) return { ok: false }
+    const rootOk = await ensureDirectoryWritable(w.rootHandle)
+    if (!rootOk) return { ok: false }
+    const storiesSeg = sanitizeWorkspaceFolderSegment(w.storiesFolderSegment, DEFAULT_STORIES_FOLDER_SEGMENT)
+    const storySeg = sanitizeWorkspaceFolderSegment(w.storyFolderSegment, 'unnamed-story')
+    const stories = await w.rootHandle.getDirectoryHandle(storiesSeg, { create: true })
+    const storyDir = await stories.getDirectoryHandle(storySeg, { create: true })
+    await ensureStoryWorkspaceChildDirs(storyDir)
+    const images = await storyDir.getDirectoryHandle('images', { create: true })
+    const name = `part-${part === 'left' ? '1' : '2'}-${safeHash}.png`
+    const fileHandle = await images.getFileHandle(name, { create: true })
+    const writable = await fileHandle.createWritable()
+    try {
+      await writable.write(imageBlob)
+    } finally {
+      await writable.close()
+    }
+    return { ok: true, relativePath: `${storiesSeg}/${storySeg}/images/${name}` }
+  }
 
   const tryAnchorDownloadBlob = () => {
     const objectUrl = URL.createObjectURL(imageBlob)
@@ -447,10 +514,44 @@ export async function saveCopiedSplitImageIfNew(
     tryAnchorDownloadDataUrl()
   }
 
+  let wroteToWorkspace: { ok: boolean; relativePath?: string } = { ok: false }
+  try {
+    wroteToWorkspace = await tryWriteToWorkspace()
+  } catch {
+    wroteToWorkspace = { ok: false }
+  }
+
+  if (wroteToWorkspace.ok) {
+    const next = [...existing.filter((k) => k !== hashKey), hashKey].slice(-SAVED_SPLIT_IMAGE_HASHES_MAX)
+    await new Promise<void>((resolve) => storage.set?.({ [SAVED_SPLIT_IMAGE_HASHES_KEY]: next }, () => resolve()))
+    return {
+      saved: true,
+      skipped: false,
+      reason: 'ok',
+      destination: 'workspace',
+      directoryName: options?.workspaceTarget?.rootHandle.name,
+      relativePath: wroteToWorkspace.relativePath,
+    }
+  }
+
+  let wroteToDirectory = false
+  try {
+    wroteToDirectory = await tryWriteToChosenDirectory()
+  } catch {
+    wroteToDirectory = false
+  }
+
+  if (wroteToDirectory) {
+    const next = [...existing.filter((k) => k !== hashKey), hashKey].slice(-SAVED_SPLIT_IMAGE_HASHES_MAX)
+    await new Promise<void>((resolve) => storage.set?.({ [SAVED_SPLIT_IMAGE_HASHES_KEY]: next }, () => resolve()))
+    const directoryName = options?.directoryHandle?.name || ''
+    return { saved: true, skipped: false, reason: 'ok', destination: 'directory', directoryName }
+  }
+
   await runDownload()
 
   const next = [...existing.filter((k) => k !== hashKey), hashKey].slice(-SAVED_SPLIT_IMAGE_HASHES_MAX)
   await new Promise<void>((resolve) => storage.set?.({ [SAVED_SPLIT_IMAGE_HASHES_KEY]: next }, () => resolve()))
 
-  return { saved: true, skipped: false, reason: 'ok' }
+  return { saved: true, skipped: false, reason: 'ok', destination: 'downloads' }
 }

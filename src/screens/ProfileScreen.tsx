@@ -1,11 +1,35 @@
 import { useEffect, useState } from 'react'
-import { FiEdit2, FiLogOut, FiSave, FiSettings, FiUser, FiX } from 'react-icons/fi'
+import { FiEdit2, FiFolder, FiLogOut, FiSave, FiSettings, FiTrash2, FiUser, FiX } from 'react-icons/fi'
 import { getMe, logoutSession, updateMe } from '@/services/AuthService'
 import { useAuth } from '@/hooks/useAuth'
+import {
+  clearContentRootDirectoryHandle,
+  DEFAULT_STORIES_FOLDER_SEGMENT,
+  getStoriesFolderSegmentFromStorage,
+  loadContentRootDirectoryHandle,
+  persistContentRootDirectoryHandle,
+  setStoriesFolderSegmentInStorage,
+  WORKSPACE_ROOT_PICKER_ID,
+  WORKSPACE_STORY_SUBDIRS,
+} from '@/utils/localWorkspacePersistence'
+
+type ChromeStorageLocal = {
+  get?: (keys: string | string[], callback: (items: Record<string, unknown>) => void) => void
+  set?: (items: Record<string, unknown>, callback?: () => void) => void
+}
+
+type ChromePartial = {
+  storage?: { local?: ChromeStorageLocal }
+}
+
+const getChrome = () => (globalThis as { chrome?: ChromePartial }).chrome
 
 export default function ProfileScreen({ onLogout }: { onLogout: () => void }) {
   const [activeTab, setActiveTab] = useState<'overview' | 'config'>('overview')
   const [status, setStatus] = useState('')
+  const [workspaceRootLabel, setWorkspaceRootLabel] = useState('')
+  const [storiesFolderInput, setStoriesFolderInput] = useState(DEFAULT_STORIES_FOLDER_SEGMENT)
+  const [isSavingWorkspaceStories, setIsSavingWorkspaceStories] = useState(false)
   const [isLoggingOut, setIsLoggingOut] = useState(false)
   const [isLoadingProfile, setIsLoadingProfile] = useState(true)
   const [isSavingProfile, setIsSavingProfile] = useState(false)
@@ -148,6 +172,70 @@ export default function ProfileScreen({ onLogout }: { onLogout: () => void }) {
     setBirthDateInput(profile?.birthDate ? new Date(profile.birthDate).toISOString().slice(0, 10) : '')
     setGenderInput((profile?.gender as 'male' | 'female' | 'other') || 'other')
     setIsEditingProfile(false)
+  }
+
+  useEffect(() => {
+    if (activeTab !== 'config') return
+    void (async () => {
+      try {
+        const h = await loadContentRootDirectoryHandle()
+        setWorkspaceRootLabel(h?.name || '')
+      } catch {
+        setWorkspaceRootLabel('')
+      }
+      try {
+        const seg = await getStoriesFolderSegmentFromStorage(getChrome()?.storage?.local)
+        setStoriesFolderInput(seg)
+      } catch {
+        setStoriesFolderInput(DEFAULT_STORIES_FOLDER_SEGMENT)
+      }
+    })()
+  }, [activeTab])
+
+  const pickWorkspaceRootDirectory = async () => {
+    if (!('showDirectoryPicker' in window) || typeof window.showDirectoryPicker !== 'function') {
+      setStatus('Trình duyệt không hỗ trợ chọn thư mục (File System Access API).')
+      return
+    }
+    try {
+      const handle = await window.showDirectoryPicker({
+        id: WORKSPACE_ROOT_PICKER_ID,
+        mode: 'readwrite',
+      })
+      await persistContentRootDirectoryHandle(handle)
+      setWorkspaceRootLabel(handle.name)
+      setStatus(`Đã đặt thư mục gốc: ${handle.name}`)
+    } catch (e) {
+      if (e instanceof DOMException && e.name === 'AbortError') return
+      const msg = e instanceof Error ? e.message : 'Lỗi không xác định'
+      setStatus(`Không chọn được thư mục gốc: ${msg}`)
+    }
+  }
+
+  const clearWorkspaceRootDirectory = async () => {
+    try {
+      await clearContentRootDirectoryHandle()
+    } catch {
+      /* ignore */
+    }
+    setWorkspaceRootLabel('')
+    setStatus('Đã xóa thư mục gốc. Ảnh cắt đôi sẽ chỉ lưu qua Tải xuống của Chrome nếu không cấu hình lại.')
+  }
+
+  const saveWorkspaceStoriesFolderName = async () => {
+    if (isSavingWorkspaceStories) return
+    setIsSavingWorkspaceStories(true)
+    try {
+      await setStoriesFolderSegmentInStorage(getChrome()?.storage?.local, storiesFolderInput)
+      const seg = await getStoriesFolderSegmentFromStorage(getChrome()?.storage?.local)
+      setStoriesFolderInput(seg)
+      setStatus(`Đã lưu tên thư mục stories: ${seg}`)
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Lỗi không xác định'
+      setStatus(`Không lưu được tên thư mục: ${msg}`)
+    } finally {
+      setIsSavingWorkspaceStories(false)
+    }
   }
 
   return (
@@ -344,9 +432,74 @@ export default function ProfileScreen({ onLogout }: { onLogout: () => void }) {
             </div>
           </div>
         ) : (
-          <div className="space-y-2">
-            <p className="font-semibold text-slate-100">Cấu hình</p>
-            <p>Các tùy chỉnh hồ sơ đã chuyển sang tab Tổng quan (nút sửa thông tin).</p>
+          <div className="min-h-0 space-y-3 overflow-y-auto pr-0.5">
+            <div>
+              <p className="font-semibold text-slate-100">Cấu hình lưu trữ cục bộ</p>
+              <p className="mt-1 text-[11px] leading-relaxed text-slate-400">
+                Chọn một thư mục gốc trên máy. Bên trong sẽ dùng cấu trúc:{' '}
+                <span className="text-slate-200">
+                  [gốc] / [tên thư mục stories] / [tên story] / {WORKSPACE_STORY_SUBDIRS.join(' · ')}
+                </span>
+                . Ảnh cắt đôi từ ChatGPT được ghi vào <code className="text-emerald-200/90">images</code>; các thư mục{' '}
+                <code className="text-emerald-200/90">content</code> và <code className="text-emerald-200/90">info</code>{' '}
+                được tạo sẵn để bạn (hoặc bản sau của extension) đặt nội dung và metadata.
+              </p>
+            </div>
+
+            <div className="rounded-xl border border-white/10 bg-slate-900/50 p-3">
+              <p className="mb-2 text-[11px] font-semibold text-slate-100">Thư mục gốc</p>
+              <p className="mb-2 text-[10px] text-slate-400">
+                Hiện tại:{' '}
+                <span className="font-medium text-slate-200">{workspaceRootLabel || 'Chưa chọn'}</span>
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => void pickWorkspaceRootDirectory()}
+                  className="inline-flex flex-1 min-w-[140px] cursor-pointer items-center justify-center gap-1.5 rounded-md bg-emerald-500/25 px-2 py-1.5 text-[11px] text-emerald-100 transition hover:bg-emerald-500/35"
+                >
+                  <FiFolder className="h-3.5 w-3.5 shrink-0" />
+                  Chọn thư mục gốc
+                </button>
+                {workspaceRootLabel ? (
+                  <button
+                    type="button"
+                    onClick={() => void clearWorkspaceRootDirectory()}
+                    className="inline-flex cursor-pointer items-center justify-center gap-1 rounded-md border border-rose-400/30 bg-rose-500/10 px-2 py-1.5 text-[11px] text-rose-100 transition hover:bg-rose-500/20"
+                  >
+                    <FiTrash2 className="h-3.5 w-3.5" />
+                    Xóa
+                  </button>
+                ) : null}
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-white/10 bg-slate-900/50 p-3">
+              <p className="mb-1 text-[11px] font-semibold text-slate-100">Thư mục chứa các story</p>
+              <p className="mb-2 text-[10px] text-slate-400">
+                Tên thư mục con ngay dưới thư mục gốc (mặc định <code className="text-slate-200">stories</code>). Mỗi
+                story một thư mục con theo tên story trên hệ thống.
+              </p>
+              <div className="flex flex-wrap items-center gap-2">
+                <input
+                  type="text"
+                  value={storiesFolderInput}
+                  onChange={(event) => setStoriesFolderInput(event.target.value)}
+                  placeholder={DEFAULT_STORIES_FOLDER_SEGMENT}
+                  className="min-w-0 flex-1 rounded-md border border-white/10 bg-slate-800/80 px-2 py-1.5 text-[11px] text-slate-100 outline-none placeholder:text-slate-500"
+                  spellCheck={false}
+                />
+                <button
+                  type="button"
+                  onClick={() => void saveWorkspaceStoriesFolderName()}
+                  disabled={isSavingWorkspaceStories}
+                  className="inline-flex shrink-0 cursor-pointer items-center gap-1 rounded-md bg-blue-500/25 px-2 py-1.5 text-[11px] text-blue-100 transition hover:bg-blue-500/35 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {isSavingWorkspaceStories ? <span className="animate-pulse">…</span> : <FiSave className="h-3.5 w-3.5" />}
+                  Lưu
+                </button>
+              </div>
+            </div>
           </div>
         )}
         </div>
