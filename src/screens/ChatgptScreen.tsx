@@ -81,6 +81,10 @@ import {
 import type { StepToolLink } from '@/services/StepToolService'
 import { fetchToolHandler } from '@/services/ToolHandlerService'
 import {
+  buildWorkflowBottomBarTools,
+  type ResolvedBottomBarTool,
+} from '@/utils/chatgptBottomBarTools'
+import {
   buildWorkflowStepPanelComparison,
   getStepPanelBadgeLabel,
   type ResolvedStepPanelTool,
@@ -322,6 +326,119 @@ function StepPanelToolsSection({
   )
 }
 
+type BottomBarToolsSectionProps = {
+  tools: ResolvedBottomBarTool[]
+  isLoading: boolean
+  isSavingStoryLocal: boolean
+  isToolDisabled: (tool: ResolvedBottomBarTool) => boolean
+  onRunTool: (tool: ResolvedBottomBarTool) => void
+}
+
+function BottomBarToolIcon({
+  icon,
+  isSavingStoryLocal,
+}: {
+  icon: ResolvedBottomBarTool['ui']['icon']
+  isSavingStoryLocal: boolean
+}) {
+  if (icon === 'grok1' || icon === 'grok2') {
+    const badge = icon === 'grok1' ? '1' : '2'
+    return (
+      <>
+        <SiX className="h-3 w-3" />
+        <FiImage className="h-3 w-3" />
+        <span className="absolute -right-2 -top-2 inline-flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-sky-500 px-0.5 text-[8px] font-bold leading-none text-white">
+          {badge}
+        </span>
+      </>
+    )
+  }
+  if (icon === 'webblog') {
+    return (
+      <>
+        <RiAdminFill className="h-3 w-3" />
+        <FiFileText className="h-3 w-3" />
+      </>
+    )
+  }
+  if (icon === 'ggsheet') {
+    return (
+      <>
+        <SiGooglesheets className="h-3 w-3" />
+        <FiDownload className="h-3 w-3" />
+      </>
+    )
+  }
+  if (isSavingStoryLocal) {
+    return (
+      <>
+        <FiSave className="h-3 w-3 opacity-40" aria-hidden />
+        <FiRefreshCw className="h-3 w-3 animate-spin" aria-hidden />
+      </>
+    )
+  }
+  return (
+    <>
+      <FiSave className="h-3 w-3" aria-hidden />
+      <FiFolder className="h-3 w-3" aria-hidden />
+    </>
+  )
+}
+
+function BottomBarToolsSection({
+  tools,
+  isLoading,
+  isSavingStoryLocal,
+  isToolDisabled,
+  onRunTool,
+}: BottomBarToolsSectionProps) {
+  if (isLoading && !tools.length) {
+    return (
+      <>
+        {[0, 1, 2, 3, 4].map((slot) => (
+          <div
+            key={slot}
+            className="inline-flex min-h-8 min-w-0 flex-1 animate-pulse rounded-lg bg-white/10"
+            aria-hidden
+          />
+        ))}
+      </>
+    )
+  }
+
+  if (!tools.length) {
+    return (
+      <p className="w-full py-1 text-center text-[10px] text-slate-500">
+        Chưa có công cụ dưới cho workflow này.
+      </p>
+    )
+  }
+
+  return (
+    <>
+      {tools.map((tool) => {
+        const disabled = isToolDisabled(tool)
+        const showSaving = tool.ui.icon === 'saveLocal' && isSavingStoryLocal
+        return (
+          <button
+            key={tool.toolId}
+            type="button"
+            onClick={() => onRunTool(tool)}
+            disabled={disabled}
+            className={`inline-flex min-h-8 min-w-0 flex-1 cursor-pointer items-center justify-center rounded-lg px-1 transition disabled:cursor-not-allowed disabled:opacity-40 sm:px-2 ${tool.ui.buttonClass}`}
+            title={tool.name}
+            aria-label={tool.name}
+          >
+            <span className="relative inline-flex items-center justify-center gap-1">
+              <BottomBarToolIcon icon={tool.ui.icon} isSavingStoryLocal={showSaving} />
+            </span>
+          </button>
+        )
+      })}
+    </>
+  )
+}
+
 
 export default function ChatgptScreen() {
   const refreshRoleOnly = useAuth((s) => s.refreshRoleOnly)
@@ -370,7 +487,8 @@ export default function ChatgptScreen() {
     queryKey: ['chatgpt-workflow-tools', selectedWorkflowId],
     enabled: Boolean(selectedWorkflowId),
     queryFn: async () => await getUserWorkflowTools(selectedWorkflowId),
-    staleTime: 60_000,
+    staleTime: 30_000,
+    refetchOnMount: 'always',
   })
 
   const isLoadingProcessSteps = isLoadingWorkflowDetail || isLoadingWorkflowTools
@@ -436,6 +554,17 @@ export default function ChatgptScreen() {
         })),
       ),
     [processSteps],
+  )
+
+  const bottomBarTools = useMemo(
+    () =>
+      buildWorkflowBottomBarTools(
+        (workflowTools?.steps ?? []).map((group) => ({
+          ownerStepId: group.stepId,
+          tools: (group.tools ?? []).filter((link) => link.isActive !== false),
+        })),
+      ),
+    [workflowTools],
   )
 
   const processStepByBackendId = useMemo(() => {
@@ -1829,6 +1958,41 @@ export default function ChatgptScreen() {
     }
   }
 
+  const bottomBarToolHost = useMemo<ToolScriptHost>(
+    () => ({
+      fillGrokImage: (part: 1 | 2) => fillGrokWithVideoImage(part),
+      pushWebBlog: () => pushThreadToWebBlog(),
+      collectGgSheet: () => runGgSheetCollectTool(),
+      saveLocal: () => saveStoryBundleToLocal(),
+      canSaveLocal: processSteps.length > 0 && !isSavingStoryLocal,
+    }),
+    [
+      processSteps.length,
+      isSavingStoryLocal,
+      fillGrokWithVideoImage,
+      pushThreadToWebBlog,
+      runGgSheetCollectTool,
+      saveStoryBundleToLocal,
+    ],
+  )
+
+  const isBottomBarToolDisabled = (tool: ResolvedBottomBarTool) =>
+    isToolDisabledByGuardScript(tool.guardScript, bottomBarToolHost, tool.config)
+
+  const runBottomBarTool = async (tool: ResolvedBottomBarTool) => {
+    try {
+      const payload = await fetchToolHandler(tool.toolId)
+      const config = {
+        ...(payload.defaultConfig || {}),
+        ...tool.config,
+      }
+      await runToolHandlerScript(payload.handlerScript, bottomBarToolHost, config)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Chạy công cụ thất bại.'
+      setStatus(message)
+    }
+  }
+
   const selectedStep = selectedProcessStep
   const statusLower = status.toLowerCase()
   const statusTone = statusLower.includes('không thể') || statusLower.includes('không tìm thấy') || statusLower.includes('thất bại') || statusLower.includes('lỗi')
@@ -2027,83 +2191,14 @@ export default function ChatgptScreen() {
           ) : null}
         </aside>
       </div>
-      <div className="mt-3 flex w-full min-w-0 flex-nowrap items-stretch gap-1.5 rounded-2xl border border-white/10 bg-black/30 p-2">
-        <button
-          type="button"
-          onClick={() => void fillGrokWithVideoImage(1)}
-          className="inline-flex min-h-8 min-w-0 flex-1 cursor-pointer items-center justify-center rounded-lg bg-sky-500/20 px-1 text-sky-100 transition hover:bg-sky-500/30 sm:px-2"
-          title="Lấy ảnh 1 (VIDEO 1) và tự điền vào Grok"
-        >
-          <span className="relative inline-flex items-center justify-center gap-1">
-            <SiX className="h-3 w-3" />
-            <FiImage className="h-3 w-3" />
-            <span className="absolute -right-2 -top-2 inline-flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-sky-500 px-0.5 text-[8px] font-bold leading-none text-white">
-              1
-            </span>
-          </span>
-        </button>
-        <button
-          type="button"
-          onClick={() => void fillGrokWithVideoImage(2)}
-          className="inline-flex min-h-8 min-w-0 flex-1 cursor-pointer items-center justify-center rounded-lg bg-sky-500/20 px-1 text-sky-100 transition hover:bg-sky-500/30 sm:px-2"
-          title="Lấy ảnh 2 (VIDEO 2) và tự điền vào Grok"
-        >
-          <span className="relative inline-flex items-center justify-center gap-1">
-            <SiX className="h-3 w-3" />
-            <FiImage className="h-3 w-3" />
-            <span className="absolute -right-2 -top-2 inline-flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-sky-500 px-0.5 text-[8px] font-bold leading-none text-white">
-              2
-            </span>
-          </span>
-        </button>
-        <button
-          type="button"
-          onClick={() => void pushThreadToWebBlog()}
-          className="inline-flex min-h-8 min-w-0 flex-1 cursor-pointer items-center justify-center rounded-lg bg-amber-500/20 px-1 text-amber-100 transition hover:bg-amber-500/30 sm:px-2"
-          title="Gửi tiêu đề + nội dung dài có chèn ảnh sang WebBlog"
-        >
-          <span className="relative inline-flex items-center justify-center gap-1">
-            <RiAdminFill className="h-3 w-3" />
-            <FiFileText className="h-3 w-3" />
-          </span>
-        </button>
-        <button
-          type="button"
-          onClick={runGgSheetCollectTool}
-          className="inline-flex min-h-8 min-w-0 flex-1 cursor-pointer items-center justify-center rounded-lg bg-green-500/20 px-1 text-green-100 transition hover:bg-green-500/30 sm:px-2"
-          title="Gom dữ liệu GGSheet từ ChatGPT"
-        >
-          <span className="relative inline-flex items-center justify-center gap-1">
-            <SiGooglesheets className="h-3 w-3" />
-            <FiDownload className="h-3 w-3" />
-          </span>
-        </button>
-        <button
-          type="button"
-          onClick={() => void saveStoryBundleToLocal()}
-          disabled={!processSteps.length || isSavingStoryLocal}
-          className="inline-flex min-h-8 min-w-0 flex-1 cursor-pointer items-center justify-center rounded-lg bg-teal-500/25 px-1 text-teal-100 transition hover:bg-teal-500/35 disabled:cursor-not-allowed disabled:opacity-40 sm:px-2"
-          title={
-            processSteps.length
-              ? 'Lưu vào local: kiểm tra prompt bước cuối + phản hồi xong trên ChatGPT, rồi ghi content/images/info vào workspace (Hồ sơ).'
-              : 'Chưa có bước workflow.'
-          }
-          aria-label="Lưu vào local"
-        >
-          <span className="relative inline-flex items-center justify-center gap-1">
-            {isSavingStoryLocal ? (
-              <>
-                <FiSave className="h-3 w-3 opacity-40" aria-hidden />
-                <FiRefreshCw className="h-3 w-3 animate-spin" aria-hidden />
-              </>
-            ) : (
-              <>
-                <FiSave className="h-3 w-3" aria-hidden />
-                <FiFolder className="h-3 w-3" aria-hidden />
-              </>
-            )}
-          </span>
-        </button>
+      <div className="mt-3 flex w-full min-w-0 shrink-0 flex-nowrap items-stretch gap-1.5 rounded-2xl border border-white/10 bg-black/30 p-2">
+        <BottomBarToolsSection
+          tools={bottomBarTools}
+          isLoading={isLoadingWorkflowTools}
+          isSavingStoryLocal={isSavingStoryLocal}
+          isToolDisabled={isBottomBarToolDisabled}
+          onRunTool={(tool) => void runBottomBarTool(tool)}
+        />
       </div>
     </section>
   )

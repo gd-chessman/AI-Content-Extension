@@ -102,6 +102,7 @@ const GUARD_HANDLERS: Record<string, (host: ToolScriptHost) => boolean> = {
     const ctx = host.legacyStepPanelContext as { hasExtractContentStep?: boolean } | undefined
     return !ctx?.hasExtractContentStep
   },
+  '!host.canSaveLocal': (host) => !host.canSaveLocal,
 }
 
 /** `guardScript` trả truthy → nút bị disabled. */
