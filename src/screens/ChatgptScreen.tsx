@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import {
   FiAlignLeft,
@@ -72,6 +72,14 @@ import {
   writeBlobToFile,
   writeUtf8File,
 } from '@/utils/localWorkspacePersistence'
+import {
+  indexChatgptStepsByAction,
+  isChatgptExtractContentStep,
+  isChatgptExtractVideosStep,
+  isChatgptGenerateImagesStep,
+  isChatgptRewriteContentStep,
+  stepDisplayLabel,
+} from '@/utils/chatgptWorkflowSteps'
 
 type BrowserTab = { id?: number; url?: string; active?: boolean; windowId?: number }
 type ExtensionChrome = {
@@ -127,27 +135,6 @@ const CHATGPT_PATTERNS = ['*://chatgpt.com/*', '*://chat.openai.com/*']
 
 const FACEBOOK_REEL_MEMORY_KEY = 'facebookReelCopiedContent'
 const CHATGPT_SELECTED_WORKFLOW_STORAGE_KEY = 'chatgptSelectedWorkflowId'
-
-/** Tiến trình tách Video 1/2: backend map `id` = step-{stepNo} hoặc chỉ khớp stepNo. */
-function isChatgptWorkflowStep2(step: { id: string; stepNo?: number }): boolean {
-  return step.id === 'step-2' || Number(step.stepNo) === 2
-}
-
-/** Ưu tiên actionType mới cho bước gộp nội dung, fallback step 1 cũ để tương thích dữ liệu hiện tại. */
-function isChatgptRewriteContentStep(step: { id: string; stepNo?: number; actionType?: string }): boolean {
-  const action = (step.actionType || '').trim().toLowerCase()
-  return action === 'chatgpt_rewrite_content'
-}
-
-function isChatgptExtractVideosStep(step: { actionType?: string }): boolean {
-  const action = (step.actionType || '').trim().toLowerCase()
-  return action === 'chatgpt_extract_content_videos'
-}
-
-function isChatgptExtractContentStep(step: { actionType?: string }): boolean {
-  const action = (step.actionType || '').trim().toLowerCase()
-  return action === 'chatgpt_extract_content'
-}
 
 /** Story mới nhất cùng StorySource (để gắn lưu videoPrompts cuối workflow). */
 async function resolveLatestStoryIdForSource(storySourceId: string): Promise<string> {
@@ -248,7 +235,7 @@ export default function ChatgptScreen() {
   const chatgptPipelineStoryIdRef = useRef('')
   /** Prompt Video 1 & 2 sau tiến trình 2 — chỉ commit DB khi workflow chạy hết. */
   const chatgptDraftVideoPromptsRef = useRef<string[] | null>(null)
-  /** Tiến trình 1: gán lúc bắt đầu workflow — mặc định story (`sourceContent`). */
+  /** Bước `chatgpt_rewrite_content`: gán lúc bắt đầu workflow — mặc định story (`sourceContent`). */
   const step1ContentSourceRef = useRef<'localstorage' | 'stories'>('stories')
   const { data: workflows = [], isLoading: isLoadingWorkflows } = useQuery<WorkflowItem[]>({
     queryKey: ['chatgpt-workflows'],
@@ -280,6 +267,12 @@ export default function ChatgptScreen() {
     },
     staleTime: 60_000,
   })
+
+  const chatgptStepsByAction = useMemo(() => indexChatgptStepsByAction(processSteps), [processSteps])
+  const rewriteStepLabel = stepDisplayLabel(chatgptStepsByAction.rewrite, 'bước viết lại nội dung')
+  const extractVideosStepLabel = stepDisplayLabel(chatgptStepsByAction.extractVideos, 'bước tách VIDEO')
+  const generateImagesStepLabel = stepDisplayLabel(chatgptStepsByAction.generateImages, 'bước tạo ảnh')
+  const extractContentStepLabel = stepDisplayLabel(chatgptStepsByAction.extractContent, 'bước trích nội dung')
 
   const getChrome = () => (globalThis as { chrome?: ExtensionChrome }).chrome
 
@@ -573,7 +566,7 @@ export default function ChatgptScreen() {
   }
 
   const runFastProcess = async (step: ProcessStep) => {
-    if (isChatgptWorkflowStep2(step)) {
+    if (isChatgptExtractVideosStep(step)) {
       setSplitImages(null)
       setCopiedPart(null)
     }
@@ -609,7 +602,7 @@ export default function ChatgptScreen() {
   }
 
   const runFillProcess = async (step: ProcessStep) => {
-    if (isChatgptWorkflowStep2(step)) {
+    if (isChatgptExtractVideosStep(step)) {
       setSplitImages(null)
       setCopiedPart(null)
     }
@@ -738,8 +731,15 @@ export default function ChatgptScreen() {
       return ''
     }
 
+    if (!chatgptStepsByAction.extractVideos) {
+      if (copyToClipboard) {
+        setStatus('Workflow chưa có bước actionType = chatgpt_extract_content_videos (hoặc chatgpt_extract_content_video).')
+      }
+      return ''
+    }
+
     if (copyToClipboard) {
-      setStatus(`Đang lấy nội dung VIDEO ${part} từ Tiến trình 2...`)
+      setStatus(`Đang lấy nội dung VIDEO ${part} từ «${extractVideosStepLabel}»...`)
     }
 
     const prefId = options?.preferredTabId
@@ -807,7 +807,7 @@ export default function ChatgptScreen() {
 
     if (!extracted) {
       if (copyToClipboard) {
-        setStatus(`Không tìm thấy nội dung VIDEO ${part}. Hãy đảm bảo đã có output Tiến trình 2 trong hội thoại.`)
+        setStatus(`Không tìm thấy nội dung VIDEO ${part}. Hãy đảm bảo đã có output «${extractVideosStepLabel}» trong hội thoại.`)
       }
       return ''
     }
@@ -829,8 +829,7 @@ export default function ChatgptScreen() {
   const executeWorkflowStep = async (step: ProcessStep) => {
     // User-required behavior: every workflow step in ChatGPT screen
     // runs exactly like "Chạy nhanh", then waits for response completion.
-    const action = (step.actionType || '').trim().toLowerCase()
-    const isGenerateImageStep = action === 'chatgpt_generate_images'
+    const isGenerateImageStep = isChatgptGenerateImagesStep(step)
     const baselineImageCount = isGenerateImageStep ? await getAssistantImageCount(lockedWorkflowTabIdRef.current || undefined) : 0
 
     const sent = await runFastProcess(step)
@@ -1069,7 +1068,7 @@ export default function ChatgptScreen() {
         }
       } else if (!storyIdToSave && step1ContentSourceRef.current === 'stories') {
         setStatus(
-          `Workflow chạy xong ${processSteps.length}/${processSteps.length} bước. Không lưu videoPrompts — chưa có story gắn nguồn (thử Lưu story trên Facebook hoặc kiểm tra Tiến trình 2 có tách được Video 1/2).`,
+          `Workflow chạy xong ${processSteps.length}/${processSteps.length} bước. Không lưu videoPrompts — chưa có story gắn nguồn (thử Lưu story trên Facebook hoặc kiểm tra «${extractVideosStepLabel}» có tách được Video 1/2).`,
         )
       } else {
         setStatus(`Workflow chạy xong ${processSteps.length}/${processSteps.length} bước.`)
@@ -1097,20 +1096,23 @@ export default function ChatgptScreen() {
     const onRunStep1FromFacebook = (event: Event) => {
       const customEvent = event as CustomEvent<{ reelContent?: string }>
       const reelContent = customEvent.detail?.reelContent?.trim() || ''
-      const step1Prompt = processSteps.find((step) => step.id === 'step-1')?.prompt || ''
-      if (!step1Prompt) {
-        setStatus('Chưa tải được prompt Tiến trình 1 từ backend.')
+      const rewritePrompt = chatgptStepsByAction.rewrite?.prompt || ''
+      if (!rewritePrompt) {
+        setStatus(`Chưa có bước «${rewriteStepLabel}» (actionType = chatgpt_rewrite_content) trong workflow.`)
         return
       }
-      const mergedPrompt = `${step1Prompt}\n\nStory:\n${reelContent}`
-      void runProcess({ label: 'Tiến trình 1', prompt: mergedPrompt }, { autoSend: false, fast: false, forceNewChat: true })
+      const mergedPrompt = `${rewritePrompt}\n\nStory:\n${reelContent}`
+      void runProcess(
+        { label: rewriteStepLabel, prompt: mergedPrompt },
+        { autoSend: false, fast: false, forceNewChat: true },
+      )
     }
 
     window.addEventListener('run-chatgpt-step1-from-facebook', onRunStep1FromFacebook as EventListener)
     return () => {
       window.removeEventListener('run-chatgpt-step1-from-facebook', onRunStep1FromFacebook as EventListener)
     }
-  }, [processSteps])
+  }, [processSteps, chatgptStepsByAction.rewrite, rewriteStepLabel])
 
   useEffect(() => {
     if (!canUseWorkflow || !processSteps.length) return
@@ -1164,17 +1166,19 @@ export default function ChatgptScreen() {
   }
 
   const fillGrokWithVideoImage = async (part: 1 | 2) => {
-    setStatus(`Đang lấy ảnh ${part} (Tiến trình 3) và nội dung VIDEO ${part} (Tiến trình 2)...`)
+    setStatus(
+      `Đang lấy ảnh ${part} («${generateImagesStepLabel}») và nội dung VIDEO ${part} («${extractVideosStepLabel}»)...`,
+    )
 
     const imageDataUrl = part === 1 ? splitImages?.left : splitImages?.right
     if (!imageDataUrl) {
-      setStatus(`Chưa có ảnh ${part} từ Tiến trình 3. Hãy bấm nút cắt ảnh trước.`)
+      setStatus(`Chưa có ảnh ${part} từ «${generateImagesStepLabel}». Hãy bấm nút cắt ảnh trước.`)
       return
     }
 
     const prompt = await extractVideoContentFromStep2(part, { copyToClipboard: false })
     if (!prompt) {
-      setStatus(`Không tìm thấy nội dung VIDEO ${part} trong output Tiến trình 2.`)
+      setStatus(`Không tìm thấy nội dung VIDEO ${part} trong output «${extractVideosStepLabel}».`)
       return
     }
 
@@ -1187,7 +1191,9 @@ export default function ChatgptScreen() {
       )
     }, 120)
 
-    setStatus(`Đã chuyển Grok: dùng ảnh ${part} (Tiến trình 3) + VIDEO ${part} (Tiến trình 2), không Enter.`)
+    setStatus(
+      `Đã chuyển Grok: ảnh ${part} («${generateImagesStepLabel}») + VIDEO ${part} («${extractVideosStepLabel}»), không Enter.`,
+    )
   }
 
   const extractStep4Content = async (
@@ -1195,10 +1201,9 @@ export default function ChatgptScreen() {
     options?: { copyToClipboard?: boolean },
   ) => {
     const copyToClipboard = options?.copyToClipboard !== false
-    const hasExtractContentAction = processSteps.some((step) => isChatgptExtractContentStep(step))
-    if (!hasExtractContentAction) {
+    if (!chatgptStepsByAction.extractContent) {
       if (copyToClipboard) {
-        setStatus('Chưa cấu hình bước actionType = chatgpt_extract_content trong workflow ChatGPT.')
+        setStatus('Workflow chưa có bước actionType = chatgpt_extract_content.')
       }
       return ''
     }
@@ -1206,7 +1211,7 @@ export default function ChatgptScreen() {
     if (!extensionChrome?.tabs?.query || !extensionChrome.scripting?.executeScript) {
       const kindLabel = getChatgptStep4ContentKindLabel(kind)
       if (copyToClipboard) {
-        setStatus(`Môi trường hiện tại không hỗ trợ lấy ${kindLabel} Tiến trình 4.`)
+        setStatus(`Môi trường hiện tại không hỗ trợ lấy ${kindLabel} từ «${extractContentStepLabel}».`)
       }
       return ''
     }
@@ -1214,7 +1219,7 @@ export default function ChatgptScreen() {
     const kindLabel = getChatgptStep4ContentKindLabel(kind)
 
     if (copyToClipboard) {
-      setStatus(`Đang lấy ${kindLabel} từ Tiến trình 4...`)
+      setStatus(`Đang lấy ${kindLabel} từ «${extractContentStepLabel}»...`)
     }
 
     const currentActive = await queryTabs(undefined, true, true)
@@ -1226,7 +1231,7 @@ export default function ChatgptScreen() {
 
     if (!target?.id) {
       if (copyToClipboard) {
-        setStatus('Không tìm thấy tab ChatGPT để lấy dữ liệu Tiến trình 4.')
+        setStatus(`Không tìm thấy tab ChatGPT để lấy dữ liệu «${extractContentStepLabel}».`)
       }
       return ''
     }
@@ -1236,7 +1241,7 @@ export default function ChatgptScreen() {
 
     if (!target?.id) {
       if (copyToClipboard) {
-        setStatus('Không thể kích hoạt tab ChatGPT để lấy dữ liệu Tiến trình 4.')
+        setStatus(`Không thể kích hoạt tab ChatGPT để lấy dữ liệu «${extractContentStepLabel}».`)
       }
       return ''
     }
@@ -1252,7 +1257,7 @@ export default function ChatgptScreen() {
     const extracted = ((result?.[0]?.result as string | undefined) || '').trim()
     if (!extracted) {
       if (copyToClipboard) {
-        setStatus(`Không tìm thấy ${kindLabel} từ output Tiến trình 4.`)
+        setStatus(`Không tìm thấy ${kindLabel} từ output «${extractContentStepLabel}».`)
       }
       return ''
     }
@@ -1263,9 +1268,9 @@ export default function ChatgptScreen() {
         const toolId = `step4-${kind}`
         setCopiedTool(toolId)
         window.setTimeout(() => setCopiedTool((prev) => (prev === toolId ? null : prev)), 1200)
-        setStatus(`Đã lấy và sao chép ${kindLabel} Tiến trình 4 vào clipboard.`)
+        setStatus(`Đã lấy và sao chép ${kindLabel} («${extractContentStepLabel}») vào clipboard.`)
       } catch {
-        setStatus(`Đã lấy ${kindLabel} Tiến trình 4 nhưng sao chép thất bại.`)
+        setStatus(`Đã lấy ${kindLabel} («${extractContentStepLabel}») nhưng sao chép thất bại.`)
       }
     }
     return extracted
@@ -1411,7 +1416,7 @@ export default function ChatgptScreen() {
 
       if (!shortText || !longText || !titlePlain) {
         setStatus(
-          'Không lấy đủ nội dung Tiến trình 4 (tiêu đề / ngắn / dài). Hãy đảm bảo đã có output bước 4 trên ChatGPT.',
+          `Không lấy đủ nội dung «${extractContentStepLabel}» (tiêu đề / ngắn / dài). Hãy đảm bảo đã có output trên ChatGPT.`,
         )
         return
       }
@@ -1420,7 +1425,7 @@ export default function ChatgptScreen() {
       let right = ''
       let usedStaleSplitFallback = false
       if (extensionChrome.tabs?.captureVisibleTab && target?.id) {
-        setStatus('Đang chụp và cắt đôi ảnh mới nhất từ ChatGPT (tiến trình 3) để lưu...')
+        setStatus(`Đang chụp và cắt đôi ảnh mới nhất từ ChatGPT («${generateImagesStepLabel}») để lưu...`)
         await snapChatgptThreadToBottomBeforeRead(target.id)
         const cap = await captureSplitPairFromChatgptTab(target.id, target.windowId)
         if (cap.ok) {
@@ -1480,7 +1485,7 @@ export default function ChatgptScreen() {
 
   const pushStep4ToWebBlog = async () => {
     if (!splitImages?.left || !splitImages?.right) {
-      setStatus('Chưa có ảnh 1/2 từ Tiến trình 3. Hãy cắt ảnh trước khi gửi WebBlog.')
+      setStatus(`Chưa có ảnh 1/2 từ «${generateImagesStepLabel}». Hãy cắt ảnh trước khi gửi WebBlog.`)
       return
     }
 
@@ -1488,7 +1493,7 @@ export default function ChatgptScreen() {
     const titlePlain = await extractStep4Content('title_plain', { copyToClipboard: false })
     const fullContent = await extractStep4Content('content_full', { copyToClipboard: false })
     if (!titlePlain || !fullContent) {
-      setStatus('Không lấy đủ dữ liệu Tiến trình 4 để gửi WebBlog.')
+      setStatus(`Không lấy đủ dữ liệu «${extractContentStepLabel}» để gửi WebBlog.`)
       return
     }
 
@@ -1523,8 +1528,12 @@ export default function ChatgptScreen() {
       setStatus('Môi trường hiện tại không hỗ trợ công cụ xử lý ảnh.')
       return
     }
+    if (!chatgptStepsByAction.generateImages) {
+      setStatus('Workflow chưa có bước actionType = chatgpt_generate_images (hoặc chatgpt_generate_image).')
+      return
+    }
 
-    setStatus('Đang lấy ảnh mới nhất từ hội thoại và cắt đôi...')
+    setStatus(`Đang lấy ảnh mới nhất («${generateImagesStepLabel}») và cắt đôi...`)
 
     const currentActive = await queryTabs(undefined, true, true)
     const activeTab = currentActive[0]
@@ -1553,7 +1562,7 @@ export default function ChatgptScreen() {
     if (!cap.ok) {
       const human: Record<Exclude<CaptureSplitPairResult, { ok: true }>['reason'], string> = {
         unsupported: 'Môi trường hiện tại không hỗ trợ chụp tab.',
-        no_rect: 'Không tìm thấy ảnh phù hợp từ hội thoại (tiến trình 3).',
+        no_rect: `Không tìm thấy ảnh phù hợp từ hội thoại («${generateImagesStepLabel}»).`,
         no_screenshot: 'Không thể chụp ảnh màn hình tab ChatGPT.',
         split_failed: 'Không thể tách ảnh thành 2 phần.',
         exception: 'Xử lý ảnh thất bại. Hãy thử lại.',
@@ -1705,7 +1714,11 @@ export default function ChatgptScreen() {
                     }}
                     disabled={isLoadingProcessSteps || !step.prompt}
                     className="inline-flex h-7 w-full cursor-pointer items-center justify-center rounded-md bg-emerald-500/25 text-emerald-100 transition hover:bg-emerald-500/35 disabled:cursor-not-allowed disabled:opacity-40"
-                    title={step.id === 'step-1' ? 'Tiến trình 1 + bản nhớ tạm mới nhất, tự Enter' : 'Chạy nhanh và tự Enter'}
+                    title={
+                      isChatgptRewriteContentStep(step)
+                        ? `${step.label} + bản nhớ tạm mới nhất, tự Enter`
+                        : 'Chạy nhanh và tự Enter'
+                    }
                   >
                     <IoFlash className="h-3.5 w-3.5 text-emerald-300" />
                   </button>
@@ -1717,7 +1730,11 @@ export default function ChatgptScreen() {
                     }}
                     disabled={isLoadingProcessSteps || !step.prompt}
                     className="inline-flex h-7 w-full cursor-pointer items-center justify-center rounded-md bg-amber-500/20 text-amber-100 transition hover:bg-amber-500/30 disabled:cursor-not-allowed disabled:opacity-40"
-                    title={step.id === 'step-1' ? 'Tiến trình 1 + bản nhớ tạm mới nhất, không Enter' : 'Điền prompt, không Enter'}
+                    title={
+                      isChatgptRewriteContentStep(step)
+                        ? `${step.label} + bản nhớ tạm mới nhất, không Enter`
+                        : 'Điền prompt, không Enter'
+                    }
                   >
                     <FiEdit3 className="h-3.5 w-3.5 text-amber-300" />
                   </button>
@@ -1736,8 +1753,9 @@ export default function ChatgptScreen() {
               <button
                 type="button"
                 onClick={() => void extractAndSplitLatestImageFromStep3()}
-                className="col-span-2 inline-flex cursor-pointer items-center justify-center rounded-md bg-blue-500/25 px-2 py-1.5 text-blue-100 transition hover:bg-blue-500/35"
-                title="Lấy ảnh từ tiến trình 3 và cắt đôi"
+                className="col-span-2 inline-flex cursor-pointer items-center justify-center rounded-md bg-blue-500/25 px-2 py-1.5 text-blue-100 transition hover:bg-blue-500/35 disabled:cursor-not-allowed disabled:opacity-40"
+                title={`Lấy ảnh từ «${generateImagesStepLabel}» và cắt đôi`}
+                disabled={!chatgptStepsByAction.generateImages}
               >
                 <FiScissors className="h-4 w-4" />
               </button>
@@ -1778,8 +1796,9 @@ export default function ChatgptScreen() {
               <button
                 type="button"
                 onClick={() => void extractVideoContentFromStep2(1)}
-                className="inline-flex cursor-pointer items-center justify-center rounded-md bg-blue-500/20 px-2 py-1.5 text-blue-100 transition hover:bg-blue-500/30"
-                title="Lấy nội dung VIDEO 1 (Tiến trình 2)"
+                className="inline-flex cursor-pointer items-center justify-center rounded-md bg-blue-500/20 px-2 py-1.5 text-blue-100 transition hover:bg-blue-500/30 disabled:cursor-not-allowed disabled:opacity-40"
+                title={`Lấy nội dung VIDEO 1 («${extractVideosStepLabel}»)`}
+                disabled={!chatgptStepsByAction.extractVideos}
               >
                 <span className="relative inline-flex items-center justify-center">
                   <FiFilm className="h-3.5 w-3.5" />
@@ -1794,8 +1813,9 @@ export default function ChatgptScreen() {
               <button
                 type="button"
                 onClick={() => void extractVideoContentFromStep2(2)}
-                className="inline-flex cursor-pointer items-center justify-center rounded-md bg-blue-500/20 px-2 py-1.5 text-blue-100 transition hover:bg-blue-500/30"
-                title="Lấy nội dung VIDEO 2 (Tiến trình 2)"
+                className="inline-flex cursor-pointer items-center justify-center rounded-md bg-blue-500/20 px-2 py-1.5 text-blue-100 transition hover:bg-blue-500/30 disabled:cursor-not-allowed disabled:opacity-40"
+                title={`Lấy nội dung VIDEO 2 («${extractVideosStepLabel}»)`}
+                disabled={!chatgptStepsByAction.extractVideos}
               >
                 <span className="relative inline-flex items-center justify-center">
                   <FiFilm className="h-3.5 w-3.5" />
@@ -1810,8 +1830,9 @@ export default function ChatgptScreen() {
               <button
                 type="button"
                 onClick={() => void extractStep4Content('title_plain')}
-                className="inline-flex cursor-pointer items-center justify-center rounded-md bg-violet-500/20 px-2 py-1.5 text-violet-100 transition hover:bg-violet-500/30"
-                title="Lấy tiêu đề thường (Tiến trình 4)"
+                className="inline-flex cursor-pointer items-center justify-center rounded-md bg-violet-500/20 px-2 py-1.5 text-violet-100 transition hover:bg-violet-500/30 disabled:cursor-not-allowed disabled:opacity-40"
+                title={`Lấy tiêu đề thường («${extractContentStepLabel}»)`}
+                disabled={!chatgptStepsByAction.extractContent}
               >
                 <span className="relative inline-flex items-center justify-center">
                   <FiType className="h-3.5 w-3.5" />
@@ -1823,8 +1844,9 @@ export default function ChatgptScreen() {
               <button
                 type="button"
                 onClick={() => void extractStep4Content('title_styled')}
-                className="inline-flex cursor-pointer items-center justify-center rounded-md bg-violet-500/20 px-2 py-1.5 text-violet-100 transition hover:bg-violet-500/30"
-                title="Lấy tiêu đề font kiểu (Tiến trình 4)"
+                className="inline-flex cursor-pointer items-center justify-center rounded-md bg-violet-500/20 px-2 py-1.5 text-violet-100 transition hover:bg-violet-500/30 disabled:cursor-not-allowed disabled:opacity-40"
+                title={`Lấy tiêu đề font kiểu («${extractContentStepLabel}»)`}
+                disabled={!chatgptStepsByAction.extractContent}
               >
                 <span className="relative inline-flex items-center justify-center">
                   <FiItalic className="h-3.5 w-3.5" />
@@ -1836,8 +1858,9 @@ export default function ChatgptScreen() {
               <button
                 type="button"
                 onClick={() => void extractStep4Content('content_short')}
-                className="inline-flex cursor-pointer items-center justify-center rounded-md bg-fuchsia-500/20 px-2 py-1.5 text-fuchsia-100 transition hover:bg-fuchsia-500/30"
-                title="Lấy nội dung ngắn có dấu hỏi (Tiến trình 4)"
+                className="inline-flex cursor-pointer items-center justify-center rounded-md bg-fuchsia-500/20 px-2 py-1.5 text-fuchsia-100 transition hover:bg-fuchsia-500/30 disabled:cursor-not-allowed disabled:opacity-40"
+                title={`Lấy nội dung ngắn có dấu hỏi («${extractContentStepLabel}»)`}
+                disabled={!chatgptStepsByAction.extractContent}
               >
                 <span className="relative inline-flex items-center justify-center">
                   <FiAlignLeft className="h-3.5 w-3.5" />
@@ -1849,8 +1872,9 @@ export default function ChatgptScreen() {
               <button
                 type="button"
                 onClick={() => void extractStep4Content('content_full')}
-                className="inline-flex cursor-pointer items-center justify-center rounded-md bg-fuchsia-500/20 px-2 py-1.5 text-fuchsia-100 transition hover:bg-fuchsia-500/30"
-                title="Lấy nội dung toàn bộ (Tiến trình 4)"
+                className="inline-flex cursor-pointer items-center justify-center rounded-md bg-fuchsia-500/20 px-2 py-1.5 text-fuchsia-100 transition hover:bg-fuchsia-500/30 disabled:cursor-not-allowed disabled:opacity-40"
+                title={`Lấy nội dung toàn bộ («${extractContentStepLabel}»)`}
+                disabled={!chatgptStepsByAction.extractContent}
               >
                 <span className="relative inline-flex items-center justify-center">
                   <FiFileText className="h-3.5 w-3.5" />
