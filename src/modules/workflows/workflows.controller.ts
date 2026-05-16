@@ -18,6 +18,12 @@ export class WorkflowsController {
     return this.workflowsService.listForUser(platform);
   }
 
+  @Get('user/:id/tools')
+  @Roles(UserRole.USER, UserRole.USER_VIP, UserRole.ADMIN)
+  getToolsForUser(@Param('id') id: string) {
+    return this.workflowsService.getToolsForUser(id);
+  }
+
   @Get('user/:id')
   @Roles(UserRole.USER, UserRole.USER_VIP, UserRole.ADMIN)
   getDetailForUser(@Param('id') id: string) {

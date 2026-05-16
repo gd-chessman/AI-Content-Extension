@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
+import { StepToolsService } from '../step-tools/step-tools.service';
 import { Step, StepDocument } from '../steps/step.schema';
 import { CreateWorkflowDto, UpdateWorkflowDto } from './workflows.dto';
 import {
@@ -18,6 +19,7 @@ export class WorkflowsService {
     private readonly workflowModel: Model<WorkflowDocument>,
     @InjectModel(Step.name)
     private readonly stepModel: Model<StepDocument>,
+    private readonly stepToolsService: StepToolsService,
   ) {}
 
   async list() {
@@ -62,6 +64,23 @@ export class WorkflowsService {
 
     return {
       ...workflow,
+      steps,
+    };
+  }
+
+  async getToolsForUser(id: string) {
+    this.assertObjectId(id, 'Invalid workflow id.');
+    const workflow = await this.workflowModel
+      .findOne({ _id: id, status: WorkflowStatus.ACTIVE })
+      .lean();
+    if (!workflow) {
+      throw new NotFoundException('Workflow not found.');
+    }
+
+    const steps = await this.stepToolsService.listByWorkflowId(id, true);
+
+    return {
+      workflowId: String(workflow._id),
       steps,
     };
   }
