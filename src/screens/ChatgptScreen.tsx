@@ -46,6 +46,9 @@ import {
 import { chatgptExtractContent } from '@/utils/chatgptExtractContent'
 import {
   chatgptExtractVideoBlockPageScript,
+  chatgptScrollToVideoBlockPageScript,
+  chatgptWarmThreadScrollContainersPageScript,
+  chatgptScrollHighlightStep4ContentPageScript,
   getChatgptStep4ContentKindLabel,
   injectImagesIntoLongContent,
 } from '@/utils/chatgptContentProcessing'
@@ -779,7 +782,11 @@ export default function ChatgptScreen() {
       return ''
     }
 
-    await snapChatgptThreadToBottomBeforeRead(target.id)
+    await extensionChrome.scripting.executeScript({
+      target: { tabId: target.id },
+      func: chatgptWarmThreadScrollContainersPageScript as (...args: unknown[]) => unknown,
+    })
+    await sleep(140)
 
     const maxVideoExtractAttempts = 3
     let extracted = ''
@@ -789,7 +796,15 @@ export default function ChatgptScreen() {
         await updateTab(target.id)
         await sleep(420)
         await snapChatgptThreadToBottomBeforeRead(target.id)
+        await sleep(200)
       }
+
+      await extensionChrome.scripting.executeScript({
+        target: { tabId: target.id },
+        func: chatgptScrollToVideoBlockPageScript as (...args: unknown[]) => unknown,
+        args: [part],
+      })
+      await sleep(copyToClipboard ? 380 : 140)
 
       const result = await extensionChrome.scripting.executeScript({
         target: { tabId: target.id },
@@ -1246,7 +1261,18 @@ export default function ChatgptScreen() {
       return ''
     }
 
-    await snapChatgptThreadToBottomBeforeRead(target.id)
+    await extensionChrome.scripting.executeScript({
+      target: { tabId: target.id },
+      func: chatgptWarmThreadScrollContainersPageScript as (...args: unknown[]) => unknown,
+    })
+    await sleep(140)
+
+    await extensionChrome.scripting.executeScript({
+      target: { tabId: target.id },
+      func: chatgptScrollHighlightStep4ContentPageScript as (...args: unknown[]) => unknown,
+      args: [kind],
+    })
+    await sleep(copyToClipboard ? 380 : 140)
 
     const result = await extensionChrome.scripting.executeScript({
       target: { tabId: target.id },

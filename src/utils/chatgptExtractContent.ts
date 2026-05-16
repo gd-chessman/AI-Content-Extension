@@ -173,7 +173,10 @@ export function chatgptExtractContent(...args: unknown[]): ChatgptExtractContent
 
   if (!raw) return mode === 'collect' ? null : ''
 
-  matchedAssistantNode?.scrollIntoView({ block: 'start', behavior: 'instant' })
+  /** Clipboard: ChatgptScreen đã cuộn + highlight trước — scroll lại cả bubble gây giật. */
+  if (mode === 'collect') {
+    matchedAssistantNode?.scrollIntoView({ block: 'start', behavior: 'instant' })
+  }
 
   const plainTitle = pickTitle(raw)
   const styledTitle = stylizeTitle(plainTitle)
