@@ -18,6 +18,7 @@ import {
   FiRefreshCw,
   FiSave,
   FiScissors,
+  FiSettings,
   FiSquare,
   FiType,
 } from 'react-icons/fi'
@@ -1612,8 +1613,9 @@ export default function ChatgptScreen() {
 
   return (
     <section className="glass-panel flex h-full min-h-0 flex-col rounded-3xl p-4">
-      <div className="mb-2 shrink-0 rounded-xl border border-white/10 bg-black/30 p-1.5">
-        <div className="flex gap-1 overflow-x-auto px-0.5 py-0.5">
+      <div className="mb-2 flex shrink-0 items-center gap-2">
+        <div className="min-w-0 flex-1 rounded-xl border border-white/10 bg-black/30 p-1.5">
+          <div className="flex gap-1 overflow-x-auto px-0.5 py-0.5">
           {workflows.map((workflow, idx) => (
             <button
               key={workflow._id}
@@ -1636,7 +1638,16 @@ export default function ChatgptScreen() {
           {!isLoadingWorkflows && workflows.length === 0 ? (
             <span className="rounded-lg bg-white/10 px-2 py-1 text-[10px] text-slate-400">--</span>
           ) : null}
+          </div>
         </div>
+        <button
+          type="button"
+          className="inline-flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-lg border border-white/10 bg-black/30 text-slate-300 transition hover:bg-blue-500/20 hover:text-blue-100"
+          title="Cài đặt workflow"
+          aria-label="Cài đặt workflow"
+        >
+          <FiSettings className="h-3.5 w-3.5" />
+        </button>
       </div>
       <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_92px] gap-3">
         <div className="flex min-h-0 flex-col rounded-2xl border border-white/10 bg-black/30 p-3">
