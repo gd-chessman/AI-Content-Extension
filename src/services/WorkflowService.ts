@@ -1,4 +1,5 @@
 import axiosClient from '@/utils/axiosClient'
+import type { WorkflowStepToolsGroup } from '@/services/StepToolService'
 
 export type WorkflowItem = {
   _id: string
@@ -24,6 +25,12 @@ export type WorkflowDetail = WorkflowItem & {
   steps: WorkflowStep[]
 }
 
+export type WorkflowToolsDetail = {
+  workflowId: string
+  /** Tool đã gắn từng step qua `step_tools` (rỗng nếu chưa gắn). */
+  steps: WorkflowStepToolsGroup[]
+}
+
 export const getUserWorkflows = async (params?: {
   platform?: 'chatgpt' | 'grok' | 'facebook' | 'webblog' | 'ggsheet' | 'multi'
 }) => {
@@ -36,6 +43,11 @@ export const getUserWorkflows = async (params?: {
 export const getUserWorkflowDetail = async (workflowId: string) => {
   const response = await axiosClient.get(`/workflows/user/${workflowId}`)
   return response.data as WorkflowDetail
+}
+
+export const getUserWorkflowTools = async (workflowId: string) => {
+  const response = await axiosClient.get(`/workflows/user/${workflowId}/tools`)
+  return response.data as WorkflowToolsDetail
 }
 
 export type WorkflowRunStatus = 'queued' | 'running' | 'waiting' | 'completed' | 'failed' | 'cancelled'

@@ -8,6 +8,7 @@ import {
   FiDownload,
   FiEdit3,
   FiFileText,
+  FiGrid,
   FiLayers,
   FiFilm,
   FiFolder,
@@ -31,6 +32,7 @@ import {
   createStepRun,
   createWorkflowRun,
   getUserWorkflowDetail,
+  getUserWorkflowTools,
   getUserWorkflows,
   getWorkflowRunById,
   type WorkflowItem,
@@ -76,6 +78,20 @@ import {
   writeBlobToFile,
   writeUtf8File,
 } from '@/utils/localWorkspacePersistence'
+import type { StepToolLink } from '@/services/StepToolService'
+import { fetchToolHandler } from '@/services/ToolHandlerService'
+import {
+  buildWorkflowStepPanelComparison,
+  getStepPanelBadgeLabel,
+  type ResolvedStepPanelTool,
+  type StepPanelIconKey,
+  type StepPanelToolComparison,
+} from '@/utils/chatgptStepPanelTools'
+import {
+  isToolDisabledByGuardScript,
+  runToolHandlerScript,
+  type ToolScriptHost,
+} from '@/utils/toolScriptRunner'
 import {
   indexChatgptStepsByAction,
   isChatgptExtractContentStep,
@@ -212,7 +228,100 @@ type ProcessStep = {
   stepNo: number
   actionType: string
   inputSchema: Record<string, unknown>
+  tools?: StepToolLink[]
 }
+
+const STEP_PANEL_ICONS: Record<StepPanelIconKey, typeof FiScissors> = {
+  scissors: FiScissors,
+  image: FiImage,
+  film: FiFilm,
+  type: FiType,
+  italic: FiItalic,
+  alignLeft: FiAlignLeft,
+  fileText: FiFileText,
+}
+
+type StepPanelToolsSectionProps = {
+  comparison: StepPanelToolComparison
+  copiedTool: string | null
+  copiedPart: 'left' | 'right' | null
+  getOwnerStep: (tool: ResolvedStepPanelTool) => ProcessStep | undefined
+  isToolDisabled: (tool: ResolvedStepPanelTool, step: ProcessStep) => boolean
+  onRunTool: (tool: ResolvedStepPanelTool) => void
+}
+
+function StepPanelToolsSection({
+  comparison,
+  copiedTool,
+  copiedPart,
+  getOwnerStep,
+  isToolDisabled,
+  onRunTool,
+}: StepPanelToolsSectionProps) {
+  if (!comparison.display.length) {
+    return (
+      <div className="grid grid-cols-2 gap-1">
+        {[0, 1].map((slot) => (
+          <div
+            key={slot}
+            className="inline-flex h-6.5 cursor-default items-center justify-center rounded-md border border-dashed border-white/15 bg-white/5 text-slate-600"
+            aria-hidden
+          >
+            <FiGrid className="h-3.5 w-3.5 opacity-30" />
+          </div>
+        ))}
+      </div>
+    )
+  }
+
+  return (
+    <div className="grid grid-cols-2 gap-1">
+      {comparison.display.map((tool) => {
+        const ownerStep = getOwnerStep(tool)
+        if (!ownerStep) return null
+        const Icon = STEP_PANEL_ICONS[tool.ui.icon]
+        const disabled = isToolDisabled(tool, ownerStep)
+        const badge = getStepPanelBadgeLabel(tool.config, tool.ui)
+        const showCopyBadge = tool.ui.showCopyBadge === true
+        const copied =
+          copiedTool === tool.ui.copiedToolId ||
+          (tool.ui.copiedToolId.startsWith('image-') && copiedPart === tool.config.part)
+
+        return (
+          <button
+            key={`${tool.ownerStepId}-${tool.toolId}`}
+            type="button"
+            onClick={() => onRunTool(tool)}
+            disabled={disabled}
+            className={`inline-flex h-6.5 w-full cursor-pointer items-center justify-center rounded-md transition disabled:cursor-not-allowed disabled:opacity-40 ${tool.ui.buttonClass} ${
+              tool.ui.colSpan === 2 ? 'col-span-2' : ''
+            }`}
+            title={tool.name}
+          >
+            <span className="relative inline-flex items-center justify-center">
+              <Icon className="h-3.5 w-3.5" />
+              {badge ? (
+                <span
+                  className={`absolute -right-1.5 -top-1.5 inline-flex h-3 min-w-3 items-center justify-center rounded-full px-0.5 text-[7px] font-bold leading-none text-white ${tool.ui.badgeClass}`}
+                >
+                  {badge}
+                </span>
+              ) : null}
+              {showCopyBadge ? (
+                <span
+                  className={`absolute -left-1.5 -bottom-1.5 inline-flex h-2 min-w-2 items-center justify-center rounded-full px-0 text-[5px] font-bold leading-none text-white ${tool.ui.badgeClass}`}
+                >
+                  {copied ? <FiCheck className="h-1.5 w-1.5" /> : <FiCopy className="h-1.5 w-1.5" />}
+                </span>
+              ) : null}
+            </span>
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
 
 export default function ChatgptScreen() {
   const refreshRoleOnly = useAuth((s) => s.refreshRoleOnly)
@@ -246,37 +355,96 @@ export default function ChatgptScreen() {
     queryFn: async () => await getUserWorkflows({ platform: 'chatgpt' }),
     staleTime: 60_000,
   })
-  const { data: processSteps = [], isLoading: isLoadingProcessSteps } = useQuery<ProcessStep[]>({
-    queryKey: ['chatgpt-process-steps', selectedWorkflowId],
+  const { data: workflowDetail, isLoading: isLoadingWorkflowDetail } = useQuery({
+    queryKey: ['chatgpt-workflow-detail', selectedWorkflowId],
     enabled: Boolean(selectedWorkflowId),
     queryFn: async () => {
       const target = workflows.find((workflow) => workflow._id === selectedWorkflowId) || null
-      if (!target?._id) return []
-      const detail = await getUserWorkflowDetail(target._id)
-      return (detail.steps || [])
-        .slice()
-        .sort((a, b) => (a.stepNo || 0) - (b.stepNo || 0))
-        .map((step) => ({
-          id: `step-${step.stepNo}`,
-          label: (step.title || '').trim() || `Tiến trình ${step.stepNo}`,
-          prompt: (step.prompt || step.instruction || '').trim(),
-          workflowId: target._id,
-          workflowPlatform: (target.platform || 'multi').trim().toLowerCase(),
-          backendStepId: (step._id || '').trim(),
-          stepNo: Number(step.stepNo) || 0,
-          actionType: (step.actionType || 'custom').trim(),
-          inputSchema: (step.inputSchema || {}) as Record<string, unknown>,
-        }))
-        .filter((step) => step.prompt && step.backendStepId && step.workflowId)
+      if (!target?._id) return null
+      return await getUserWorkflowDetail(target._id)
     },
     staleTime: 60_000,
   })
+
+  const { data: workflowTools, isLoading: isLoadingWorkflowTools } = useQuery({
+    queryKey: ['chatgpt-workflow-tools', selectedWorkflowId],
+    enabled: Boolean(selectedWorkflowId),
+    queryFn: async () => await getUserWorkflowTools(selectedWorkflowId),
+    staleTime: 60_000,
+  })
+
+  const isLoadingProcessSteps = isLoadingWorkflowDetail || isLoadingWorkflowTools
+
+  const toolsByStepId = useMemo(() => {
+    const map = new Map<string, StepToolLink[]>()
+    for (const group of workflowTools?.steps ?? []) {
+      map.set(
+        group.stepId,
+        (group.tools || []).filter((link) => link.isActive !== false),
+      )
+    }
+    return map
+  }, [workflowTools])
+
+  const processSteps = useMemo<ProcessStep[]>(() => {
+    const target = workflows.find((workflow) => workflow._id === selectedWorkflowId) || null
+    if (!target?._id || !workflowDetail?.steps?.length) return []
+    return workflowDetail.steps
+      .slice()
+      .sort((a, b) => (a.stepNo || 0) - (b.stepNo || 0))
+      .map((step) => ({
+        id: `step-${step.stepNo}`,
+        label: (step.title || '').trim() || `Tiến trình ${step.stepNo}`,
+        prompt: (step.prompt || step.instruction || '').trim(),
+        workflowId: target._id,
+        workflowPlatform: (target.platform || 'multi').trim().toLowerCase(),
+        backendStepId: (step._id || '').trim(),
+        stepNo: Number(step.stepNo) || 0,
+        actionType: (step.actionType || 'custom').trim(),
+        inputSchema: (step.inputSchema || {}) as Record<string, unknown>,
+        tools: toolsByStepId.get((step._id || '').trim()) ?? [],
+      }))
+      .filter((step) => step.prompt && step.backendStepId && step.workflowId)
+  }, [workflowDetail, workflows, selectedWorkflowId, toolsByStepId])
 
   const chatgptStepsByAction = useMemo(() => indexChatgptStepsByAction(processSteps), [processSteps])
   const rewriteStepLabel = stepDisplayLabel(chatgptStepsByAction.rewrite, 'bước viết lại nội dung')
   const extractVideosStepLabel = stepDisplayLabel(chatgptStepsByAction.extractVideos, 'bước tách VIDEO')
   const generateImagesStepLabel = stepDisplayLabel(chatgptStepsByAction.generateImages, 'bước tạo ảnh')
   const extractContentStepLabel = stepDisplayLabel(chatgptStepsByAction.extractContent, 'bước trích nội dung')
+
+  const legacyStepPanelContext = useMemo(
+    () => ({
+      hasGenerateImagesStep: Boolean(chatgptStepsByAction.generateImages),
+      hasExtractVideosStep: Boolean(chatgptStepsByAction.extractVideos),
+      hasExtractContentStep: Boolean(chatgptStepsByAction.extractContent),
+    }),
+    [chatgptStepsByAction],
+  )
+
+  const selectedProcessStep = useMemo(
+    () => processSteps.find((step) => step.id === selectedStepId) || null,
+    [processSteps, selectedStepId],
+  )
+
+  const workflowStepPanelComparison = useMemo(
+    () =>
+      buildWorkflowStepPanelComparison(
+        processSteps.map((step) => ({
+          ownerStepId: step.backendStepId,
+          tools: step.tools ?? [],
+        })),
+      ),
+    [processSteps],
+  )
+
+  const processStepByBackendId = useMemo(() => {
+    const map = new Map<string, ProcessStep>()
+    for (const step of processSteps) {
+      map.set(step.backendStepId, step)
+    }
+    return map
+  }, [processSteps])
 
   const getChrome = () => (globalThis as { chrome?: ExtensionChrome }).chrome
 
@@ -724,7 +892,7 @@ export default function ChatgptScreen() {
     return false
   }
 
-  const extractVideoContentFromStep2 = async (
+  const extractVideoContent = async (
     part: 1 | 2,
     options?: { copyToClipboard?: boolean; preferredTabId?: number },
   ) => {
@@ -871,8 +1039,8 @@ export default function ChatgptScreen() {
 
     if (isChatgptExtractVideosStep(step)) {
       const pref = lockedWorkflowTabIdRef.current || undefined
-      const pv1 = await extractVideoContentFromStep2(1, { copyToClipboard: false, preferredTabId: pref })
-      const pv2 = await extractVideoContentFromStep2(2, { copyToClipboard: false, preferredTabId: pref })
+      const pv1 = await extractVideoContent(1, { copyToClipboard: false, preferredTabId: pref })
+      const pv2 = await extractVideoContent(2, { copyToClipboard: false, preferredTabId: pref })
       chatgptDraftVideoPromptsRef.current = [pv1, pv2]
       setStatus(
         `${step.label}: Đã lấy VIDEO 1 & 2 (cùng logic công cụ trên màn hình; lưu DB khi workflow xong).`,
@@ -1192,7 +1360,7 @@ export default function ChatgptScreen() {
       return
     }
 
-    const prompt = await extractVideoContentFromStep2(part, { copyToClipboard: false })
+    const prompt = await extractVideoContent(part, { copyToClipboard: false })
     if (!prompt) {
       setStatus(`Không tìm thấy nội dung VIDEO ${part} trong output «${extractVideosStepLabel}».`)
       return
@@ -1212,7 +1380,7 @@ export default function ChatgptScreen() {
     )
   }
 
-  const extractStep4Content = async (
+  const extractThreadContent = async (
     kind: 'title_plain' | 'title_styled' | 'content_short' | 'content_full',
     options?: { copyToClipboard?: boolean },
   ) => {
@@ -1418,7 +1586,7 @@ export default function ChatgptScreen() {
         setStatus(
           'Chưa gắn story trên hệ thống (reel/Hồ sơ) — đang lấy tiêu đề bước 4 trên ChatGPT để đặt tên thư mục...',
         )
-        titlePlain = (await extractStep4Content('title_plain', { copyToClipboard: false })).trim()
+        titlePlain = (await extractThreadContent('title_plain', { copyToClipboard: false })).trim()
         if (!titlePlain) {
           setStatus(
             'Không đặt tên thư mục được: chưa có story trên API và không đọc được tiêu đề từ ChatGPT. Gợi ý: chạy workflow với bước 1 nguồn «story», hoặc hoàn thành bước 4 có block tiêu đề.',
@@ -1435,10 +1603,10 @@ export default function ChatgptScreen() {
 
       const dirs = await ensureStoryWorkspaceLayout(root, storiesSeg, storyCtx.folderSegment)
 
-      const shortText = await extractStep4Content('content_short', { copyToClipboard: false })
-      const longText = await extractStep4Content('content_full', { copyToClipboard: false })
+      const shortText = await extractThreadContent('content_short', { copyToClipboard: false })
+      const longText = await extractThreadContent('content_full', { copyToClipboard: false })
       if (!titlePlain) {
-        titlePlain = (await extractStep4Content('title_plain', { copyToClipboard: false })).trim()
+        titlePlain = (await extractThreadContent('title_plain', { copyToClipboard: false })).trim()
       }
 
       if (!shortText || !longText || !titlePlain) {
@@ -1510,15 +1678,15 @@ export default function ChatgptScreen() {
     }
   }
 
-  const pushStep4ToWebBlog = async () => {
+  const pushThreadToWebBlog = async () => {
     if (!splitImages?.left || !splitImages?.right) {
       setStatus(`Chưa có ảnh 1/2 từ «${generateImagesStepLabel}». Hãy cắt ảnh trước khi gửi WebBlog.`)
       return
     }
 
     setStatus('Đang lấy tiêu đề thường + nội dung dài và ghép ảnh ngẫu nhiên cho WebBlog...')
-    const titlePlain = await extractStep4Content('title_plain', { copyToClipboard: false })
-    const fullContent = await extractStep4Content('content_full', { copyToClipboard: false })
+    const titlePlain = await extractThreadContent('title_plain', { copyToClipboard: false })
+    const fullContent = await extractThreadContent('content_full', { copyToClipboard: false })
     if (!titlePlain || !fullContent) {
       setStatus(`Không lấy đủ dữ liệu «${extractContentStepLabel}» để gửi WebBlog.`)
       return
@@ -1549,7 +1717,7 @@ export default function ChatgptScreen() {
     setStatus('Đã chuyển sang GGSheet và bắt đầu gom dữ liệu từ ChatGPT.')
   }
 
-  const extractAndSplitLatestImageFromStep3 = async () => {
+  const captureAndSplitLatestImage = async () => {
     const extensionChrome = getChrome()
     if (!extensionChrome?.tabs?.query || !extensionChrome.scripting?.executeScript || !extensionChrome.tabs.captureVisibleTab) {
       setStatus('Môi trường hiện tại không hỗ trợ công cụ xử lý ảnh.')
@@ -1601,7 +1769,67 @@ export default function ChatgptScreen() {
     setStatus('Đã lấy và cắt đôi ảnh thành công. Có thể sao chép ảnh 1/2.')
   }
 
-  const selectedStep = processSteps.find((step) => step.id === selectedStepId) || null
+  const stepPanelToolHost = useMemo<ToolScriptHost>(
+    () => ({
+      legacyStepPanelContext,
+      splitImages,
+      captureAndSplitLatestImage,
+      copySplitImage: async (part: 'left' | 'right') => {
+        const dataUrl = part === 'left' ? splitImages?.left : splitImages?.right
+        if (dataUrl) {
+          await copyImageDataUrl(dataUrl, `ảnh ${part === 'left' ? '1' : '2'}`, part)
+        }
+      },
+      extractVideoContent: (part: 1 | 2) => extractVideoContent(part),
+      extractThreadContent: (mode: 'title_plain' | 'title_styled' | 'content_short' | 'content_full') =>
+        extractThreadContent(mode),
+    }),
+    [
+      legacyStepPanelContext,
+      splitImages,
+      captureAndSplitLatestImage,
+      copyImageDataUrl,
+      extractVideoContent,
+      extractThreadContent,
+    ],
+  )
+
+  const buildStepGuardHost = (step: ProcessStep): ToolScriptHost => ({
+    ...stepPanelToolHost,
+    currentStep: step,
+    stepIsExtractVideos: () =>
+      isChatgptExtractVideosStep(step) || Boolean(legacyStepPanelContext.hasExtractVideosStep),
+    stepIsGenerateImages: () =>
+      isChatgptGenerateImagesStep(step) || Boolean(legacyStepPanelContext.hasGenerateImagesStep),
+    stepIsExtractContent: () =>
+      isChatgptExtractContentStep(step) || Boolean(legacyStepPanelContext.hasExtractContentStep),
+  })
+
+  const isStepPanelToolDisabled = (tool: ResolvedStepPanelTool, step: ProcessStep) => {
+    if (
+      (tool.code === 'chatgpt_copy_video_1' || tool.code === 'chatgpt_copy_video_2') &&
+      isChatgptExtractVideosStep(step)
+    ) {
+      return false
+    }
+    return isToolDisabledByGuardScript(tool.guardScript, buildStepGuardHost(step), tool.config)
+  }
+
+  const runStepPanelTool = async (tool: ResolvedStepPanelTool) => {
+    try {
+      const payload = await fetchToolHandler(tool.toolId)
+      const config = {
+        ...(payload.defaultConfig || {}),
+        ...tool.config,
+      }
+      await runToolHandlerScript(payload.handlerScript, stepPanelToolHost, config)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Chạy công cụ thất bại.'
+      setStatus(message)
+    }
+  }
+
+  const selectedStep = selectedProcessStep
   const statusLower = status.toLowerCase()
   const statusTone = statusLower.includes('không thể') || statusLower.includes('không tìm thấy') || statusLower.includes('thất bại') || statusLower.includes('lỗi')
     ? 'error'
@@ -1725,58 +1953,58 @@ export default function ChatgptScreen() {
               )}
             </div>
           ) : null}
-          <div className="min-h-0 space-y-1.5 overflow-y-auto pr-0.5">
+          <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto pr-0.5">
             {processSteps.map((step) => (
-              <div key={step.id} className="rounded-xl border border-white/10 bg-white/5 p-1.5">
-                <button
-                  type="button"
-                  onClick={() => setSelectedStepId(step.id)}
-                  className={`inline-flex h-8 w-full cursor-pointer items-center justify-center gap-1 rounded-lg transition ${
-                    selectedStepId === step.id
-                      ? 'bg-blue-500/25 text-blue-100 ring-1 ring-blue-300/40'
-                      : 'bg-white/10 text-slate-200 hover:bg-white/20'
-                  }`}
-                  title={`Xem chi tiết ${step.label}`}
-                >
-                  <span className="inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-blue-500 px-1 text-[9px] font-bold leading-none text-white">
-                    {step.id.replace('step-', '')}
-                  </span>
-                </button>
-                <div className="mt-1.5 grid grid-cols-2 gap-1.5">
+                <div key={step.id} className="rounded-xl border border-white/10 bg-white/5 p-1.5">
                   <button
                     type="button"
-                    onClick={() => {
-                      setSelectedStepId(step.id)
-                      void runFastProcess(step)
-                    }}
-                    disabled={isLoadingProcessSteps || !step.prompt}
-                    className="inline-flex h-7 w-full cursor-pointer items-center justify-center rounded-md bg-emerald-500/25 text-emerald-100 transition hover:bg-emerald-500/35 disabled:cursor-not-allowed disabled:opacity-40"
-                    title={
-                      isChatgptRewriteContentStep(step)
-                        ? `${step.label} + bản nhớ tạm mới nhất, tự Enter`
-                        : 'Chạy nhanh và tự Enter'
-                    }
+                    onClick={() => setSelectedStepId(step.id)}
+                    className={`inline-flex h-8 w-full cursor-pointer items-center justify-center gap-1 rounded-lg transition ${
+                      selectedStepId === step.id
+                        ? 'bg-blue-500/25 text-blue-100 ring-1 ring-blue-300/40'
+                        : 'bg-white/10 text-slate-200 hover:bg-white/20'
+                    }`}
+                    title={`Xem chi tiết ${step.label}`}
                   >
-                    <IoFlash className="h-3.5 w-3.5 text-emerald-300" />
+                    <span className="inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-blue-500 px-1 text-[9px] font-bold leading-none text-white">
+                      {step.id.replace('step-', '')}
+                    </span>
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSelectedStepId(step.id)
-                      void runFillProcess(step)
-                    }}
-                    disabled={isLoadingProcessSteps || !step.prompt}
-                    className="inline-flex h-7 w-full cursor-pointer items-center justify-center rounded-md bg-amber-500/20 text-amber-100 transition hover:bg-amber-500/30 disabled:cursor-not-allowed disabled:opacity-40"
-                    title={
-                      isChatgptRewriteContentStep(step)
-                        ? `${step.label} + bản nhớ tạm mới nhất, không Enter`
-                        : 'Điền prompt, không Enter'
-                    }
-                  >
-                    <FiEdit3 className="h-3.5 w-3.5 text-amber-300" />
-                  </button>
+                  <div className="mt-1.5 grid grid-cols-2 gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedStepId(step.id)
+                        void runFastProcess(step)
+                      }}
+                      disabled={isLoadingProcessSteps || !step.prompt}
+                      className="inline-flex h-7 w-full cursor-pointer items-center justify-center rounded-md bg-emerald-500/25 text-emerald-100 transition hover:bg-emerald-500/35 disabled:cursor-not-allowed disabled:opacity-40"
+                      title={
+                        isChatgptRewriteContentStep(step)
+                          ? `${step.label} + bản nhớ tạm mới nhất, tự Enter`
+                          : 'Chạy nhanh và tự Enter'
+                      }
+                    >
+                      <IoFlash className="h-3.5 w-3.5 text-emerald-300" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedStepId(step.id)
+                        void runFillProcess(step)
+                      }}
+                      disabled={isLoadingProcessSteps || !step.prompt}
+                      className="inline-flex h-7 w-full cursor-pointer items-center justify-center rounded-md bg-amber-500/20 text-amber-100 transition hover:bg-amber-500/30 disabled:cursor-not-allowed disabled:opacity-40"
+                      title={
+                        isChatgptRewriteContentStep(step)
+                          ? `${step.label} + bản nhớ tạm mới nhất, không Enter`
+                          : 'Điền prompt, không Enter'
+                      }
+                    >
+                      <FiEdit3 className="h-3.5 w-3.5 text-amber-300" />
+                    </button>
+                  </div>
                 </div>
-              </div>
             ))}
             {!isLoadingProcessSteps && processSteps.length === 0 ? (
               <p className="rounded-xl border border-white/10 bg-white/5 px-2 py-2 text-[10px] text-slate-400">
@@ -1785,143 +2013,18 @@ export default function ChatgptScreen() {
             ) : null}
           </div>
 
-          <div className="mt-2 shrink-0 rounded-xl border border-white/10 bg-white/5 p-2">
-            <div className="grid grid-cols-2 gap-1.5">
-              <button
-                type="button"
-                onClick={() => void extractAndSplitLatestImageFromStep3()}
-                className="col-span-2 inline-flex cursor-pointer items-center justify-center rounded-md bg-blue-500/25 px-2 py-1.5 text-blue-100 transition hover:bg-blue-500/35 disabled:cursor-not-allowed disabled:opacity-40"
-                title={`Lấy ảnh từ «${generateImagesStepLabel}» và cắt đôi`}
-                disabled={!chatgptStepsByAction.generateImages}
-              >
-                <FiScissors className="h-4 w-4" />
-              </button>
-              <button
-                type="button"
-                onClick={() => void (splitImages ? copyImageDataUrl(splitImages.left, 'ảnh 1', 'left') : Promise.resolve())}
-                disabled={!splitImages}
-                className="inline-flex cursor-pointer items-center justify-center rounded-md bg-emerald-500/25 px-2 py-1.5 text-emerald-100 transition hover:bg-emerald-500/35 disabled:cursor-not-allowed disabled:opacity-40"
-                title="Sao chép ảnh 1"
-              >
-                <span className="relative inline-flex items-center justify-center">
-                  <FiImage className="h-3.5 w-3.5" />
-                  <span className="absolute -right-2 -top-2 inline-flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-emerald-500 px-0.5 text-[8px] font-bold leading-none text-white">
-                    1
-                  </span>
-                  <span className="absolute -left-2 -bottom-2 inline-flex h-2.5 min-w-2.5 items-center justify-center rounded-full bg-emerald-600 px-0 text-[6px] font-bold leading-none text-white">
-                    {copiedPart === 'left' ? <FiCheck className="h-2 w-2" /> : <FiCopy className="h-2 w-2" />}
-                  </span>
-                </span>
-              </button>
-              <button
-                type="button"
-                onClick={() => void (splitImages ? copyImageDataUrl(splitImages.right, 'ảnh 2', 'right') : Promise.resolve())}
-                disabled={!splitImages}
-                className="inline-flex cursor-pointer items-center justify-center rounded-md bg-emerald-500/25 px-2 py-1.5 text-emerald-100 transition hover:bg-emerald-500/35 disabled:cursor-not-allowed disabled:opacity-40"
-                title="Sao chép ảnh 2"
-              >
-                <span className="relative inline-flex items-center justify-center">
-                  <FiImage className="h-3.5 w-3.5" />
-                  <span className="absolute -right-2 -top-2 inline-flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-emerald-500 px-0.5 text-[8px] font-bold leading-none text-white">
-                    2
-                  </span>
-                  <span className="absolute -left-2 -bottom-2 inline-flex h-2.5 min-w-2.5 items-center justify-center rounded-full bg-emerald-600 px-0 text-[6px] font-bold leading-none text-white">
-                    {copiedPart === 'right' ? <FiCheck className="h-2 w-2" /> : <FiCopy className="h-2 w-2" />}
-                  </span>
-                </span>
-              </button>
-              <button
-                type="button"
-                onClick={() => void extractVideoContentFromStep2(1)}
-                className="inline-flex cursor-pointer items-center justify-center rounded-md bg-blue-500/20 px-2 py-1.5 text-blue-100 transition hover:bg-blue-500/30 disabled:cursor-not-allowed disabled:opacity-40"
-                title={`Lấy nội dung VIDEO 1 («${extractVideosStepLabel}»)`}
-                disabled={!chatgptStepsByAction.extractVideos}
-              >
-                <span className="relative inline-flex items-center justify-center">
-                  <FiFilm className="h-3.5 w-3.5" />
-                  <span className="absolute -right-2 -top-2 inline-flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-blue-500 px-0.5 text-[8px] font-bold leading-none text-white">
-                    1
-                  </span>
-                  <span className="absolute -left-2 -bottom-2 inline-flex h-2.5 min-w-2.5 items-center justify-center rounded-full bg-blue-600 px-0 text-[6px] font-bold leading-none text-white">
-                    {copiedTool === 'video-1' ? <FiCheck className="h-2 w-2" /> : <FiCopy className="h-2 w-2" />}
-                  </span>
-                </span>
-              </button>
-              <button
-                type="button"
-                onClick={() => void extractVideoContentFromStep2(2)}
-                className="inline-flex cursor-pointer items-center justify-center rounded-md bg-blue-500/20 px-2 py-1.5 text-blue-100 transition hover:bg-blue-500/30 disabled:cursor-not-allowed disabled:opacity-40"
-                title={`Lấy nội dung VIDEO 2 («${extractVideosStepLabel}»)`}
-                disabled={!chatgptStepsByAction.extractVideos}
-              >
-                <span className="relative inline-flex items-center justify-center">
-                  <FiFilm className="h-3.5 w-3.5" />
-                  <span className="absolute -right-2 -top-2 inline-flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-blue-500 px-0.5 text-[8px] font-bold leading-none text-white">
-                    2
-                  </span>
-                  <span className="absolute -left-2 -bottom-2 inline-flex h-2.5 min-w-2.5 items-center justify-center rounded-full bg-blue-600 px-0 text-[6px] font-bold leading-none text-white">
-                    {copiedTool === 'video-2' ? <FiCheck className="h-2 w-2" /> : <FiCopy className="h-2 w-2" />}
-                  </span>
-                </span>
-              </button>
-              <button
-                type="button"
-                onClick={() => void extractStep4Content('title_plain')}
-                className="inline-flex cursor-pointer items-center justify-center rounded-md bg-violet-500/20 px-2 py-1.5 text-violet-100 transition hover:bg-violet-500/30 disabled:cursor-not-allowed disabled:opacity-40"
-                title={`Lấy tiêu đề thường («${extractContentStepLabel}»)`}
-                disabled={!chatgptStepsByAction.extractContent}
-              >
-                <span className="relative inline-flex items-center justify-center">
-                  <FiType className="h-3.5 w-3.5" />
-                  <span className="absolute -left-2 -bottom-2 inline-flex h-2.5 min-w-2.5 items-center justify-center rounded-full bg-violet-600 px-0 text-[6px] font-bold leading-none text-white">
-                    {copiedTool === 'step4-title_plain' ? <FiCheck className="h-2 w-2" /> : <FiCopy className="h-2 w-2" />}
-                  </span>
-                </span>
-              </button>
-              <button
-                type="button"
-                onClick={() => void extractStep4Content('title_styled')}
-                className="inline-flex cursor-pointer items-center justify-center rounded-md bg-violet-500/20 px-2 py-1.5 text-violet-100 transition hover:bg-violet-500/30 disabled:cursor-not-allowed disabled:opacity-40"
-                title={`Lấy tiêu đề font kiểu («${extractContentStepLabel}»)`}
-                disabled={!chatgptStepsByAction.extractContent}
-              >
-                <span className="relative inline-flex items-center justify-center">
-                  <FiItalic className="h-3.5 w-3.5" />
-                  <span className="absolute -left-2 -bottom-2 inline-flex h-2.5 min-w-2.5 items-center justify-center rounded-full bg-violet-600 px-0 text-[6px] font-bold leading-none text-white">
-                    {copiedTool === 'step4-title_styled' ? <FiCheck className="h-2 w-2" /> : <FiCopy className="h-2 w-2" />}
-                  </span>
-                </span>
-              </button>
-              <button
-                type="button"
-                onClick={() => void extractStep4Content('content_short')}
-                className="inline-flex cursor-pointer items-center justify-center rounded-md bg-fuchsia-500/20 px-2 py-1.5 text-fuchsia-100 transition hover:bg-fuchsia-500/30 disabled:cursor-not-allowed disabled:opacity-40"
-                title={`Lấy nội dung ngắn có dấu hỏi («${extractContentStepLabel}»)`}
-                disabled={!chatgptStepsByAction.extractContent}
-              >
-                <span className="relative inline-flex items-center justify-center">
-                  <FiAlignLeft className="h-3.5 w-3.5" />
-                  <span className="absolute -left-2 -bottom-2 inline-flex h-2.5 min-w-2.5 items-center justify-center rounded-full bg-fuchsia-600 px-0 text-[6px] font-bold leading-none text-white">
-                    {copiedTool === 'step4-content_short' ? <FiCheck className="h-2 w-2" /> : <FiCopy className="h-2 w-2" />}
-                  </span>
-                </span>
-              </button>
-              <button
-                type="button"
-                onClick={() => void extractStep4Content('content_full')}
-                className="inline-flex cursor-pointer items-center justify-center rounded-md bg-fuchsia-500/20 px-2 py-1.5 text-fuchsia-100 transition hover:bg-fuchsia-500/30 disabled:cursor-not-allowed disabled:opacity-40"
-                title={`Lấy nội dung toàn bộ («${extractContentStepLabel}»)`}
-                disabled={!chatgptStepsByAction.extractContent}
-              >
-                <span className="relative inline-flex items-center justify-center">
-                  <FiFileText className="h-3.5 w-3.5" />
-                  <span className="absolute -left-2 -bottom-2 inline-flex h-2.5 min-w-2.5 items-center justify-center rounded-full bg-fuchsia-600 px-0 text-[6px] font-bold leading-none text-white">
-                    {copiedTool === 'step4-content_full' ? <FiCheck className="h-2 w-2" /> : <FiCopy className="h-2 w-2" />}
-                  </span>
-                </span>
-              </button>
+          {processSteps.length > 0 ? (
+            <div className="mt-2 max-h-[min(42vh,320px)] shrink-0 overflow-y-auto rounded-xl border border-white/10 bg-white/5 p-2">
+              <StepPanelToolsSection
+                comparison={workflowStepPanelComparison}
+                copiedTool={copiedTool}
+                copiedPart={copiedPart}
+                getOwnerStep={(tool) => processStepByBackendId.get(tool.ownerStepId)}
+                isToolDisabled={isStepPanelToolDisabled}
+                onRunTool={(tool) => void runStepPanelTool(tool)}
+              />
             </div>
-          </div>
+          ) : null}
         </aside>
       </div>
       <div className="mt-3 flex w-full min-w-0 flex-nowrap items-stretch gap-1.5 rounded-2xl border border-white/10 bg-black/30 p-2">
@@ -1955,7 +2058,7 @@ export default function ChatgptScreen() {
         </button>
         <button
           type="button"
-          onClick={() => void pushStep4ToWebBlog()}
+          onClick={() => void pushThreadToWebBlog()}
           className="inline-flex min-h-8 min-w-0 flex-1 cursor-pointer items-center justify-center rounded-lg bg-amber-500/20 px-1 text-amber-100 transition hover:bg-amber-500/30 sm:px-2"
           title="Gửi tiêu đề + nội dung dài có chèn ảnh sang WebBlog"
         >
