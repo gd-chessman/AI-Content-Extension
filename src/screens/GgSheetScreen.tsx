@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { FiAlertTriangle, FiCheck, FiCopy, FiDownload, FiInfo, FiSave, FiSend, FiSettings, FiX } from 'react-icons/fi'
 import {
   extractGgSheetRow,
@@ -59,6 +59,25 @@ const formatPreviewLines = (value: string, maxLines: number) => {
 const CHATGPT_URL = 'https://chatgpt.com/'
 const CHATGPT_PATTERNS = ['*://chatgpt.com/*', '*://chat.openai.com/*']
 const extractSheetId = (url: string) => url.match(/\/spreadsheets\/d\/([^/]+)/)?.[1] || ''
+
+function GgsheetContentScrollBox({
+  maxHeightClass,
+  children,
+  roomyEnd = false,
+}: {
+  maxHeightClass: string
+  children: ReactNode
+  roomyEnd?: boolean
+}) {
+  return (
+    <div className={`mt-1 flex ${maxHeightClass} flex-col overflow-hidden rounded-lg border border-white/10 bg-black/20`}>
+      <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-2 pt-2 text-[11px] leading-normal text-slate-100">
+        <div className={`whitespace-pre-wrap ${roomyEnd ? 'pb-10' : 'pb-6'}`}>{children}</div>
+        <span className={`block shrink-0 ${roomyEnd ? 'h-6' : 'h-4'}`} aria-hidden />
+      </div>
+    </div>
+  )
+}
 
 export default function GgSheetScreen() {
   const [activeTab, setActiveTab] = useState<'collect' | 'extract'>('collect')
@@ -573,24 +592,22 @@ export default function GgSheetScreen() {
         </div>
       )}
 
-      <div className="grid min-h-0 flex-1 grid-cols-1 gap-2 overflow-auto rounded-xl border border-white/10 bg-white/5 p-2.5">
+      <div className="grid min-h-0 flex-1 grid-cols-1 grid-rows-[auto_auto_minmax(0,1fr)] gap-2 overflow-hidden rounded-xl border border-white/10 bg-white/5 p-2.5">
         <div>
           <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Tiêu đề</p>
           <p className="mt-1 whitespace-pre-wrap rounded-lg border border-white/10 bg-black/20 p-2 text-[11px] text-slate-100">
             {data.title || '...'}
           </p>
         </div>
-        <div>
+        <div className="min-h-0">
           <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Nội dung ngắn</p>
-          <p className="mt-1 whitespace-pre-wrap rounded-lg border border-white/10 bg-black/20 p-2 text-[11px] text-slate-100">
-            {data.shortContent || '...'}
-          </p>
+          <GgsheetContentScrollBox maxHeightClass="max-h-36">{data.shortContent || '...'}</GgsheetContentScrollBox>
         </div>
-        <div>
+        <div className="flex min-h-0 flex-col">
           <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Nội dung dài (link bài báo)</p>
-          <p className="mt-1 whitespace-pre-wrap rounded-lg border border-white/10 bg-black/20 p-2 text-[11px] text-slate-100">
+          <GgsheetContentScrollBox maxHeightClass="min-h-0 max-h-52 flex-1" roomyEnd>
             {data.fullContent || '...'}
-          </p>
+          </GgsheetContentScrollBox>
         </div>
       </div>
       {showPreviewModal && previewData ? (
@@ -638,7 +655,7 @@ export default function GgSheetScreen() {
                       setShowPreviewModal(false)
                       setPreviewData(null)
                     }}
-                    className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-white/10 text-slate-200 transition hover:bg-white/20"
+                    className="inline-flex h-7 w-7 cursor-pointer items-center justify-center rounded-lg bg-white/10 text-slate-200 transition hover:bg-white/20"
                     title="Hủy"
                     aria-label="Hủy"
                   >
@@ -648,7 +665,7 @@ export default function GgSheetScreen() {
                     type="button"
                     onClick={() => void confirmPushToSheet()}
                     disabled={isSaving}
-                    className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-emerald-500/25 text-emerald-100 transition hover:bg-emerald-500/35 disabled:opacity-50"
+                    className="inline-flex h-7 w-7 cursor-pointer items-center justify-center rounded-lg bg-emerald-500/25 text-emerald-100 transition hover:bg-emerald-500/35 disabled:cursor-not-allowed disabled:opacity-50"
                     title="Xác nhận đẩy"
                     aria-label="Xác nhận đẩy"
                   >
