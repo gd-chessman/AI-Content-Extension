@@ -5,6 +5,7 @@ import { Tool } from '../tools/tool.schema';
 
 export type StepToolDocument = HydratedDocument<StepTool>;
 
+/** MongoDB collection: `steptools` (Mongoose pluralize mặc định từ `StepTool`). */
 @Schema({ timestamps: true })
 export class StepTool {
   @Prop({ type: Types.ObjectId, ref: Step.name, required: true, index: true })

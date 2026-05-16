@@ -13,7 +13,7 @@ export const CHATGPT_BOTTOM_BAR_TOOLS: ToolDefinition[] = [
     handlerScript:
       'const part = config.part === 2 || config.part === "2" ? 2 : 1; await host.fillGrokImage(part);',
     uiConfig: {
-      icon: 'image',
+      icon: 'grok1',
       copiedToolId: 'grok-1',
       buttonClass: 'bg-sky-500/20 text-sky-100 hover:bg-sky-500/30',
       badgeClass: 'bg-sky-500',
@@ -30,7 +30,7 @@ export const CHATGPT_BOTTOM_BAR_TOOLS: ToolDefinition[] = [
     handlerScript:
       'const part = config.part === 2 || config.part === "2" ? 2 : 1; await host.fillGrokImage(part);',
     uiConfig: {
-      icon: 'image',
+      icon: 'grok2',
       copiedToolId: 'grok-2',
       buttonClass: 'bg-sky-500/20 text-sky-100 hover:bg-sky-500/30',
       badgeClass: 'bg-sky-500',
@@ -46,7 +46,7 @@ export const CHATGPT_BOTTOM_BAR_TOOLS: ToolDefinition[] = [
     defaultConfig: {},
     handlerScript: 'await host.pushWebBlog();',
     uiConfig: {
-      icon: 'fileText',
+      icon: 'webblog',
       copiedToolId: 'webblog',
       buttonClass: 'bg-amber-500/20 text-amber-100 hover:bg-amber-500/30',
       badgeClass: 'bg-amber-500',
@@ -62,7 +62,7 @@ export const CHATGPT_BOTTOM_BAR_TOOLS: ToolDefinition[] = [
     defaultConfig: {},
     handlerScript: 'await host.collectGgSheet();',
     uiConfig: {
-      icon: 'fileText',
+      icon: 'ggsheet',
       copiedToolId: 'ggsheet',
       buttonClass: 'bg-green-500/20 text-green-100 hover:bg-green-500/30',
       badgeClass: 'bg-green-500',
@@ -77,8 +77,9 @@ export const CHATGPT_BOTTOM_BAR_TOOLS: ToolDefinition[] = [
     sortOrder: 40,
     defaultConfig: {},
     handlerScript: 'await host.saveLocal();',
+    guardScript: '!host.canSaveLocal',
     uiConfig: {
-      icon: 'fileText',
+      icon: 'saveLocal',
       copiedToolId: 'save-local',
       buttonClass: 'bg-teal-500/25 text-teal-100 hover:bg-teal-500/35',
       badgeClass: 'bg-teal-500',

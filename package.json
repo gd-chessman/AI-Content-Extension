@@ -18,7 +18,8 @@
     "test:cov": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "jest --config ./test/jest-e2e.json",
-    "script:attach-step-tools": "ts-node scripts/attach-workflow-step-tools.ts"
+    "script:attach-step-tools": "ts-node scripts/attach-workflow-step-tools.ts",
+    "script:migrate-steptools": "ts-node scripts/migrate-step-tools-to-steptools.ts"
   },
   "dependencies": {
     "@nestjs/cache-manager": "^3.0.1",
