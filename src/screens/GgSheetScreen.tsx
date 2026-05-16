@@ -9,6 +9,10 @@ import {
   type GgSheetPushPreview,
 } from '@/services/GgSheetService'
 import { chatgptExtractContent } from '@/utils/chatgptExtractContent'
+import {
+  chatgptScrollHighlightStep4ContentPageScript,
+  chatgptWarmThreadScrollContainersPageScript,
+} from '@/utils/chatgptContentProcessing'
 
 type BrowserTab = { id?: number; url?: string; active?: boolean }
 type ExtensionChrome = {
@@ -221,6 +225,19 @@ export default function GgSheetScreen() {
       setStatus('Không mở được tab ChatGPT để gom dữ liệu.')
       return null
     }
+
+    await extensionChrome.scripting.executeScript({
+      target: { tabId: target.id },
+      func: chatgptWarmThreadScrollContainersPageScript as (...args: unknown[]) => unknown,
+    })
+    await sleep(140)
+
+    await extensionChrome.scripting.executeScript({
+      target: { tabId: target.id },
+      func: chatgptScrollHighlightStep4ContentPageScript as (...args: unknown[]) => unknown,
+      args: ['collect'],
+    })
+    await sleep(500)
 
     const result = await extensionChrome.scripting.executeScript({
       target: { tabId: target.id },

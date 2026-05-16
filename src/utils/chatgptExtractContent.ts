@@ -146,6 +146,121 @@ export function chatgptExtractContent(...args: unknown[]): ChatgptExtractContent
     return score >= 2
   }
 
+  const measureLen = (text: string) => normalize(text).replace(/\s+/g, ' ').length
+
+  const findTitleHost = (root: HTMLElement): HTMLElement | null => {
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
+    let textNode: Text | null
+    while ((textNode = walker.nextNode() as Text | null)) {
+      for (const chunk of (textNode.textContent || '').split('\n')) {
+        const line = chunk.replace(/\s+/g, ' ').trim()
+        if (!line) continue
+        if (/^\s*title\s*[:-]/i.test(line) || /^\s*#{1,6}\s+\S/.test(line)) {
+          const host =
+            textNode.parentElement?.closest<HTMLElement>('p, li, pre, blockquote, h1, h2, h3, h4, h5, h6') ||
+            textNode.parentElement
+          if (host && root.contains(host) && host !== root) return host
+        }
+      }
+    }
+    const blocks = Array.from(
+      root.querySelectorAll<HTMLElement>('p, li, h1, h2, h3, h4, h5, h6, pre, blockquote'),
+    ).filter((el) => root.contains(el) && (el.innerText || '').trim().length > 0)
+    return blocks[0] || null
+  }
+
+  const orderedBlockHosts = (root: HTMLElement) =>
+    Array.from(
+      root.querySelectorAll<HTMLElement>('p, li, h1, h2, h3, h4, h5, h6, pre, blockquote, div'),
+    ).filter((el) => {
+      if (!root.contains(el) || el === root) return false
+      if (el.getAttribute('data-message-author-role') === 'assistant') return false
+      const turnLen = (root.innerText || '').length
+      const hostLen = (el.innerText || '').length
+      if (el.tagName === 'DIV' && turnLen > 400 && hostLen / turnLen > 0.55) return false
+      return (el.innerText || '').trim().length > 0
+    })
+
+  const elementHasVideoToolMention = (el: HTMLElement) =>
+    (el.innerText || '').split('\n').some((rawLine) => {
+      const line = rawLine.replace(/\s+/g, ' ').trim()
+      return line.length > 0 && /\b(?:Runway|Kling|Pika|Luma|Veo|Grok)\b/i.test(line)
+    })
+
+  const collectContentAfterTitle = (root: HTMLElement, titleHost: HTMLElement): HTMLElement[] => {
+    const direct: HTMLElement[] = []
+    let sib: Element | null = titleHost.nextElementSibling
+    while (sib && root.contains(sib)) {
+      const he = sib as HTMLElement
+      if (elementHasVideoToolMention(he)) break
+      direct.push(he)
+      sib = sib.nextElementSibling
+    }
+    if (direct.length > 0) return direct.filter((el) => !elementHasVideoToolMention(el))
+
+    const blocks = orderedBlockHosts(root)
+    const titleIdx = blocks.indexOf(titleHost)
+    const after = titleIdx >= 0 ? blocks.slice(titleIdx + 1) : blocks.slice(1)
+    const out: HTMLElement[] = []
+    for (const el of after) {
+      if (elementHasVideoToolMention(el)) break
+      out.push(el)
+    }
+    return out
+  }
+
+  const collectBlocksForTextLength = (
+    root: HTMLElement,
+    targetLen: number,
+    skipHost?: HTMLElement | null,
+  ): HTMLElement[] => {
+    const blocks = orderedBlockHosts(root)
+    const out: HTMLElement[] = []
+    let len = 0
+    for (const el of blocks) {
+      if (skipHost && (el === skipHost || skipHost.contains(el))) continue
+      if (elementHasVideoToolMention(el)) break
+      out.push(el)
+      len += measureLen(el.innerText || '')
+      if (len >= targetLen) break
+    }
+    return out
+  }
+
+  const joinBlockTexts = (blocks: HTMLElement[]) =>
+    blocks
+      .map((el) => (el.innerText || '').trim())
+      .filter(Boolean)
+      .join('\n\n')
+      .trim()
+
+  /** Cùng vùng DOM với khung highlight — tránh pickShort() cắt text ngắn hơn khung. */
+  const pickShortFromDom = (turn: HTMLElement, raw: string) => {
+    const hint = pickShort(raw)
+    const titleHost = findTitleHost(turn)
+    if (!titleHost) return hint
+
+    const targetLen = Math.max(measureLen(hint), 1)
+    const used = new Set<HTMLElement>()
+    let blocks = collectBlocksForTextLength(turn, targetLen, titleHost).filter(
+      (el) => el !== titleHost && !titleHost.contains(el),
+    )
+    blocks.forEach((el) => used.add(el))
+
+    let joined = joinBlockTexts(blocks)
+    if (measureLen(joined) >= targetLen) return joined || hint
+
+    for (const el of collectContentAfterTitle(turn, titleHost)) {
+      if (used.has(el)) continue
+      blocks.push(el)
+      used.add(el)
+      joined = joinBlockTexts(blocks)
+      if (measureLen(joined) >= targetLen) break
+    }
+
+    return joined || hint
+  }
+
   let raw = ''
   let matchedAssistantNode: HTMLElement | null = null
 
@@ -173,18 +288,18 @@ export function chatgptExtractContent(...args: unknown[]): ChatgptExtractContent
 
   if (!raw) return mode === 'collect' ? null : ''
 
-  /** Clipboard: ChatgptScreen đã cuộn + highlight trước — scroll lại cả bubble gây giật. */
-  if (mode === 'collect') {
-    matchedAssistantNode?.scrollIntoView({ block: 'start', behavior: 'instant' })
-  }
+  /** Cuộn do script highlight (ChatgptScreen / GgSheet) — tránh scroll lại gây giật. */
 
   const plainTitle = pickTitle(raw)
   const styledTitle = stylizeTitle(plainTitle)
 
+  const shortContent =
+    matchedAssistantNode ? pickShortFromDom(matchedAssistantNode, raw) : pickShort(raw)
+
   if (mode === 'collect') {
     return {
       title: styledTitle,
-      shortContent: pickShort(raw),
+      shortContent,
       fullContent: pickFull(raw),
     }
   }
@@ -193,6 +308,6 @@ export function chatgptExtractContent(...args: unknown[]): ChatgptExtractContent
 
   if (extractKind === 'title_plain') return plainTitle
   if (extractKind === 'title_styled') return styledTitle
-  if (extractKind === 'content_short') return pickShort(raw)
+  if (extractKind === 'content_short') return shortContent
   return pickFull(raw)
 }

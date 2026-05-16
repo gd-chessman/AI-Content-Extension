@@ -5,6 +5,9 @@
 
 import type { ChatgptExtractContentClipboardKind } from './chatgptExtractContent'
 
+/** Khoảng trống phía trên khi cuộn tới nội dung trên ChatGPT (tránh dính header). */
+export const CHATGPT_SCROLL_TOP_INSET_PX = 96
+
 export function injectImagesIntoLongContent(content: string, image1: string, image2: string): string {
   const base = (content || '').trim()
   if (!base) return ''
@@ -120,10 +123,11 @@ export function chatgptWarmThreadScrollContainersPageScript(): void {
 /** Cuộn tới tiêu đề VIDEO 1/2 trong bubble assistant mới nhất; trả về true nếu tìm thấy. */
 export function chatgptScrollToVideoBlockPageScript(videoPart: number): boolean {
   const part = videoPart === 2 ? 2 : 1
-  /** Khoảng trống dưới thanh header ChatGPT khi đặt tiêu đề VIDEO sát mép trên vùng đọc. */
-  const TOP_INSET_PX = 72
+  const TOP_INSET_PX = 96
 
-  const scrollVideoHeaderNearTop = (el: HTMLElement) => {
+  const scrollElementWithTopInset = (el: HTMLElement) => {
+    const prevScrollMarginTop = el.style.scrollMarginTop
+    el.style.scrollMarginTop = `${TOP_INSET_PX}px`
     el.scrollIntoView({ block: 'start', inline: 'nearest', behavior: 'instant' })
 
     const alignInScrollParent = (scrollParent: HTMLElement) => {
@@ -133,8 +137,8 @@ export function chatgptScrollToVideoBlockPageScript(videoPart: number): boolean 
       if (Math.abs(delta) > 2) scrollParent.scrollTop += delta
     }
 
-    let parent: HTMLElement | null = el.parentElement
     let alignedMain = false
+    let parent: HTMLElement | null = el.parentElement
     while (parent && parent !== document.body) {
       const oy = window.getComputedStyle(parent).overflowY
       if ((oy === 'auto' || oy === 'scroll' || oy === 'overlay') && parent.scrollHeight > parent.clientHeight + 8) {
@@ -153,6 +157,10 @@ export function chatgptScrollToVideoBlockPageScript(videoPart: number): boolean 
       const rect = el.getBoundingClientRect()
       window.scrollTo({ top: Math.max(0, window.scrollY + rect.top - TOP_INSET_PX), behavior: 'instant' })
     }
+
+    window.requestAnimationFrame(() => {
+      el.style.scrollMarginTop = prevScrollMarginTop
+    })
   }
 
   const findNewestAssistantTurnWithVideo = (p: number): HTMLElement | null => {
@@ -404,7 +412,7 @@ export function chatgptScrollToVideoBlockPageScript(videoPart: number): boolean 
   if (!turn) return false
 
   const headerEl = findVideoHeaderElement(turn, part) || turn
-  scrollVideoHeaderNearTop(headerEl)
+  scrollElementWithTopInset(headerEl)
 
   removeHighlights()
 
@@ -420,15 +428,16 @@ export function chatgptScrollToVideoBlockPageScript(videoPart: number): boolean 
   return true
 }
 
-/** Cuộn + 2 khung (tiêu đề / nội dung) cho công cụ bước 4: tiêu đề, tiêu đề kiểu, ngắn, dài. */
+/** Cuộn + khung sáng bước 4: từng loại copy hoặc `collect` (GG Sheet — tiêu đề + ngắn + dài). */
 export function chatgptScrollHighlightStep4ContentPageScript(kind: string): boolean {
   const extractKind = kind as
     | 'title_plain'
     | 'title_styled'
     | 'content_short'
     | 'content_full'
+    | 'collect'
     | string
-  const TOP_INSET_PX = 72
+  const TOP_INSET_PX = 96
   const HIGHLIGHT_MS = 5000
   const HIGHLIGHT_MARK = 'data-ai-content-ext-video-highlight'
   const CONTENT_WRAP_ATTR = 'data-ai-content-ext-video-content-wrap'
@@ -441,15 +450,20 @@ export function chatgptScrollHighlightStep4ContentPageScript(kind: string): bool
       .map((block) => block.trim())
       .filter(Boolean)
 
-  const scrollNearTop = (el: HTMLElement) => {
+  const scrollElementWithTopInset = (el: HTMLElement) => {
+    const prevScrollMarginTop = el.style.scrollMarginTop
+    el.style.scrollMarginTop = `${TOP_INSET_PX}px`
     el.scrollIntoView({ block: 'start', inline: 'nearest', behavior: 'instant' })
+
     const alignInScrollParent = (scrollParent: HTMLElement) => {
       const er = el.getBoundingClientRect()
       const pr = scrollParent.getBoundingClientRect()
-      scrollParent.scrollTop += er.top - pr.top - TOP_INSET_PX
+      const delta = er.top - pr.top - TOP_INSET_PX
+      if (Math.abs(delta) > 2) scrollParent.scrollTop += delta
     }
-    let parent: HTMLElement | null = el.parentElement
+
     let alignedMain = false
+    let parent: HTMLElement | null = el.parentElement
     while (parent && parent !== document.body) {
       const oy = window.getComputedStyle(parent).overflowY
       if ((oy === 'auto' || oy === 'scroll' || oy === 'overlay') && parent.scrollHeight > parent.clientHeight + 8) {
@@ -458,14 +472,20 @@ export function chatgptScrollHighlightStep4ContentPageScript(kind: string): bool
       }
       parent = parent.parentElement
     }
+
     if (!alignedMain) {
       const main = document.querySelector<HTMLElement>('main, [role="log"]')
       if (main && main.scrollHeight > main.clientHeight + 8) alignInScrollParent(main)
     }
+
     if (!alignedMain) {
       const rect = el.getBoundingClientRect()
       window.scrollTo({ top: Math.max(0, window.scrollY + rect.top - TOP_INSET_PX), behavior: 'instant' })
     }
+
+    window.requestAnimationFrame(() => {
+      el.style.scrollMarginTop = prevScrollMarginTop
+    })
   }
 
   const blockHostFromTextNode = (root: HTMLElement, textNode: Text): HTMLElement | null => {
@@ -507,8 +527,11 @@ export function chatgptScrollHighlightStep4ContentPageScript(kind: string): bool
     })
   }
 
-  const applyDomHighlight = (el: HTMLElement, highlightKind: 'block' | 'header') => {
-    if (el.hasAttribute(HIGHLIGHT_MARK)) return
+  const applyDomHighlight = (
+    el: HTMLElement,
+    highlightKind: 'block' | 'block-short' | 'block-full' | 'header',
+  ) => {
+    if (el.getAttribute(HIGHLIGHT_MARK) === highlightKind) return
     el.setAttribute(HIGHLIGHT_MARK, highlightKind)
     for (const key of HIGHLIGHT_STYLE_KEYS) {
       el.setAttribute(`data-ai-content-ext-prev-${key}`, el.style[key] || '')
@@ -519,6 +542,14 @@ export function chatgptScrollHighlightStep4ContentPageScript(kind: string): bool
       el.style.boxShadow = '0 0 14px rgba(59, 130, 246, 0.45)'
       el.style.backgroundColor = 'rgba(59, 130, 246, 0.12)'
       el.style.borderRadius = '6px'
+      return
+    }
+    if (highlightKind === 'block-short') {
+      el.style.outline = '2px solid rgba(34, 197, 94, 0.85)'
+      el.style.outlineOffset = '4px'
+      el.style.boxShadow = '0 0 0 6px rgba(34, 197, 94, 0.14)'
+      el.style.backgroundColor = 'rgba(34, 197, 94, 0.06)'
+      el.style.borderRadius = '10px'
       return
     }
     el.style.outline = '2px solid rgba(59, 130, 246, 0.65)'
@@ -693,6 +724,16 @@ export function chatgptScrollHighlightStep4ContentPageScript(kind: string): bool
     })
 
   const collectContentAfterTitle = (root: HTMLElement, titleHost: HTMLElement): HTMLElement[] => {
+    const direct: HTMLElement[] = []
+    let sib: Element | null = titleHost.nextElementSibling
+    while (sib && root.contains(sib)) {
+      const he = sib as HTMLElement
+      if (elementHasVideoToolMention(he)) break
+      direct.push(he)
+      sib = sib.nextElementSibling
+    }
+    if (direct.length > 0) return direct.filter((el) => !elementHasVideoToolMention(el))
+
     const blocks = orderedBlockHosts(root)
     const titleIdx = blocks.indexOf(titleHost)
     const after = titleIdx >= 0 ? blocks.slice(titleIdx + 1) : blocks.slice(1)
@@ -702,6 +743,17 @@ export function chatgptScrollHighlightStep4ContentPageScript(kind: string): bool
       out.push(el)
     }
     return out
+  }
+
+  const collectFullElements = (root: HTMLElement, titleHost: HTMLElement, fullRaw: string): HTMLElement[] => {
+    const fullBody = pickFullBodyOnly(fullRaw)
+    const targetLen = Math.max(normalize(fullBody).replace(/\s+/g, ' ').length, 1)
+    let els = collectBlocksForTextLength(root, targetLen, titleHost)
+    els = els.filter((el) => el !== titleHost && !titleHost.contains(el))
+    if (els.length > 0) return els
+    return collectContentAfterTitle(root, titleHost).filter(
+      (el) => el !== titleHost && !titleHost.contains(el),
+    )
   }
 
   const collectBlocksForTextLength = (root: HTMLElement, targetLen: number, skipHost?: HTMLElement | null) => {
@@ -727,11 +779,47 @@ export function chatgptScrollHighlightStep4ContentPageScript(kind: string): bool
 
   removeHighlights()
 
+  const isCollect = extractKind === 'collect'
   const isTitleOnly = extractKind === 'title_plain' || extractKind === 'title_styled'
   const isShortOnly = extractKind === 'content_short'
 
-  if (isTitleOnly) {
-    scrollNearTop(titleHost)
+  if (isCollect) {
+    scrollElementWithTopInset(titleHost)
+    applyDomHighlight(titleHost, 'header')
+
+    const shortText = pickShort(raw)
+    const shortLen = normalize(shortText).replace(/\s+/g, ' ').length
+    let shortEls =
+      shortLen > 0
+        ? collectBlocksForTextLength(turn, shortLen, titleHost)
+        : collectContentAfterTitle(turn, titleHost)
+    shortEls = shortEls.filter((el) => el !== titleHost && !titleHost.contains(el))
+
+    const shortHost = resolveSingleContentHighlightHostStep4(turn, titleHost, shortEls)
+    if (shortHost) applyDomHighlight(shortHost, 'block-short')
+
+    const blocks = orderedBlockHosts(turn)
+    let fullTailEls: HTMLElement[] = []
+    if (shortEls.length > 0) {
+      const lastShort = shortEls[shortEls.length - 1]
+      const lastIdx = blocks.indexOf(lastShort)
+      if (lastIdx >= 0) {
+        fullTailEls = blocks
+          .slice(lastIdx + 1)
+          .filter((el) => el !== titleHost && !titleHost.contains(el) && !elementHasVideoToolMention(el))
+      }
+    }
+
+    if (fullTailEls.length > 0) {
+      const fullTailHost = resolveSingleContentHighlightHostStep4(turn, titleHost, fullTailEls)
+      if (fullTailHost) applyDomHighlight(fullTailHost, 'block-full')
+    } else {
+      const fullEls = collectFullElements(turn, titleHost, raw)
+      const fullHost = resolveSingleContentHighlightHostStep4(turn, titleHost, fullEls)
+      if (fullHost && fullHost !== shortHost) applyDomHighlight(fullHost, 'block-full')
+    }
+  } else if (isTitleOnly) {
+    scrollElementWithTopInset(titleHost)
     applyDomHighlight(titleHost, 'header')
   } else if (isShortOnly) {
     const shortText = pickShort(raw)
@@ -743,19 +831,23 @@ export function chatgptScrollHighlightStep4ContentPageScript(kind: string): bool
     contentEls = contentEls.filter((el) => el !== titleHost && !titleHost.contains(el))
     const contentHost = resolveSingleContentHighlightHostStep4(turn, titleHost, contentEls)
     if (contentHost) {
-      scrollNearTop(contentHost)
-      applyDomHighlight(contentHost, 'block')
+      scrollElementWithTopInset(contentHost)
+      applyDomHighlight(contentHost, 'block-short')
     } else {
-      scrollNearTop(titleHost)
+      scrollElementWithTopInset(titleHost)
     }
   } else {
-    scrollNearTop(titleHost)
-    applyDomHighlight(titleHost, 'header')
-    const contentEls = collectContentAfterTitle(turn, titleHost).filter(
+    const fullEls = collectFullElements(turn, titleHost, raw).filter(
       (el) => el !== titleHost && !titleHost.contains(el),
     )
-    const contentHost = resolveSingleContentHighlightHostStep4(turn, titleHost, contentEls)
-    if (contentHost) applyDomHighlight(contentHost, 'block')
+    const contentHost = resolveSingleContentHighlightHostStep4(turn, titleHost, fullEls)
+    if (contentHost) {
+      scrollElementWithTopInset(contentHost)
+      applyDomHighlight(contentHost, 'block-full')
+    } else {
+      scrollElementWithTopInset(titleHost)
+      applyDomHighlight(titleHost, 'header')
+    }
   }
 
   window.setTimeout(() => removeHighlights(), HIGHLIGHT_MS)
