@@ -35,6 +35,7 @@ import {
   getMyStorySources,
   syncStorySourceFromReel,
 } from '@/services/StoryService'
+import { normalizeStepDisplayMode } from '@/utils/stepDisplayMode'
 import {
   createStepRun,
   createWorkflowRun,
@@ -72,6 +73,7 @@ type FacebookProcessStep = {
   backendStepId: string
   stepNo: number
   actionType: string
+  displayMode?: string
   inputSchema: Record<string, unknown>
 }
 
@@ -336,6 +338,7 @@ export default function FacebookScreen() {
           backendStepId: (step._id || '').trim(),
           stepNo: Number(step.stepNo) || 0,
           actionType: (step.actionType || 'custom').trim(),
+          displayMode: normalizeStepDisplayMode(step.displayMode),
           inputSchema: (step.inputSchema || {}) as Record<string, unknown>,
         }))
         .filter((step) => step.backendStepId && step.workflowId)

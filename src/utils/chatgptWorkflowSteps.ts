@@ -9,6 +9,7 @@ export type ChatgptProcessStepLike = {
   stepNo?: number
   actionType?: string
   prompt?: string
+  displayMode?: string
 }
 
 /** Prompt bước `chatgpt_extract_content` (đầu chuỗi) — dùng khớp thread ChatGPT / GgSheet collect. */
@@ -21,6 +22,7 @@ export const CHATGPT_STEP_ACTION = {
   GENERATE_IMAGES: 'chatgpt_generate_images',
   GENERATE_IMAGE: 'chatgpt_generate_image',
   EXTRACT_CONTENT: 'chatgpt_extract_content',
+  SAVE_STORY: 'chatgpt_save_story',
 } as const
 
 export function normalizeChatgptActionType(actionType?: string): string {
@@ -46,6 +48,10 @@ export function isChatgptGenerateImagesStep(step: ChatgptProcessStepLike): boole
 
 export function isChatgptExtractContentStep(step: ChatgptProcessStepLike): boolean {
   return normalizeChatgptActionType(step.actionType) === CHATGPT_STEP_ACTION.EXTRACT_CONTENT
+}
+
+export function isChatgptSaveStoryStep(step: ChatgptProcessStepLike): boolean {
+  return normalizeChatgptActionType(step.actionType) === CHATGPT_STEP_ACTION.SAVE_STORY
 }
 
 export function findChatgptStep(

@@ -100,13 +100,22 @@ import {
 } from '@/utils/toolScriptRunner'
 import {
   CHATGPT_EXTRACT_CONTENT_PROMPT_HINT_KEY,
+  CHATGPT_STEP_ACTION,
   indexChatgptStepsByAction,
   isChatgptExtractContentStep,
   isChatgptExtractVideosStep,
   isChatgptGenerateImagesStep,
   isChatgptRewriteContentStep,
+  isChatgptSaveStoryStep,
+  normalizeChatgptActionType,
   stepDisplayLabel,
 } from '@/utils/chatgptWorkflowSteps'
+import {
+  canManualChatgptStep,
+  isBackgroundDisplayMode,
+  normalizeStepDisplayMode,
+  type StepDisplayMode,
+} from '@/utils/stepDisplayMode'
 
 type BrowserTab = { id?: number; url?: string; active?: boolean; windowId?: number }
 type ExtensionChrome = {
@@ -176,7 +185,12 @@ async function resolveLatestStoryIdForSource(storySourceId: string): Promise<str
   return (linked[0]?._id || '').trim()
 }
 
-/** Sau khi workflow xong: tạo Story mới kèm videoPrompts (caller phải kiểm tra đủ prompt trước). */
+function nonEmptyVideoPrompts(items: string[] | null | undefined): string[] {
+  if (!items?.length) return []
+  return items.map((s) => String(s ?? '').trim()).filter(Boolean)
+}
+
+/** Sau khi workflow xong: tạo Story mới kèm videoPrompts (caller phải có ≥1 prompt trước). */
 async function createStoryForPipelineRun(
   videoPrompts: string[],
 ): Promise<{ storyId: string; error?: string }> {
@@ -232,30 +246,42 @@ function buildLocalOnlyStoryContextFromTitle(titlePlain: string): {
   }
 }
 
+/** Nguồn caption cho workflow ChatGPT: DB (StorySource) hoặc localStorage. */
+type ChatgptWorkflowSource = 'localstorage' | 'stories'
+
+function normalizeChatgptWorkflowSource(raw?: string): ChatgptWorkflowSource | undefined {
+  const s = String(raw || '').trim().toLowerCase()
+  if (s === 'stories') return 'stories'
+  if (s === 'localstorage') return 'localstorage'
+  return undefined
+}
+
 /**
- * Mặc định **story DB** — ghép `sourceContent`. Ép **localStorage** (`facebookReelCopiedContent`) bằng
- * `chatgptStep1Source` trên payload run hoặc khi gọi `runWorkflow({ chatgptStep1Source: 'localstorage' })`.
+ * Mặc định **stories** (StorySource DB). Ép **localstorage** qua `runWorkflow({ chatgptWorkflowSource })`
+ * hoặc payload run `chatgptWorkflowSource` / `chatgptStep1Source` (legacy).
  */
-async function resolveChatgptStep1SourceMode(
+async function resolveChatgptWorkflowSourceMode(
   runId: string,
   options?: {
-    chatgptStep1Source?: 'localstorage' | 'stories'
+    chatgptWorkflowSource?: ChatgptWorkflowSource
     source?: string
   },
-): Promise<'localstorage' | 'stories'> {
-  const o = options?.chatgptStep1Source
-  if (o === 'stories') return 'stories'
-  if (o === 'localstorage') return 'localstorage'
+): Promise<ChatgptWorkflowSource> {
+  const fromOptions = normalizeChatgptWorkflowSource(options?.chatgptWorkflowSource)
+  if (fromOptions) return fromOptions
 
   if (runId) {
     try {
       const r = await getWorkflowRunById(runId)
       const payload = (r.payload || {}) as {
+        chatgptWorkflowSource?: string
+        /** @deprecated Dùng chatgptWorkflowSource */
         chatgptStep1Source?: string
       }
-      const rawStep = String(payload.chatgptStep1Source || '').trim().toLowerCase()
-      if (rawStep === 'localstorage') return 'localstorage'
-      if (rawStep === 'stories') return 'stories'
+      const fromPayload =
+        normalizeChatgptWorkflowSource(payload.chatgptWorkflowSource) ||
+        normalizeChatgptWorkflowSource(payload.chatgptStep1Source)
+      if (fromPayload) return fromPayload
     } catch {
       /* ignore */
     }
@@ -267,12 +293,15 @@ async function resolveChatgptStep1SourceMode(
 type ProcessStep = {
   id: string
   label: string
+  /** Prompt gốc từ DB (không gồn instruction) — dùng ẩn/hiện sidebar. */
+  hasDbPrompt: boolean
   prompt: string
   workflowId: string
   workflowPlatform: string
   backendStepId: string
   stepNo: number
   actionType: string
+  displayMode: StepDisplayMode
   inputSchema: Record<string, unknown>
   tools?: StepToolLink[]
 }
@@ -523,10 +552,11 @@ export default function ChatgptScreen() {
   const runningWorkflowRunIdRef = useRef('')
   /** Story đang chạy pipeline ChatGPT (tiến trình 1 — cùng story để lưu videoPrompts sau cùng). */
   const chatgptPipelineStoryIdRef = useRef('')
-  /** Prompt Video 1 & 2 sau tiến trình 2 — chỉ commit DB khi workflow chạy hết. */
+  /** Prompt VIDEO (1 hoặc nhiều) sau bước tách — commit DB ở bước save story. */
   const chatgptDraftVideoPromptsRef = useRef<string[] | null>(null)
   /** Bước `chatgpt_rewrite_content`: gán lúc bắt đầu workflow — mặc định story (`sourceContent`). */
-  const step1ContentSourceRef = useRef<'localstorage' | 'stories'>('stories')
+  /** Nguồn caption workflow: `stories` = StorySource DB; `localstorage` = bản nhớ tạm Facebook. */
+  const chatgptWorkflowSourceRef = useRef<ChatgptWorkflowSource>('stories')
   const { data: workflows = [], isLoading: isLoadingWorkflows } = useQuery<WorkflowItem[]>({
     queryKey: ['chatgpt-workflows'],
     queryFn: async () => await getUserWorkflows({ platform: 'chatgpt' }),
@@ -564,26 +594,47 @@ export default function ChatgptScreen() {
     return map
   }, [workflowTools])
 
-  const processSteps = useMemo<ProcessStep[]>(() => {
+  const workflowSteps = useMemo<ProcessStep[]>(() => {
     const target = workflows.find((workflow) => workflow._id === selectedWorkflowId) || null
     if (!target?._id || !workflowDetail?.steps?.length) return []
     return workflowDetail.steps
       .slice()
       .sort((a, b) => (a.stepNo || 0) - (b.stepNo || 0))
-      .map((step) => ({
+      .map((step) => {
+        const dbPrompt = (step.prompt || '').trim()
+        return {
         id: `step-${step.stepNo}`,
         label: (step.title || '').trim() || `Tiến trình ${step.stepNo}`,
-        prompt: (step.prompt || step.instruction || '').trim(),
+        hasDbPrompt: Boolean(dbPrompt),
+        prompt: dbPrompt || (step.instruction || '').trim(),
         workflowId: target._id,
         workflowPlatform: (target.platform || 'multi').trim().toLowerCase(),
         backendStepId: (step._id || '').trim(),
         stepNo: Number(step.stepNo) || 0,
         actionType: (step.actionType || 'custom').trim(),
+        displayMode: normalizeStepDisplayMode(step.displayMode),
         inputSchema: (step.inputSchema || {}) as Record<string, unknown>,
         tools: toolsByStepId.get((step._id || '').trim()) ?? [],
-      }))
-      .filter((step) => step.prompt && step.backendStepId && step.workflowId)
+      }
+      })
+      .filter((step) => {
+        if (!step.backendStepId || !step.workflowId) return false
+        if (isBackgroundDisplayMode(step.displayMode)) return true
+        return Boolean(step.prompt)
+      })
   }, [workflowDetail, workflows, selectedWorkflowId, toolsByStepId])
+
+  /** Sidebar: không gồm bước `background` (vd. lưu story). */
+  const sidebarSteps = useMemo(
+    () => workflowSteps.filter((step) => !isBackgroundDisplayMode(step.displayMode)),
+    [workflowSteps],
+  )
+
+  /** Bước có prompt — dùng công cụ ChatGPT / index actionType. */
+  const processSteps = useMemo(
+    () => sidebarSteps.filter((step) => canManualChatgptStep(step)),
+    [sidebarSteps],
+  )
 
   const chatgptStepsByAction = useMemo(() => indexChatgptStepsByAction(processSteps), [processSteps])
   const rewriteStepLabel = stepDisplayLabel(chatgptStepsByAction.rewrite, 'bước viết lại nội dung')
@@ -603,8 +654,8 @@ export default function ChatgptScreen() {
   )
 
   const selectedProcessStep = useMemo(
-    () => processSteps.find((step) => step.id === selectedStepId) || null,
-    [processSteps, selectedStepId],
+    () => sidebarSteps.find((step) => step.id === selectedStepId) || null,
+    [sidebarSteps, selectedStepId],
   )
 
   const workflowStepPanelComparison = useMemo(
@@ -659,12 +710,15 @@ export default function ChatgptScreen() {
   }, [selectedWorkflowId])
 
   useEffect(() => {
-    if (!processSteps.length) {
+    if (!sidebarSteps.length) {
       setSelectedStepId('')
       return
     }
-    setSelectedStepId((prev) => (processSteps.some((step) => step.id === prev) ? prev : processSteps[0].id))
-  }, [processSteps])
+    setSelectedStepId((prev) => {
+      if (sidebarSteps.some((step) => step.id === prev)) return prev
+      return (processSteps[0] || sidebarSteps[0]).id
+    })
+  }, [sidebarSteps, processSteps])
 
   const queryTabs = (pattern?: string[], currentWindow = false, active = false) =>
     new Promise<BrowserTab[]>((resolve) => {
@@ -1044,6 +1098,11 @@ export default function ChatgptScreen() {
   }
 
   const runFastProcess = async (step: ProcessStep) => {
+    if (!canManualChatgptStep(step)) {
+      setStatus('Bước này không có prompt hoặc chạy nền — không dùng chạy nhanh thủ công.')
+      return false
+    }
+
     if (isChatgptExtractVideosStep(step)) {
       setSplitImages(null)
       setCopiedPart(null)
@@ -1054,7 +1113,7 @@ export default function ChatgptScreen() {
     }
 
     let mergedStep = step
-    if (step1ContentSourceRef.current === 'localstorage') {
+    if (chatgptWorkflowSourceRef.current === 'localstorage') {
       let mergedPrompt = step.prompt
       const fromStorage = localStorage.getItem(FACEBOOK_REEL_MEMORY_KEY)?.trim() || ''
       if (fromStorage) mergedPrompt = `${step.prompt}\n\n${fromStorage}`
@@ -1080,6 +1139,11 @@ export default function ChatgptScreen() {
   }
 
   const runFillProcess = async (step: ProcessStep) => {
+    if (!canManualChatgptStep(step)) {
+      setStatus('Bước này không có prompt hoặc chạy nền — không dùng điền prompt thủ công.')
+      return false
+    }
+
     if (isChatgptExtractVideosStep(step)) {
       setSplitImages(null)
       setCopiedPart(null)
@@ -1090,7 +1154,7 @@ export default function ChatgptScreen() {
     }
 
     let mergedStep = step
-    if (step1ContentSourceRef.current === 'localstorage') {
+    if (chatgptWorkflowSourceRef.current === 'localstorage') {
       let mergedPrompt = step.prompt
       const fromStorage = localStorage.getItem(FACEBOOK_REEL_MEMORY_KEY)?.trim() || ''
       if (fromStorage) mergedPrompt = `${step.prompt}\n\n${fromStorage}`
@@ -1433,6 +1497,26 @@ export default function ChatgptScreen() {
   }
 
   const executeWorkflowStep = async (step: ProcessStep) => {
+    if (isChatgptSaveStoryStep(step)) {
+      if (chatgptWorkflowSourceRef.current !== 'stories') {
+        return { skipped: true, reason: 'not_stories_source' }
+      }
+      const videoPrompts = nonEmptyVideoPrompts(chatgptDraftVideoPromptsRef.current)
+      if (!videoPrompts.length) {
+        throw new Error(
+          `${step.label}: Chưa lấy được nội dung VIDEO (kiểm tra «${extractVideosStepLabel}»).`,
+        )
+      }
+      const created = await createStoryForPipelineRun(videoPrompts)
+      if (!created.storyId) {
+        throw new Error(created.error || `${step.label}: Không tạo được story trên máy chủ.`)
+      }
+      chatgptPipelineStoryIdRef.current = created.storyId
+      const videoLabel = videoPrompts.length === 1 ? 'VIDEO' : `${videoPrompts.length} VIDEO`
+      setStatus(`${step.label}: Đã tạo story và lưu prompt ${videoLabel}.`)
+      return { saved: true, storyId: created.storyId, videoPromptCount: videoPrompts.length }
+    }
+
     // User-required behavior: every workflow step in ChatGPT screen
     // runs exactly like "Chạy nhanh", then waits for response completion.
     const isGenerateImageStep = isChatgptGenerateImagesStep(step)
@@ -1461,12 +1545,32 @@ export default function ChatgptScreen() {
 
     if (isChatgptExtractVideosStep(step)) {
       const pref = lockedWorkflowTabIdRef.current || undefined
-      const pv1 = await extractVideoContent(1, { copyToClipboard: false, preferredTabId: pref })
-      const pv2 = await extractVideoContent(2, { copyToClipboard: false, preferredTabId: pref })
-      chatgptDraftVideoPromptsRef.current = [pv1, pv2]
-      setStatus(
-        `${step.label}: Đã lấy VIDEO 1 & 2 (cùng logic công cụ trên màn hình; lưu DB khi workflow xong).`,
-      )
+      const extractOpts = { copyToClipboard: false, preferredTabId: pref }
+      const action = normalizeChatgptActionType(step.actionType)
+      let prompts: string[] = []
+
+      if (action === CHATGPT_STEP_ACTION.EXTRACT_CONTENT_VIDEO) {
+        const single = await extractSingleVideoContent(extractOpts)
+        prompts = nonEmptyVideoPrompts([single])
+      } else {
+        const single = await extractSingleVideoContent(extractOpts)
+        if (single.trim()) {
+          prompts = [single.trim()]
+        } else {
+          const pv1 = await extractVideoContent(1, extractOpts)
+          const pv2 = await extractVideoContent(2, extractOpts)
+          prompts = nonEmptyVideoPrompts([pv1, pv2])
+        }
+      }
+
+      chatgptDraftVideoPromptsRef.current = prompts
+      if (!prompts.length) {
+        setStatus(`${step.label}: Chưa lấy được nội dung VIDEO (kiểm tra «${extractVideosStepLabel}»).`)
+      } else if (prompts.length === 1) {
+        setStatus(`${step.label}: Đã lấy prompt VIDEO.`)
+      } else {
+        setStatus(`${step.label}: Đã lấy ${prompts.length} prompt VIDEO.`)
+      }
     }
 
     return {
@@ -1489,19 +1593,19 @@ export default function ChatgptScreen() {
     workflowId?: string
     source?: string
     /** Ưu tiên trước payload run; mặc định story DB — truyền `localstorage` để dùng clipboard. */
-    chatgptStep1Source?: 'localstorage' | 'stories'
+    chatgptWorkflowSource?: ChatgptWorkflowSource
   }) => {
     if (!canUseWorkflow) {
       setStatus('Workflow chỉ dành cho tài khoản VIP hoặc quản trị viên.')
       return
     }
-    if (!processSteps.length || isWorkflowRunning) return
+    if (!workflowSteps.length || isWorkflowRunning) return
     const extensionChrome = getChrome()
     if (!extensionChrome?.tabs?.query || !extensionChrome?.scripting?.executeScript) {
       setStatus('Workflow chỉ chạy được trong extension Chrome đã cấp quyền Tabs + Scripting.')
       return
     }
-    const firstStep = processSteps[0]
+    const firstStep = workflowSteps[0]
     if (!firstStep?.workflowId) {
       setStatus('Chưa tìm thấy workflowId để bắt đầu chạy workflow.')
       return
@@ -1529,10 +1633,10 @@ export default function ChatgptScreen() {
       }
 
       if (!workflowRunId) {
-        setStatus(`Đang tạo workflow run (${processSteps.length} bước)...`)
+        setStatus(`Đang tạo workflow run (${workflowSteps.length} bước)...`)
         const run = await createWorkflowRun({
           workflowId: firstStep.workflowId,
-          payload: { source: options?.source || 'chatgpt_screen', totalSteps: processSteps.length },
+          payload: { source: options?.source || 'chatgpt_screen', totalSteps: workflowSteps.length },
         })
         workflowRunId = run._id
         runningWorkflowRunIdRef.current = workflowRunId
@@ -1548,15 +1652,16 @@ export default function ChatgptScreen() {
         })
       }
 
-      step1ContentSourceRef.current = await resolveChatgptStep1SourceMode(workflowRunId, {
-        chatgptStep1Source: options?.chatgptStep1Source,
+      chatgptWorkflowSourceRef.current = await resolveChatgptWorkflowSourceMode(workflowRunId, {
+        chatgptWorkflowSource: options?.chatgptWorkflowSource,
         source: options?.source,
       })
 
-      for (let index = 0; index < processSteps.length; index += 1) {
-        const step = processSteps[index]
+      for (let index = 0; index < workflowSteps.length; index += 1) {
+        const step = workflowSteps[index]
         const stepNo = step.stepNo || index + 1
-        const progress = Math.round((index / processSteps.length) * 100)
+        const progress = Math.round((index / workflowSteps.length) * 100)
+        const isBackground = isBackgroundDisplayMode(step.displayMode)
 
         await updateWorkflowRun(workflowRunId, {
           status: 'running',
@@ -1564,8 +1669,14 @@ export default function ChatgptScreen() {
           progress,
         })
 
-        setSelectedStepId(step.id)
-        setStatus(`Workflow: đang chạy ${step.label} (${index + 1}/${processSteps.length})...`)
+        if (!isBackground) {
+          setSelectedStepId(step.id)
+        }
+        setStatus(
+          isBackground
+            ? `Workflow: ${step.label} (chạy nền)...`
+            : `Workflow: đang chạy ${step.label} (${index + 1}/${workflowSteps.length})...`,
+        )
 
         const stepRun = await createStepRun({
           workflowRunId,
@@ -1608,7 +1719,7 @@ export default function ChatgptScreen() {
         if (workflowStopRef.current) {
           await updateWorkflowRun(workflowRunId, {
             status: 'cancelled',
-            progress: Math.round(((index + 1) / processSteps.length) * 100),
+            progress: Math.round(((index + 1) / workflowSteps.length) * 100),
             currentStepNo: stepNo,
             finishedAt: new Date().toISOString(),
           })
@@ -1620,34 +1731,15 @@ export default function ChatgptScreen() {
       await updateWorkflowRun(workflowRunId, {
         status: 'completed',
         progress: 100,
-        currentStepNo: processSteps[processSteps.length - 1]?.stepNo || processSteps.length,
-        result: { completedSteps: processSteps.length },
+        currentStepNo: workflowSteps[workflowSteps.length - 1]?.stepNo || workflowSteps.length,
+        result: { completedSteps: workflowSteps.length },
         finishedAt: new Date().toISOString(),
       })
 
-      const stepCountLabel = `${processSteps.length}/${processSteps.length}`
-      const draftBox = chatgptDraftVideoPromptsRef.current as string[] | null
-
-      if (step1ContentSourceRef.current === 'stories') {
-        const hasVideoPrompts = draftBox !== null && draftBox.length >= 2
-        if (hasVideoPrompts) {
-          const created = await createStoryForPipelineRun(draftBox)
-          if (created.storyId) {
-            chatgptPipelineStoryIdRef.current = created.storyId
-            setStatus(
-              `Workflow chạy xong ${stepCountLabel} bước. Đã tạo story và lưu prompt Video 1 & 2.`,
-            )
-          } else {
-            const detail =
-              created.error ||
-              'Không tạo được story (hãy Lưu story trên Facebook trước khi chạy workflow).'
-            setStatus(`Workflow chạy xong ${stepCountLabel} bước. Không lưu story — ${detail}`)
-          }
-        } else {
-          setStatus(
-            `Workflow chạy xong ${stepCountLabel} bước. Không lưu story — chưa lấy đủ VIDEO 1/2 (kiểm tra «${extractVideosStepLabel}»).`,
-          )
-        }
+      const stepCountLabel = `${workflowSteps.length}/${workflowSteps.length}`
+      const savedStoryId = chatgptPipelineStoryIdRef.current.trim()
+      if (savedStoryId) {
+        setStatus(`Workflow chạy xong ${stepCountLabel} bước. Đã lưu story (prompt VIDEO).`)
       } else {
         setStatus(`Workflow chạy xong ${stepCountLabel} bước.`)
       }
@@ -1664,7 +1756,7 @@ export default function ChatgptScreen() {
       runningWorkflowRunIdRef.current = ''
       chatgptPipelineStoryIdRef.current = ''
       chatgptDraftVideoPromptsRef.current = null
-      step1ContentSourceRef.current = 'stories'
+      chatgptWorkflowSourceRef.current = 'stories'
       setIsWorkflowRunning(false)
       setIsWorkflowStopping(false)
     }
@@ -1693,7 +1785,7 @@ export default function ChatgptScreen() {
   }, [processSteps, chatgptStepsByAction.rewrite, rewriteStepLabel])
 
   useEffect(() => {
-    if (!canUseWorkflow || !processSteps.length) return
+    if (!canUseWorkflow || !workflowSteps.length) return
     const eventSource = createWorkflowRunEventSource()
 
     eventSource.onmessage = (event) => {
@@ -1703,18 +1795,22 @@ export default function ChatgptScreen() {
         const run = payload.run
         if (!run?._id || !run?.workflowId) return
         if ((run.status || '').toLowerCase() !== 'queued') return
-        if (run.workflowId !== processSteps[0]?.workflowId) return
+        if (run.workflowId !== workflowSteps[0]?.workflowId) return
         if (isWorkflowRunning) return
         if (runningWorkflowRunIdRef.current === run._id) return
         setStatus(`SSE: nhận lệnh chạy workflow từ backend (${run._id}).`)
-        const runPayload = (run.payload || {}) as { chatgptStep1Source?: string }
-        const rawSrc = String(runPayload.chatgptStep1Source || '').trim().toLowerCase()
+        const runPayload = (run.payload || {}) as {
+          chatgptWorkflowSource?: string
+          chatgptStep1Source?: string
+        }
+        const workflowSource =
+          normalizeChatgptWorkflowSource(runPayload.chatgptWorkflowSource) ||
+          normalizeChatgptWorkflowSource(runPayload.chatgptStep1Source)
         void runWorkflow({
           runId: run._id,
           workflowId: run.workflowId,
           source: 'sse',
-          chatgptStep1Source:
-            rawSrc === 'stories' ? 'stories' : rawSrc === 'localstorage' ? 'localstorage' : undefined,
+          chatgptWorkflowSource: workflowSource,
         })
       } catch {
         // ignore malformed SSE payload
@@ -1728,7 +1824,7 @@ export default function ChatgptScreen() {
     return () => {
       eventSource.close()
     }
-  }, [canUseWorkflow, processSteps, isWorkflowRunning])
+  }, [canUseWorkflow, workflowSteps, isWorkflowRunning])
 
   const copyImageDataUrl = async (
     dataUrl: string,
@@ -2402,7 +2498,9 @@ export default function ChatgptScreen() {
             value={
               isLoadingProcessSteps
                 ? 'Đang tải dữ liệu workflow...'
-                : selectedStep?.prompt || 'Chưa có dữ liệu workflow/steps từ backend.'
+                : selectedStep && !canManualChatgptStep(selectedStep)
+                  ? 'Bước này không có prompt trên DB — chỉ chạy qua workflow tự động (nếu được cấu hình).'
+                  : selectedStep?.prompt || 'Chưa có dữ liệu workflow/steps từ backend.'
             }
             className="mt-2 min-h-[180px] flex-1 w-full resize-none rounded-xl border border-white/10 bg-slate-900/80 px-3 py-2 text-[11px] text-slate-200 outline-none"
           />
@@ -2454,7 +2552,7 @@ export default function ChatgptScreen() {
                 <button
                   type="button"
                   onClick={() => void runWorkflow()}
-                  disabled={!processSteps.length || isLoadingProcessSteps || isLoadingWorkflows}
+                  disabled={!workflowSteps.length || isLoadingProcessSteps || isLoadingWorkflows}
                   className="inline-flex h-8 w-full cursor-pointer items-center justify-center rounded-lg bg-violet-500/20 text-violet-100 transition hover:bg-violet-500/30 disabled:cursor-not-allowed disabled:opacity-50"
                   title="Chạy toàn bộ workflow"
                   aria-label="Chạy workflow"
@@ -2465,7 +2563,7 @@ export default function ChatgptScreen() {
             </div>
           ) : null}
           <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto pr-0.5">
-            {processSteps.map((step) => (
+            {sidebarSteps.map((step) => (
                 <div key={step.id} className="rounded-xl border border-white/10 bg-white/5 p-1.5">
                   <button
                     type="button"
@@ -2481,43 +2579,45 @@ export default function ChatgptScreen() {
                       {step.id.replace('step-', '')}
                     </span>
                   </button>
-                  <div className="mt-1.5 grid grid-cols-2 gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSelectedStepId(step.id)
-                        void runFastProcess(step)
-                      }}
-                      disabled={isLoadingProcessSteps || !step.prompt}
-                      className="inline-flex h-7 w-full cursor-pointer items-center justify-center rounded-md bg-emerald-500/25 text-emerald-100 transition hover:bg-emerald-500/35 disabled:cursor-not-allowed disabled:opacity-40"
-                      title={
-                        isChatgptRewriteContentStep(step)
-                          ? `${step.label} + bản nhớ tạm mới nhất, tự Enter`
-                          : 'Chạy nhanh và tự Enter'
-                      }
-                    >
-                      <IoFlash className="h-3.5 w-3.5 text-emerald-300" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSelectedStepId(step.id)
-                        void runFillProcess(step)
-                      }}
-                      disabled={isLoadingProcessSteps || !step.prompt}
-                      className="inline-flex h-7 w-full cursor-pointer items-center justify-center rounded-md bg-amber-500/20 text-amber-100 transition hover:bg-amber-500/30 disabled:cursor-not-allowed disabled:opacity-40"
-                      title={
-                        isChatgptRewriteContentStep(step)
-                          ? `${step.label} + bản nhớ tạm mới nhất, không Enter`
-                          : 'Điền prompt, không Enter'
-                      }
-                    >
-                      <FiEdit3 className="h-3.5 w-3.5 text-amber-300" />
-                    </button>
-                  </div>
+                  {canManualChatgptStep(step) ? (
+                    <div className="mt-1.5 grid grid-cols-2 gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedStepId(step.id)
+                          void runFastProcess(step)
+                        }}
+                        disabled={isLoadingProcessSteps}
+                        className="inline-flex h-7 w-full cursor-pointer items-center justify-center rounded-md bg-emerald-500/25 text-emerald-100 transition hover:bg-emerald-500/35 disabled:cursor-not-allowed disabled:opacity-40"
+                        title={
+                          isChatgptRewriteContentStep(step)
+                            ? `${step.label} + bản nhớ tạm mới nhất, tự Enter`
+                            : 'Chạy nhanh và tự Enter'
+                        }
+                      >
+                        <IoFlash className="h-3.5 w-3.5 text-emerald-300" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedStepId(step.id)
+                          void runFillProcess(step)
+                        }}
+                        disabled={isLoadingProcessSteps}
+                        className="inline-flex h-7 w-full cursor-pointer items-center justify-center rounded-md bg-amber-500/20 text-amber-100 transition hover:bg-amber-500/30 disabled:cursor-not-allowed disabled:opacity-40"
+                        title={
+                          isChatgptRewriteContentStep(step)
+                            ? `${step.label} + bản nhớ tạm mới nhất, không Enter`
+                            : 'Điền prompt, không Enter'
+                        }
+                      >
+                        <FiEdit3 className="h-3.5 w-3.5 text-amber-300" />
+                      </button>
+                    </div>
+                  ) : null}
                 </div>
             ))}
-            {!isLoadingProcessSteps && processSteps.length === 0 ? (
+            {!isLoadingProcessSteps && sidebarSteps.length === 0 ? (
               <p className="rounded-xl border border-white/10 bg-white/5 px-2 py-2 text-[10px] text-slate-400">
                 Chưa có workflow/steps cho ChatGPT. Hãy tạo dữ liệu.
               </p>
