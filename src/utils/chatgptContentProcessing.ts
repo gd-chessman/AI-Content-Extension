@@ -428,8 +428,15 @@ export function chatgptScrollToVideoBlockPageScript(videoPart: number): boolean 
   return true
 }
 
-/** Cuộn + khung sáng bước 4: từng loại copy hoặc `collect` (GG Sheet — tiêu đề + ngắn + dài). */
-export function chatgptScrollHighlightStep4ContentPageScript(kind: string): boolean {
+/** Cuộn + khung sáng bước trích nội dung: args[0]=kind, args[1]=promptHint. */
+export function chatgptScrollHighlightStep4ContentPageScript(...injectArgs: unknown[]): boolean {
+  const kind = String(injectArgs[0] ?? '')
+  const promptHint =
+    typeof injectArgs[1] === 'string'
+      ? injectArgs[1]
+      : typeof injectArgs[2] === 'string'
+        ? injectArgs[2]
+        : ''
   const extractKind = kind as
     | 'title_plain'
     | 'title_styled'
@@ -647,49 +654,74 @@ export function chatgptScrollHighlightStep4ContentPageScript(kind: string): bool
     return searchSpace.trim()
   }
 
-  const isStep4UserPrompt = (text: string) => {
-    const t = normalize(text).toLowerCase()
-    if (!t) return false
-    if (/tiến trình\s*4|step\s*4/.test(t)) return true
-    const hintCount = [
-      /title|tiêu đề/.test(t),
-      /nội dung ngắn|short content/.test(t),
-      /nội dung dài|full content/.test(t),
-      /full[\s-]*length|twist ending|happy ending|story/.test(t),
-    ].filter(Boolean).length
-    return hintCount >= 2
-  }
+  const findExtractContentAssistantTurn = (): HTMLElement | null => {
+    const normalizeCompact = (text: string) => text.replace(/\r/g, '').replace(/\s+/g, ' ').trim().toLowerCase()
+    const hint = normalizeCompact(promptHint)
+    if (hint.length < 30) return null
 
-  const isStep4AssistantOutput = (text: string) => {
-    const t = normalize(text)
-    if (!t) return false
-    const lower = t.toLowerCase()
-    const score = [
-      t.length >= 800,
-      /title\s*[:-]|tiêu đề\s*[:-]/i.test(t),
-      /\?/.test(t),
-      /\n\s*\n/.test(t),
-      /twist ending|happy ending|full[\s-]*length|story/i.test(lower),
-    ].filter(Boolean).length
-    return score >= 2
-  }
-
-  const findStep4AssistantTurn = (): HTMLElement | null => {
     const turns = Array.from(document.querySelectorAll<HTMLElement>('[data-message-author-role]')).filter((el) =>
       Boolean((el.innerText || '').trim()),
     )
-    for (let i = turns.length - 1; i >= 0; i -= 1) {
-      if ((turns[i].getAttribute('data-message-author-role') || '').toLowerCase() !== 'user') continue
-      if (!isStep4UserPrompt(turns[i].innerText || '')) continue
-      for (let j = i + 1; j < turns.length; j += 1) {
+    const promptOverlapScore = (userText: string) => {
+      const u = normalizeCompact(userText)
+      if (!u) return 0
+      let best = 0
+      const head = hint.slice(0, Math.min(160, hint.length))
+      if (head.length >= 30 && u.includes(head)) best = Math.max(best, head.length)
+      const chunk = 48
+      for (let i = 0; i < hint.length; i += 24) {
+        const slice = hint.slice(i, i + chunk)
+        if (slice.length < 28) continue
+        if (u.includes(slice)) best = Math.max(best, slice.length)
+      }
+      return best
+    }
+    const isExtractContentAssistantOutput = (text: string) => {
+      const t = text.replace(/\r/g, '').trim()
+      if (t.length < 500) return false
+      const lower = t.toLowerCase()
+      let score = 0
+      if (/title\s*[:-]|tiêu đề\s*[:-]/i.test(t)) score += 1
+      if (/\n\s*\n/.test(t)) score += 1
+      if (/\?/.test(t)) score += 1
+      if (/twist ending|happy ending|full[\s-]*length|nội dung ngắn|nội dung dài|short content/i.test(lower)) {
+        score += 1
+      }
+      return score >= 2
+    }
+    const lastAssistantAfterUser = (userEl: HTMLElement): HTMLElement | null => {
+      const startIdx = turns.indexOf(userEl)
+      if (startIdx < 0) return null
+      let last: HTMLElement | null = null
+      for (let j = startIdx + 1; j < turns.length; j += 1) {
         const role = (turns[j].getAttribute('data-message-author-role') || '').toLowerCase()
         if (role === 'user') break
         if (role !== 'assistant') continue
-        const assistantText = normalize(turns[j].innerText || '')
-        if (assistantText && isStep4AssistantOutput(assistantText)) return turns[j]
+        const text = (turns[j].innerText || '').trim()
+        if (text) last = turns[j]
       }
+      return last
     }
-    return null
+
+    const userTurns = turns.filter(
+      (el) => (el.getAttribute('data-message-author-role') || '').toLowerCase() === 'user',
+    )
+    if (!userTurns.length) return null
+
+    let best: { node: HTMLElement; rank: number } | null = null
+    for (let i = userTurns.length - 1; i >= 0; i -= 1) {
+      const userEl = userTurns[i]
+      const userNorm = normalizeCompact(userEl.innerText || '')
+      const hasStepLabel = /tiến trình\s*4|step\s*4/.test(userNorm)
+      const overlap = promptOverlapScore(userEl.innerText || '')
+      if (!hasStepLabel && overlap < 70) continue
+      const assistant = lastAssistantAfterUser(userEl)
+      if (!assistant) continue
+      if (!isExtractContentAssistantOutput(assistant.innerText || '')) continue
+      const rank = overlap + (hasStepLabel ? 250 : 0) + i * 0.001
+      if (!best || rank > best.rank) best = { node: assistant, rank }
+    }
+    return best?.node ?? null
   }
 
   const findTitleHost = (root: HTMLElement): HTMLElement | null => {
@@ -770,7 +802,7 @@ export function chatgptScrollHighlightStep4ContentPageScript(kind: string): bool
     return out
   }
 
-  const turn = findStep4AssistantTurn()
+  const turn = findExtractContentAssistantTurn()
   if (!turn) return false
 
   const raw = normalize(turn.innerText || '')

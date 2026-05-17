@@ -103,6 +103,7 @@ const GUARD_HANDLERS: Record<string, (host: ToolScriptHost) => boolean> = {
     return !ctx?.hasExtractContentStep
   },
   '!host.canSaveLocal': (host) => !host.canSaveLocal,
+  '!host.isExtractContentReady': (host) => !host.isExtractContentReady,
 }
 
 /** `guardScript` trả truthy → nút bị disabled. */

@@ -11,6 +11,9 @@ export type ChatgptProcessStepLike = {
   prompt?: string
 }
 
+/** Prompt bước `chatgpt_extract_content` (đầu chuỗi) — dùng khớp thread ChatGPT / GgSheet collect. */
+export const CHATGPT_EXTRACT_CONTENT_PROMPT_HINT_KEY = 'chatgptExtractContentPromptHint'
+
 export const CHATGPT_STEP_ACTION = {
   REWRITE_CONTENT: 'chatgpt_rewrite_content',
   EXTRACT_CONTENT_VIDEOS: 'chatgpt_extract_content_videos',

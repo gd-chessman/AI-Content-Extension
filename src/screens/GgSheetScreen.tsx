@@ -9,6 +9,7 @@ import {
   type GgSheetPushPreview,
 } from '@/services/GgSheetService'
 import { chatgptExtractContent } from '@/utils/chatgptExtractContent'
+import { CHATGPT_EXTRACT_CONTENT_PROMPT_HINT_KEY } from '@/utils/chatgptWorkflowSteps'
 import {
   chatgptScrollHighlightStep4ContentPageScript,
   chatgptWarmThreadScrollContainersPageScript,
@@ -238,7 +239,13 @@ export default function GgSheetScreen() {
       return null
     }
 
-    setStatus('Đang gom dữ liệu từ output Tiến trình 4 trong ChatGPT...')
+    const promptHint = (localStorage.getItem(CHATGPT_EXTRACT_CONTENT_PROMPT_HINT_KEY) || '').trim()
+    if (promptHint.length < 30) {
+      setStatus('Chưa có prompt bước trích nội dung. Hãy mở ChatGPT, chọn workflow và tải bước trước khi gom.')
+      return null
+    }
+
+    setStatus('Đang gom dữ liệu từ output bước trích nội dung trong ChatGPT...')
     const target = await getOrOpenTab(CHATGPT_PATTERNS, CHATGPT_URL)
     if (!target?.id) {
       setStatus('Không mở được tab ChatGPT để gom dữ liệu.')
@@ -254,19 +261,19 @@ export default function GgSheetScreen() {
     await extensionChrome.scripting.executeScript({
       target: { tabId: target.id },
       func: chatgptScrollHighlightStep4ContentPageScript as (...args: unknown[]) => unknown,
-      args: ['collect'],
+      args: ['collect', promptHint],
     })
     await sleep(500)
 
     const result = await extensionChrome.scripting.executeScript({
       target: { tabId: target.id },
       func: chatgptExtractContent as (...args: unknown[]) => unknown,
-      args: ['collect'],
+      args: ['collect', promptHint],
     })
 
     const extracted = (result?.[0]?.result as CollectedData | null) || null
     if (!extracted?.title && !extracted?.shortContent && !extracted?.fullContent) {
-      setStatus('Không tìm thấy output phù hợp từ Tiến trình 4 trong ChatGPT.')
+      setStatus('Không tìm thấy output phù hợp từ bước trích nội dung trên ChatGPT.')
       return null
     }
 

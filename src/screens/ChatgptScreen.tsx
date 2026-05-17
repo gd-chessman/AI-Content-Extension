@@ -97,6 +97,7 @@ import {
   type ToolScriptHost,
 } from '@/utils/toolScriptRunner'
 import {
+  CHATGPT_EXTRACT_CONTENT_PROMPT_HINT_KEY,
   indexChatgptStepsByAction,
   isChatgptExtractContentStep,
   isChatgptExtractVideosStep,
@@ -456,6 +457,8 @@ export default function ChatgptScreen() {
   const [copiedPart, setCopiedPart] = useState<'left' | 'right' | null>(null)
   const [copiedTool, setCopiedTool] = useState<string | null>(null)
   const [isSavingStoryLocal, setIsSavingStoryLocal] = useState(false)
+  /** Đã có đủ lượt user + phản hồi assistant cho bước trích nội dung trên tab ChatGPT. */
+  const [extractContentReady, setExtractContentReady] = useState(false)
   const [isWorkflowRunning, setIsWorkflowRunning] = useState(false)
   const [isWorkflowStopping, setIsWorkflowStopping] = useState(false)
   const workflowStopRef = useRef(false)
@@ -530,6 +533,8 @@ export default function ChatgptScreen() {
   const extractVideosStepLabel = stepDisplayLabel(chatgptStepsByAction.extractVideos, 'bước tách VIDEO')
   const generateImagesStepLabel = stepDisplayLabel(chatgptStepsByAction.generateImages, 'bước tạo ảnh')
   const extractContentStepLabel = stepDisplayLabel(chatgptStepsByAction.extractContent, 'bước trích nội dung')
+  const extractContentStep = chatgptStepsByAction.extractContent
+  const extractContentPromptHint = (extractContentStep?.prompt || '').trim().slice(0, 400)
 
   const legacyStepPanelContext = useMemo(
     () => ({
@@ -614,6 +619,58 @@ export default function ChatgptScreen() {
       }
       query({ url: pattern, currentWindow, active }, (tabs) => resolve(tabs || []))
     })
+
+  useEffect(() => {
+    if (extractContentPromptHint.length >= 30) {
+      localStorage.setItem(CHATGPT_EXTRACT_CONTENT_PROMPT_HINT_KEY, extractContentPromptHint)
+    }
+  }, [extractContentPromptHint])
+
+  useEffect(() => {
+    if (!extractContentStep || extractContentPromptHint.length < 30) {
+      setExtractContentReady(false)
+      return
+    }
+
+    let cancelled = false
+
+    const poll = async () => {
+      const extensionChrome = getChrome()
+      if (!extensionChrome?.tabs?.query || !extensionChrome.scripting?.executeScript) {
+        if (!cancelled) setExtractContentReady(false)
+        return
+      }
+
+      const currentActive = await queryTabs(undefined, true, true)
+      const activeTab = currentActive[0]
+      const isActiveChatgpt = Boolean(activeTab?.url && /chatgpt\.com|chat\.openai\.com/i.test(activeTab.url))
+      const activeTabs = isActiveChatgpt ? [activeTab] : await queryTabs(CHATGPT_PATTERNS, true, true)
+      const allTabs = activeTabs.length > 0 ? activeTabs : await queryTabs(CHATGPT_PATTERNS)
+      const target = allTabs[0]
+      if (!target?.id) {
+        if (!cancelled) setExtractContentReady(false)
+        return
+      }
+
+      try {
+        const result = await extensionChrome.scripting.executeScript({
+          target: { tabId: target.id },
+          func: chatgptExtractContent as (...args: unknown[]) => unknown,
+          args: ['ready', extractContentPromptHint],
+        })
+        if (!cancelled) setExtractContentReady(result?.[0]?.result === true)
+      } catch {
+        if (!cancelled) setExtractContentReady(false)
+      }
+    }
+
+    void poll()
+    const timer = window.setInterval(() => void poll(), 2500)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [extractContentStep, extractContentPromptHint, selectedWorkflowId])
 
   const createTab = (url: string) =>
     new Promise<BrowserTab | null>((resolve) => {
@@ -1514,7 +1571,9 @@ export default function ChatgptScreen() {
     options?: { copyToClipboard?: boolean },
   ) => {
     const copyToClipboard = options?.copyToClipboard !== false
-    if (!chatgptStepsByAction.extractContent) {
+    const extractStep = extractContentStep
+    const promptHint = extractContentPromptHint
+    if (!extractStep || promptHint.length < 30) {
       if (copyToClipboard) {
         setStatus('Workflow chưa có bước actionType = chatgpt_extract_content.')
       }
@@ -1559,6 +1618,22 @@ export default function ChatgptScreen() {
       return ''
     }
 
+    const readyResult = await extensionChrome.scripting.executeScript({
+      target: { tabId: target.id },
+      func: chatgptExtractContent as (...args: unknown[]) => unknown,
+      args: ['ready', promptHint],
+    })
+    const isReady = readyResult?.[0]?.result === true
+    setExtractContentReady(isReady)
+    if (!isReady) {
+      if (copyToClipboard) {
+        setStatus(
+          `Chưa có phản hồi «${extractContentStepLabel}» trên ChatGPT (hãy chạy xong bước trích nội dung trong workflow trước).`,
+        )
+      }
+      return ''
+    }
+
     await extensionChrome.scripting.executeScript({
       target: { tabId: target.id },
       func: chatgptWarmThreadScrollContainersPageScript as (...args: unknown[]) => unknown,
@@ -1568,14 +1643,14 @@ export default function ChatgptScreen() {
     await extensionChrome.scripting.executeScript({
       target: { tabId: target.id },
       func: chatgptScrollHighlightStep4ContentPageScript as (...args: unknown[]) => unknown,
-      args: [kind],
+      args: [kind, promptHint],
     })
     await sleep(copyToClipboard ? 380 : 140)
 
     const result = await extensionChrome.scripting.executeScript({
       target: { tabId: target.id },
       func: chatgptExtractContent as (...args: unknown[]) => unknown,
-      args: ['clipboard', kind],
+      args: ['clipboard', kind, promptHint],
     })
 
     const extracted = ((result?.[0]?.result as string | undefined) || '').trim()
@@ -1932,6 +2007,7 @@ export default function ChatgptScreen() {
       isChatgptGenerateImagesStep(step) || Boolean(legacyStepPanelContext.hasGenerateImagesStep),
     stepIsExtractContent: () =>
       isChatgptExtractContentStep(step) || Boolean(legacyStepPanelContext.hasExtractContentStep),
+    isExtractContentReady: () => extractContentReady,
   })
 
   const isStepPanelToolDisabled = (tool: ResolvedStepPanelTool, step: ProcessStep) => {

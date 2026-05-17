@@ -12,13 +12,109 @@ export type ChatgptExtractContentCollectedForSheet = {
 }
 
 /**
- * args[0]: 'collect' → trả `{ title (styled), shortContent, fullContent } | null` — `fullContent` gồm tiêu đề thường (không đậm) + phần thân khi thân được tách khỏi đoạn đầu ngắn.
- * args[0]: 'clipboard', args[1]: kind → trả string (rỗng nếu không tìm thấy)
+ * ready: ['ready', promptHint] → boolean
+ * collect: ['collect', promptHint]
+ * clipboard: ['clipboard', kind, promptHint]
  */
-export function chatgptExtractContent(...args: unknown[]): ChatgptExtractContentCollectedForSheet | string | null {
+export function chatgptExtractContent(...args: unknown[]): ChatgptExtractContentCollectedForSheet | string | boolean | null {
   const mode = args[0] as string
+
+  const normalizeCompact = (text: string) => text.replace(/\r/g, '').replace(/\s+/g, ' ').trim().toLowerCase()
+
+  const listThreadTurns = () =>
+    Array.from(document.querySelectorAll<HTMLElement>('[data-message-author-role]')).filter(
+      (el) => (el.innerText || '').trim().length > 0,
+    )
+
+  const promptOverlapScore = (userText: string, promptHint: string) => {
+    const u = normalizeCompact(userText)
+    const p = normalizeCompact(promptHint)
+    if (!u || !p || p.length < 30) return 0
+    let best = 0
+    const head = p.slice(0, Math.min(160, p.length))
+    if (head.length >= 30 && u.includes(head)) best = Math.max(best, head.length)
+    const chunk = 48
+    for (let i = 0; i < p.length; i += 24) {
+      const slice = p.slice(i, i + chunk)
+      if (slice.length < 28) continue
+      if (u.includes(slice)) best = Math.max(best, slice.length)
+    }
+    return best
+  }
+
+  const isExtractContentAssistantOutput = (text: string) => {
+    const t = text.replace(/\r/g, '').trim()
+    if (t.length < 500) return false
+    const lower = t.toLowerCase()
+    let score = 0
+    if (/title\s*[:-]|tiêu đề\s*[:-]/i.test(t)) score += 1
+    if (/\n\s*\n/.test(t)) score += 1
+    if (/\?/.test(t)) score += 1
+    if (/twist ending|happy ending|full[\s-]*length|nội dung ngắn|nội dung dài|short content/i.test(lower)) {
+      score += 1
+    }
+    return score >= 2
+  }
+
+  const lastAssistantAfterUser = (turns: HTMLElement[], userEl: HTMLElement) => {
+    const startIdx = turns.indexOf(userEl)
+    if (startIdx < 0) return null
+    let last: HTMLElement | null = null
+    for (let j = startIdx + 1; j < turns.length; j += 1) {
+      const role = (turns[j].getAttribute('data-message-author-role') || '').toLowerCase()
+      if (role === 'user') break
+      if (role !== 'assistant') continue
+      const text = (turns[j].innerText || '').trim()
+      if (text) last = turns[j]
+    }
+    return last
+  }
+
+  const findExtractContentAssistantTurn = (turns: HTMLElement[], promptHint: string) => {
+    const userTurns = turns.filter(
+      (el) => (el.getAttribute('data-message-author-role') || '').toLowerCase() === 'user',
+    )
+    if (!userTurns.length) return null
+    let best: { node: HTMLElement; rank: number } | null = null
+    for (let i = userTurns.length - 1; i >= 0; i -= 1) {
+      const userEl = userTurns[i]
+      const userNorm = normalizeCompact(userEl.innerText || '')
+      const hasStepLabel = /tiến trình\s*4|step\s*4/.test(userNorm)
+      const overlap = promptOverlapScore(userEl.innerText || '', promptHint)
+      if (!hasStepLabel && overlap < 70) continue
+      const assistant = lastAssistantAfterUser(turns, userEl)
+      if (!assistant) continue
+      if (!isExtractContentAssistantOutput(assistant.innerText || '')) continue
+      const rank = overlap + (hasStepLabel ? 250 : 0) + i * 0.001
+      if (!best || rank > best.rank) best = { node: assistant, rank }
+    }
+    return best?.node ?? null
+  }
+
+  const resolvePromptHint = () => {
+    if (mode === 'clipboard') {
+      if (typeof args[2] === 'string') return args[2]
+      if (typeof args[3] === 'string') return args[3]
+      return ''
+    }
+    if (typeof args[1] === 'string') return args[1]
+    if (typeof args[2] === 'string') return args[2]
+    return ''
+  }
+  const promptHint = resolvePromptHint()
+
+  if (mode === 'ready') {
+    if (normalizeCompact(promptHint).length < 30) return false
+    const turns = listThreadTurns()
+    return findExtractContentAssistantTurn(turns, promptHint) !== null
+  }
+
   const extractKind =
     mode === 'clipboard' ? (args[1] as ChatgptExtractContentClipboardKind | undefined) : undefined
+
+  if (normalizeCompact(promptHint).length < 30) {
+    return mode === 'collect' ? null : ''
+  }
 
   const normalize = (text: string) => text.replace(/\r/g, '').trim()
   const splitParagraphs = (text: string) =>
@@ -114,37 +210,8 @@ export function chatgptExtractContent(...args: unknown[]): ChatgptExtractContent
     return searchSpace.trim()
   }
 
-  const turns = Array.from(document.querySelectorAll<HTMLElement>('[data-message-author-role]')).filter(
-    (el) => (el.innerText || '').trim().length > 0,
-  )
-  if (!turns.length) return mode === 'collect' ? null : ''
-
-  const isStep4UserPrompt = (text: string) => {
-    const t = normalize(text).toLowerCase()
-    if (!t) return false
-    if (/tiến trình\s*4|step\s*4/.test(t)) return true
-    const hintCount = [
-      /title|tiêu đề/.test(t),
-      /nội dung ngắn|short content/.test(t),
-      /nội dung dài|full content/.test(t),
-      /full[\s-]*length|twist ending|happy ending|story/.test(t),
-    ].filter(Boolean).length
-    return hintCount >= 2
-  }
-
-  const isStep4AssistantOutput = (text: string) => {
-    const t = normalize(text)
-    if (!t) return false
-    const lower = t.toLowerCase()
-    const score = [
-      t.length >= 800,
-      /title\s*[:-]|tiêu đề\s*[:-]/i.test(t),
-      /\?\s*$|\?/.test(t),
-      /\n\s*\n/.test(t),
-      /twist ending|happy ending|full[\s-]*length|story/i.test(lower),
-    ].filter(Boolean).length
-    return score >= 2
-  }
+  const turns = listThreadTurns()
+  if (!turns.length) return mode === 'collect' ? null : mode === 'clipboard' ? '' : null
 
   const measureLen = (text: string) => normalize(text).replace(/\s+/g, ' ').length
 
@@ -261,31 +328,8 @@ export function chatgptExtractContent(...args: unknown[]): ChatgptExtractContent
     return joined || hint
   }
 
-  let raw = ''
-  let matchedAssistantNode: HTMLElement | null = null
-
-  for (let i = turns.length - 1; i >= 0; i -= 1) {
-    const role = (turns[i].getAttribute('data-message-author-role') || '').toLowerCase()
-    if (role !== 'user') continue
-
-    const userText = normalize(turns[i].innerText || '')
-    if (!isStep4UserPrompt(userText)) continue
-
-    for (let j = i + 1; j < turns.length; j += 1) {
-      const nextRole = (turns[j].getAttribute('data-message-author-role') || '').toLowerCase()
-      if (nextRole === 'user') break
-      if (nextRole !== 'assistant') continue
-      const assistantText = normalize(turns[j].innerText || '')
-      if (!assistantText) continue
-      if (!isStep4AssistantOutput(assistantText)) continue
-      raw = assistantText
-      matchedAssistantNode = turns[j]
-      break
-    }
-
-    if (raw) break
-  }
-
+  const matchedAssistantNode = findExtractContentAssistantTurn(turns, promptHint)
+  const raw = matchedAssistantNode ? normalize(matchedAssistantNode.innerText || '') : ''
   if (!raw) return mode === 'collect' ? null : ''
 
   /** Cuộn do script highlight (ChatgptScreen / GgSheet) — tránh scroll lại gây giật. */
