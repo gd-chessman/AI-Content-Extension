@@ -37,6 +37,22 @@ export const CHATGPT_BOTTOM_BAR_TOOLS: ToolDefinition[] = [
     },
   },
   {
+    code: 'chatgpt_fill_grok_single',
+    name: 'Grok đơn',
+    platform: 'chatgpt',
+    handlerKey: CHATGPT_HANDLER_KEYS.fillGrokSingle,
+    placement: 'bottom_bar',
+    sortOrder: 15,
+    defaultConfig: {},
+    handlerScript: 'await host.fillGrokSingle();',
+    uiConfig: {
+      icon: 'grokSingle',
+      copiedToolId: 'grok-single',
+      buttonClass: 'bg-violet-500/20 text-violet-100 hover:bg-violet-500/30',
+      badgeClass: 'bg-violet-500',
+    },
+  },
+  {
     code: 'chatgpt_push_webblog',
     name: 'Đẩy WebBlog',
     platform: 'chatgpt',

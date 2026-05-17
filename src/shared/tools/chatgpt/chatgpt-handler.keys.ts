@@ -7,6 +7,8 @@ export const CHATGPT_HANDLER_KEYS = {
   copySingleVideo: 'chatgpt.copySingleVideo',
   extractContent: 'chatgpt.extractContent',
   fillGrok: 'chatgpt.fillGrok',
+  /** Package 1 ảnh + 1 VIDEO PROMPT — bottom bar. */
+  fillGrokSingle: 'chatgpt.fillGrokSingle',
   pushWebBlog: 'chatgpt.pushWebBlog',
   collectGgSheet: 'chatgpt.collectGgSheet',
   saveLocal: 'chatgpt.saveLocal',
