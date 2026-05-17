@@ -1,5 +1,23 @@
 @import "tailwindcss";
 
+/*
+ * buttonClass/badgeClass lấy từ MongoDB (tools.uiConfig) — Tailwind v4 không thấy chuỗi động lúc build.
+ * @source inline buộc generate đủ utility (tránh chỉ WebBlog amber vì class đó có sẵn trong .tsx).
+ */
+@source inline("bg-sky-500/20 text-sky-100 hover:bg-sky-500/30");
+@source inline("bg-amber-500/20 text-amber-100 hover:bg-amber-500/30");
+@source inline("bg-amber-500/25 text-amber-100 hover:bg-amber-500/35");
+@source inline("bg-green-500/20 text-green-100 hover:bg-green-500/30");
+@source inline("bg-teal-500/25 text-teal-100 hover:bg-teal-500/35");
+@source inline("bg-blue-500/20 text-blue-100 hover:bg-blue-500/30");
+@source inline("bg-blue-500/25 text-blue-100 hover:bg-blue-500/35");
+@source inline("bg-cyan-500/25 text-cyan-100 hover:bg-cyan-500/35");
+@source inline("bg-emerald-500/25 text-emerald-100 hover:bg-emerald-500/35");
+@source inline("bg-indigo-500/25 text-indigo-100 hover:bg-indigo-500/35");
+@source inline("bg-violet-500/20 text-violet-100 hover:bg-violet-500/30");
+@source inline("bg-pink-500/25 text-pink-100 hover:bg-pink-500/35");
+@source inline("bg-sky-500 bg-amber-500 bg-green-500 bg-teal-500 bg-blue-500 bg-cyan-500 bg-emerald-500 bg-indigo-500 bg-violet-600 bg-pink-500");
+
 :root {
   --app-bg: #0a0a0a;
   --app-surface: #111827;

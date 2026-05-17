@@ -167,5 +167,7 @@ export function getStepPanelBadgeLabel(config: Record<string, unknown>, ui: Step
   if (part === 'left' || part === 1 || part === '1') return '1'
   if (part === 'right' || part === 2 || part === '2') return '2'
   if (typeof config.mode === 'string' && config.mode.includes('short')) return ''
-  return ui.copiedToolId.includes('video') ? (ui.copiedToolId.endsWith('1') ? '1' : '2') : ''
+  if (ui.copiedToolId === 'video-1' || ui.copiedToolId === 'image-left') return '1'
+  if (ui.copiedToolId === 'video-2' || ui.copiedToolId === 'image-right') return '2'
+  return ''
 }

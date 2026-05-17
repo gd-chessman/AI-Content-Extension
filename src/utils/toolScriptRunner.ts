@@ -43,6 +43,11 @@ export async function runToolHandlerScript(
     return
   }
 
+  if (body.includes('extractSingleVideoContent')) {
+    await callHostVoid(host, 'extractSingleVideoContent')
+    return
+  }
+
   if (body.includes('extractVideoContent')) {
     const part: 1 | 2 = config.part === 2 || config.part === '2' ? 2 : 1
     await callHostVoid(host, 'extractVideoContent', part)

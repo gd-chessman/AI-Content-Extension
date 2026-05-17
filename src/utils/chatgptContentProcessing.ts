@@ -1080,3 +1080,208 @@ export function chatgptExtractVideoBlockPageScript(videoPart: number): string {
 
   return compactLines(stripVideoToolMentionSentences(stripThesePromptsOptimizedAppendix(block)))
 }
+
+/** Cuộn tới khối VIDEO (một đoạn — không tách VIDEO 1/2). */
+export function chatgptScrollToSingleVideoBlockPageScript(): boolean {
+  const TOP_INSET_PX = 96
+
+  const scrollElementWithTopInset = (el: HTMLElement) => {
+    const prevScrollMarginTop = el.style.scrollMarginTop
+    el.style.scrollMarginTop = `${TOP_INSET_PX}px`
+    el.scrollIntoView({ block: 'start', inline: 'nearest', behavior: 'instant' })
+    window.requestAnimationFrame(() => {
+      el.style.scrollMarginTop = prevScrollMarginTop
+    })
+  }
+
+  const videoHeaderRe = /^(?:\s*(?:🎬|🎥)\s*)?VIDEO\b/i
+  const findNewestAssistantWithVideo = (): HTMLElement | null => {
+    const assistants = Array.from(
+      document.querySelectorAll<HTMLElement>('[data-message-author-role="assistant"]'),
+    ).filter((el) => Boolean((el.innerText || '').trim()))
+    for (let i = assistants.length - 1; i >= 0; i -= 1) {
+      if (/\bVIDEO\b/i.test(assistants[i].innerText || '')) return assistants[i]
+    }
+    return null
+  }
+
+  const findVideoHeaderElement = (root: HTMLElement): HTMLElement | null => {
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
+    let textNode: Text | null
+    while ((textNode = walker.nextNode() as Text | null)) {
+      for (const chunk of (textNode.textContent || '').split('\n')) {
+        const line = chunk.replace(/\s+/g, ' ').trim()
+        if (!line || !videoHeaderRe.test(line)) continue
+        let el: HTMLElement | null = textNode.parentElement
+        while (el && el !== root) {
+          const tag = el.tagName
+          if (/^(P|LI|H[1-6]|PRE|BLOCKQUOTE|DIV)$/i.test(tag) && el.offsetHeight > 4) return el
+          el = el.parentElement
+        }
+        return textNode.parentElement
+      }
+    }
+    return null
+  }
+
+  const turn = findNewestAssistantWithVideo()
+  if (!turn) return false
+  const header = findVideoHeaderElement(turn) || turn
+  scrollElementWithTopInset(header)
+  return true
+}
+
+/** Trích toàn bộ phần VIDEO (một khối — không chia VIDEO 1 / VIDEO 2). */
+export function chatgptExtractSingleVideoBlockPageScript(): string {
+  const compactLines = (raw: string) => {
+    const source = (raw || '').replace(/\r/g, '').trim()
+    if (!source) return ''
+    return source
+      .split('\n')
+      .map((line) => line.replace(/\s+/g, ' ').trim())
+      .filter(Boolean)
+      .join('\n')
+  }
+
+  const stripVideoToolMentionSentences = (raw: string) => {
+    const toolRe = /\b(?:Runway|Kling|Pika|Luma|Veo|Grok)\b/i
+    const source = (raw || '').replace(/\r/g, '')
+    if (!source.trim()) return ''
+    return source
+      .split('\n')
+      .map((line) => {
+        const trimmed = line.trim()
+        if (!trimmed) return ''
+        const sentences = trimmed
+          .split(/(?<=[.!?])\s+/)
+          .map((s) => s.trim())
+          .filter(Boolean)
+        if (sentences.length <= 1) return toolRe.test(trimmed) ? '' : line
+        const kept = sentences.filter((s) => !toolRe.test(s))
+        return kept.join(' ').trim()
+      })
+      .filter((line) => line.trim().length > 0)
+      .join('\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim()
+  }
+
+  const stripThesePromptsOptimizedAppendix = (raw: string) =>
+    raw
+      .replace(
+        /These\s+\d+\s+prompts\s+are\s+optimized\s+for\s+Runway[\s\S]*?story-accurate\s+suspense\s+progression\.?/gi,
+        '',
+      )
+      .replace(
+        /These\s+prompts\s+are\s+optimized\s+for\s+Runway[\s\S]*?continuity-safe\s+character\s+locking\.?/gi,
+        '',
+      )
+      .replace(
+        /These\s+(?:\d+\s+)?prompts\s+are\s+optimized\s+for\s+Runway[\s\S]*?(?:story-accurate\s+suspense\s+progression|continuity-safe\s+character\s+locking)\.?/gi,
+        '',
+      )
+      .replace(/\n{3,}/g, '\n\n')
+      .trim()
+
+  const isMetadataOrFooterLine = (t: string) => {
+    if (/^AI GENERATION SETTINGS\b/i.test(t)) return true
+    if (/^STYLE TAGS\b/i.test(t)) return true
+    if (/^NEGATIVE PROMPT\b/i.test(t)) return true
+    if (/^Apply to all assets\b/i.test(t)) return true
+    if (/^This structure ensures\b/i.test(t)) return true
+    if (/^These\s+(?:\d+\s+)?prompts\s+are\s+optimized\b/i.test(t)) return true
+    if (/^(?:Facebook|ChatGPT|Grok|GGSheet|WebBlog)\s*$/i.test(t)) return true
+    if (/^title\s*[:-]/i.test(t)) return true
+    if (/^tiêu đề\s*[:-]/i.test(t)) return true
+    return false
+  }
+
+  const isStopLine = (L: string) => {
+    const t = L.trim()
+    if (/^={10,}$/.test(t)) return true
+    if (isMetadataOrFooterLine(t)) return true
+    if (/\b(?:Runway|Kling|Pika|Luma|Veo|Grok)\b/i.test(t)) return true
+    if (/^✅/.test(t)) return true
+    if (/CONTINUITY\s+NOTES\b/i.test(t)) return true
+    if (/^CONTINUITY\b/i.test(t)) return true
+    if (/^🔥/.test(t)) return true
+    if (/^If you want\b/i.test(t)) return true
+    return false
+  }
+
+  const videoHeaderRe = /^\s*(?:🎬|🎥)?\s*VIDEO\b/i
+
+  const extractSingleVideoBlock = (full: string) => {
+    const lines = full.replace(/\r/g, '').split('\n')
+    let start = -1
+    for (let i = 0; i < lines.length; i += 1) {
+      if (videoHeaderRe.test(lines[i])) {
+        start = i
+        break
+      }
+    }
+    if (start < 0) return ''
+
+    const out: string[] = []
+    for (let i = start; i < lines.length; i += 1) {
+      if (i > start && isStopLine(lines[i])) break
+      out.push(lines[i])
+    }
+    return out.join('\n').trim()
+  }
+
+  const extractSingleVideoBlockRegex = (full: string) => {
+    const t = full.replace(/\r/g, '')
+    const mEmoji = t.match(/(?:🎬|🎥)\s*VIDEO\b/i)
+    const mPlain = t.match(/(^|\n)\s*VIDEO\b/i)
+    const starts: number[] = []
+    if (mEmoji?.index !== undefined) starts.push(mEmoji.index)
+    if (mPlain && mPlain.index !== undefined) starts.push(mPlain.index + (mPlain[1] === '\n' ? 1 : 0))
+    if (!starts.length) return ''
+    const startIdx = Math.min(...starts)
+    const tail = t.slice(startIdx)
+    let stop = tail.length
+    const eqSep = tail.search(/\n={10,}\s*(?:\n|$)/)
+    if (eqSep >= 0) stop = Math.min(stop, eqSep)
+    for (const rg of [
+      /\n\s*AI GENERATION SETTINGS\b/i,
+      /\n\s*STYLE TAGS\b/i,
+      /\n\s*NEGATIVE PROMPT\b/i,
+      /\n\s*Apply to all assets\b/i,
+      /\n\s*This structure ensures\b/i,
+      /\n\s*These\s+(?:\d+\s+)?prompts\s+are\s+optimized\b/i,
+      /\n\s*(?:Facebook|ChatGPT|Grok|GGSheet|WebBlog)\s*(?=\n|$)/i,
+      /\n\s*title\s*[:-]/i,
+      /\n\s*tiêu đề\s*[:-]/i,
+    ]) {
+      const c = tail.search(rg)
+      if (c >= 0) stop = Math.min(stop, c)
+    }
+    for (const rg of [/\n\s*CONTINUITY\s+NOTES\b/i, /\n\s*CONTINUITY\b/i, /\n\s*✅/i, /\n\s*🔥/i, /\n\s*If you want\b/i]) {
+      const c = tail.search(rg)
+      if (c >= 0) stop = Math.min(stop, c)
+    }
+    const toolMention = tail.search(/\n[^\n]*\b(?:Runway|Kling|Pika|Luma|Veo|Grok)\b[^\n]*/i)
+    if (toolMention >= 0) stop = Math.min(stop, toolMention)
+    return tail.slice(0, stop).trim()
+  }
+
+  const assistants = Array.from(
+    document.querySelectorAll<HTMLElement>('[data-message-author-role="assistant"]'),
+  ).filter((el) => Boolean((el.innerText || '').trim()))
+
+  let candidateNode: HTMLElement | null = null
+  for (let i = assistants.length - 1; i >= 0; i -= 1) {
+    if (/\bVIDEO\b/i.test(assistants[i].innerText || '')) {
+      candidateNode = assistants[i]
+      break
+    }
+  }
+  if (!candidateNode) return ''
+
+  const text = candidateNode.innerText || ''
+  let block = extractSingleVideoBlock(text)
+  if (!block) block = extractSingleVideoBlockRegex(text)
+
+  return compactLines(stripVideoToolMentionSentences(stripThesePromptsOptimizedAppendix(block)))
+}

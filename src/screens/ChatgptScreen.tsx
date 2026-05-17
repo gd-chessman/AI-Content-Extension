@@ -48,7 +48,9 @@ import {
 } from '@/services/StoryService'
 import { chatgptExtractContent } from '@/utils/chatgptExtractContent'
 import {
+  chatgptExtractSingleVideoBlockPageScript,
   chatgptExtractVideoBlockPageScript,
+  chatgptScrollToSingleVideoBlockPageScript,
   chatgptScrollToVideoBlockPageScript,
   chatgptWarmThreadScrollContainersPageScript,
   chatgptScrollHighlightStep4ContentPageScript,
@@ -1260,6 +1262,122 @@ export default function ChatgptScreen() {
     return extracted
   }
 
+  const extractSingleVideoContent = async (options?: { copyToClipboard?: boolean; preferredTabId?: number }) => {
+    const copyToClipboard = options?.copyToClipboard !== false
+    const extensionChrome = getChrome()
+    if (!extensionChrome?.tabs?.query || !extensionChrome.scripting?.executeScript) {
+      setStatus('Môi trường hiện tại không hỗ trợ lấy nội dung VIDEO.')
+      return ''
+    }
+
+    if (!chatgptStepsByAction.extractVideos) {
+      if (copyToClipboard) {
+        setStatus(
+          'Workflow chưa có bước actionType = chatgpt_extract_content_video(s) (tách VIDEO / một khối VIDEO).',
+        )
+      }
+      return ''
+    }
+
+    if (copyToClipboard) {
+      setStatus(`Đang lấy nội dung VIDEO từ «${extractVideosStepLabel}»...`)
+    }
+
+    const prefId = options?.preferredTabId
+    let target: BrowserTab | null | undefined
+
+    if (prefId) {
+      const t = await updateTab(prefId)
+      if (t?.id) {
+        const url = t.url || ''
+        if (!/chatgpt\.com|chat\.openai\.com/i.test(url)) {
+          target = await updateTab(t.id, CHATGPT_URL)
+        } else {
+          target = await updateTab(t.id)
+        }
+      }
+    }
+
+    if (!target?.id) {
+      const currentActive = await queryTabs(undefined, true, true)
+      const activeTab = currentActive[0]
+      const isActiveChatgpt = Boolean(activeTab?.url && /chatgpt\.com|chat\.openai\.com/i.test(activeTab.url))
+      const activeTabs = isActiveChatgpt ? [activeTab] : await queryTabs(CHATGPT_PATTERNS, true, true)
+      const allTabs = activeTabs.length > 0 ? activeTabs : await queryTabs(CHATGPT_PATTERNS)
+      target = allTabs[0]
+    }
+
+    if (!target?.id) {
+      setStatus('Không tìm thấy tab ChatGPT để lấy nội dung VIDEO.')
+      return ''
+    }
+
+    target = await updateTab(target.id)
+    await sleep(240)
+
+    if (!target?.id) {
+      setStatus('Không thể kích hoạt tab ChatGPT để lấy nội dung VIDEO.')
+      return ''
+    }
+
+    await extensionChrome.scripting.executeScript({
+      target: { tabId: target.id },
+      func: chatgptWarmThreadScrollContainersPageScript as (...args: unknown[]) => unknown,
+    })
+    await sleep(140)
+
+    const maxAttempts = 3
+    let extracted = ''
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      if (attempt > 1) {
+        await updateTab(target.id)
+        await sleep(420)
+        await snapChatgptThreadToBottomBeforeRead(target.id)
+        await sleep(200)
+      }
+
+      await extensionChrome.scripting.executeScript({
+        target: { tabId: target.id },
+        func: chatgptScrollToSingleVideoBlockPageScript as (...args: unknown[]) => unknown,
+      })
+      await sleep(copyToClipboard ? 380 : 140)
+
+      const result = await extensionChrome.scripting.executeScript({
+        target: { tabId: target.id },
+        func: chatgptExtractSingleVideoBlockPageScript as (...args: unknown[]) => unknown,
+      })
+
+      extracted = ((result?.[0]?.result as string | undefined) || '').trim()
+      if (extracted) break
+
+      if (copyToClipboard && attempt < maxAttempts) {
+        setStatus(`Chưa lấy được nội dung VIDEO, tự thử lại (${attempt}/${maxAttempts})…`)
+      }
+    }
+
+    if (!extracted) {
+      if (copyToClipboard) {
+        setStatus(
+          `Không tìm thấy khối VIDEO trong output «${extractVideosStepLabel}». Hãy đảm bảo đã có phần VIDEO trên ChatGPT.`,
+        )
+      }
+      return ''
+    }
+
+    if (copyToClipboard) {
+      try {
+        await navigator.clipboard.writeText(extracted)
+        setCopiedTool('video-single')
+        window.setTimeout(() => setCopiedTool((prev) => (prev === 'video-single' ? null : prev)), 1200)
+        setStatus('Đã lấy và sao chép nội dung VIDEO vào clipboard.')
+      } catch {
+        setStatus('Đã lấy nội dung VIDEO nhưng sao chép thất bại.')
+      }
+    }
+    return extracted
+  }
+
   const executeWorkflowStep = async (step: ProcessStep) => {
     // User-required behavior: every workflow step in ChatGPT screen
     // runs exactly like "Chạy nhanh", then waits for response completion.
@@ -2109,6 +2227,7 @@ export default function ChatgptScreen() {
         }
       },
       extractVideoContent: (part: 1 | 2) => extractVideoContent(part),
+      extractSingleVideoContent: () => extractSingleVideoContent(),
       extractThreadContent: (mode: 'title_plain' | 'title_styled' | 'content_short' | 'content_full') =>
         extractThreadContent(mode),
     }),
@@ -2119,6 +2238,7 @@ export default function ChatgptScreen() {
       copyLatestChatImage,
       copyImageDataUrl,
       extractVideoContent,
+      extractSingleVideoContent,
       extractThreadContent,
     ],
   )
