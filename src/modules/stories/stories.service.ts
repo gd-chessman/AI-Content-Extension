@@ -102,12 +102,25 @@ export class StoriesService {
 
     const name = (dto.name || '').trim().slice(0, 200);
 
-    const created = await this.storyModel.create({
+    const storyPayload: {
+      userId: Types.ObjectId;
+      storySourceId: Types.ObjectId;
+      name: string;
+      topicId?: Types.ObjectId;
+      videoPrompts?: string[];
+    } = {
       userId: userOid,
-      topicId,
       storySourceId: new Types.ObjectId(String(sourceDoc._id)),
       name,
-    });
+    };
+    if (topicId) {
+      storyPayload.topicId = topicId;
+    }
+    if (dto.videoPrompts !== undefined) {
+      storyPayload.videoPrompts = this.normalizeVideoPrompts(dto.videoPrompts);
+    }
+
+    const created = await this.storyModel.create(storyPayload);
 
     const sourceAfterUsage = await this.storySourceModel.findOneAndUpdate(
       { _id: sourceDoc._id, userId: userOid },
@@ -156,13 +169,7 @@ export class StoriesService {
     const userOid = new Types.ObjectId(userId);
     const update: Record<string, unknown> = {};
     if (dto.videoPrompts !== undefined) {
-      if (!Array.isArray(dto.videoPrompts)) {
-        throw new BadRequestException('videoPrompts must be an array.');
-      }
-      const maxItems = 32;
-      update.videoPrompts = dto.videoPrompts
-        .slice(0, maxItems)
-        .map((s) => String(s ?? '').trim().slice(0, 50_000));
+      update.videoPrompts = this.normalizeVideoPrompts(dto.videoPrompts);
     }
     if (Object.keys(update).length === 0) {
       throw new BadRequestException('No fields to update.');
@@ -416,6 +423,16 @@ export class StoriesService {
     } catch {
       return url.trim();
     }
+  }
+
+  private normalizeVideoPrompts(value: unknown): string[] {
+    if (!Array.isArray(value)) {
+      throw new BadRequestException('videoPrompts must be an array.');
+    }
+    const maxItems = 32;
+    return value
+      .slice(0, maxItems)
+      .map((s) => String(s ?? '').trim().slice(0, 50_000));
   }
 
   private normalizeHttpUrl(raw: string) {

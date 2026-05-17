@@ -7,6 +7,9 @@ export class CreateStoryDto {
 
   /** StoryTopic id (tuỳ chọn) */
   topicId?: string;
+
+  /** Prompt/script video (VD: Video 1, Video 2) — gửi khi tạo, không cần PATCH sau. */
+  videoPrompts?: string[];
 }
 
 /** Đồng bộ / cập nhật story nguồn khi lấy caption từ reel (không tạo Story). */
