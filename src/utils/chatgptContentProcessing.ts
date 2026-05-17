@@ -1195,7 +1195,7 @@ export function chatgptExtractVideoBlockPageScript(videoPart: number): string {
   return compactLines(stripVideoToolMentionSentences(stripThesePromptsOptimizedAppendix(block)))
 }
 
-/** Cuộn tới khối VIDEO (một đoạn — không tách VIDEO 1/2). */
+/** Cuộn + khung sáng khối VIDEO PROMPT (package 1 image + 1 video, hoặc định dạng VIDEO cũ). */
 export function chatgptScrollToSingleVideoBlockPageScript(): boolean {
   const TOP_INSET_PX = 96
 
@@ -1203,18 +1203,89 @@ export function chatgptScrollToSingleVideoBlockPageScript(): boolean {
     const prevScrollMarginTop = el.style.scrollMarginTop
     el.style.scrollMarginTop = `${TOP_INSET_PX}px`
     el.scrollIntoView({ block: 'start', inline: 'nearest', behavior: 'instant' })
+
+    const alignInScrollParent = (scrollParent: HTMLElement) => {
+      const er = el.getBoundingClientRect()
+      const pr = scrollParent.getBoundingClientRect()
+      const delta = er.top - pr.top - TOP_INSET_PX
+      if (Math.abs(delta) > 2) scrollParent.scrollTop += delta
+    }
+
+    let alignedMain = false
+    let parent: HTMLElement | null = el.parentElement
+    while (parent && parent !== document.body) {
+      const oy = window.getComputedStyle(parent).overflowY
+      if ((oy === 'auto' || oy === 'scroll' || oy === 'overlay') && parent.scrollHeight > parent.clientHeight + 8) {
+        alignInScrollParent(parent)
+        if (parent.matches('main, [role="log"]')) alignedMain = true
+      }
+      parent = parent.parentElement
+    }
+
+    if (!alignedMain) {
+      const main = document.querySelector<HTMLElement>('main, [role="log"]')
+      if (main && main.scrollHeight > main.clientHeight + 8) alignInScrollParent(main)
+    }
+
+    if (!alignedMain) {
+      const rect = el.getBoundingClientRect()
+      window.scrollTo({ top: Math.max(0, window.scrollY + rect.top - TOP_INSET_PX), behavior: 'instant' })
+    }
+
     window.requestAnimationFrame(() => {
       el.style.scrollMarginTop = prevScrollMarginTop
     })
   }
 
-  const videoHeaderRe = /^(?:\s*(?:🎬|🎥)\s*)?VIDEO\b/i
+  const assistantHasVideoBlock = (text: string) =>
+    /VIDEO\s+PROMPT\s*:/i.test(text) ||
+    /EXACTLY\s+1\s+VIDEO\s+PROMPT/i.test(text) ||
+    /(?:^|\n)\s*(?:🎬|🎥)?\s*VIDEO\b/i.test(text)
+
+  const lineMatchesVideoScrollTarget = (line: string) => {
+    const t = line.replace(/\s+/g, ' ').trim()
+    if (!t) return false
+    if (/^\s*VIDEO\s+PROMPT\s*:?\s*$/i.test(t) || /^\s*VIDEO\s+PROMPT\s*:/i.test(t)) return true
+    if (/^\s*2\)\s*EXACTLY\s+1\s+VIDEO\s+PROMPT/i.test(t)) return true
+    if (/IMAGE\s+PROMPT/i.test(t)) return false
+    if (/^\s*1\)\s*EXACTLY\s+1\s+IMAGE/i.test(t)) return false
+    return /^\s*(?:🎬|🎥)?\s*VIDEO\b/i.test(t) && !/VIDEO\s*[12]\b/i.test(t)
+  }
+
+  const isVideoPackageHeaderLine = (line: string) => lineMatchesVideoScrollTarget(line)
+
+  const isVideoPackageStopLine = (line: string) => {
+    const t = line.trim()
+    if (!t) return false
+    if (/^SEGMENT\s+\d+/i.test(t)) return false
+    if (/^={10,}$/.test(t)) return true
+    if (/^AI GENERATION SETTINGS\b/i.test(t)) return true
+    if (/^STYLE TAGS\b/i.test(t)) return true
+    if (/^NEGATIVE PROMPT\b/i.test(t)) return true
+    if (/^Apply to all assets\b/i.test(t)) return true
+    if (/^This structure ensures\b/i.test(t)) return true
+    if (/^This package is optimized for\b/i.test(t)) return true
+    if (/^These\s+(?:\d+\s+)?prompts\s+are\s+optimized\b/i.test(t)) return true
+    if (/^(?:Facebook|ChatGPT|Grok|GGSheet|WebBlog)\s*$/i.test(t)) return true
+    if (/^title\s*[:-]/i.test(t)) return true
+    if (/^tiêu đề\s*[:-]/i.test(t)) return true
+    if (/^(?:This package|These\s+(?:\d+\s+)?prompts)\s+.*\b(?:Runway|Kling|Pika|Luma|Veo|Grok)\b/i.test(t)) {
+      return true
+    }
+    if (/^✅/.test(t)) return true
+    if (/CONTINUITY\s+NOTES\b/i.test(t)) return true
+    if (/^CONTINUITY\b/i.test(t)) return true
+    if (/^🔥/.test(t)) return true
+    if (/^If you want\b/i.test(t)) return true
+    return false
+  }
+
   const findNewestAssistantWithVideo = (): HTMLElement | null => {
     const assistants = Array.from(
       document.querySelectorAll<HTMLElement>('[data-message-author-role="assistant"]'),
     ).filter((el) => Boolean((el.innerText || '').trim()))
     for (let i = assistants.length - 1; i >= 0; i -= 1) {
-      if (/\bVIDEO\b/i.test(assistants[i].innerText || '')) return assistants[i]
+      if (assistantHasVideoBlock(assistants[i].innerText || '')) return assistants[i]
     }
     return null
   }
@@ -1225,7 +1296,7 @@ export function chatgptScrollToSingleVideoBlockPageScript(): boolean {
     while ((textNode = walker.nextNode() as Text | null)) {
       for (const chunk of (textNode.textContent || '').split('\n')) {
         const line = chunk.replace(/\s+/g, ' ').trim()
-        if (!line || !videoHeaderRe.test(line)) continue
+        if (!line || !lineMatchesVideoScrollTarget(line)) continue
         let el: HTMLElement | null = textNode.parentElement
         while (el && el !== root) {
           const tag = el.tagName
@@ -1238,14 +1309,208 @@ export function chatgptScrollToSingleVideoBlockPageScript(): boolean {
     return null
   }
 
+  const firstLineOf = (el: HTMLElement) =>
+    (el.innerText || '')
+      .split('\n')
+      .map((l) => l.replace(/\s+/g, ' ').trim())
+      .find(Boolean) || ''
+
+  const elementIsVideoPackageFooter = (el: HTMLElement) =>
+    (el.innerText || '').split('\n').some((raw) => {
+      const line = raw.replace(/\s+/g, ' ').trim()
+      return (
+        line.length > 0 &&
+        /^(?:This package|These\s+(?:\d+\s+)?prompts)\s+.*\b(?:Runway|Kling|Pika|Luma|Veo|Grok)\b/i.test(line)
+      )
+    })
+
+  const isStopElement = (el: HTMLElement) => {
+    if (elementIsVideoPackageFooter(el)) return true
+    const line = firstLineOf(el)
+    return Boolean(line) && isVideoPackageStopLine(line) && !isVideoPackageHeaderLine(line)
+  }
+
+  const collectContentElementsAfterHeader = (root: HTMLElement, headerEl: HTMLElement): HTMLElement[] => {
+    const direct: HTMLElement[] = []
+    let sib: Element | null = headerEl.nextElementSibling
+    while (sib && root.contains(sib)) {
+      const he = sib as HTMLElement
+      if (isStopElement(he)) break
+      direct.push(he)
+      sib = sib.nextElementSibling
+    }
+    if (direct.length > 0) {
+      return direct.filter((el) => !elementIsVideoPackageFooter(el))
+    }
+
+    const content = new Set<HTMLElement>()
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
+    let started = false
+    let passedHeaderLine = false
+    let textNode: Text | null
+    while ((textNode = walker.nextNode() as Text | null)) {
+      if (!started) {
+        if (headerEl.contains(textNode)) started = true
+        else if (headerEl.compareDocumentPosition(textNode) & Node.DOCUMENT_POSITION_FOLLOWING) started = true
+        if (!started) continue
+      }
+      for (const raw of (textNode.textContent || '').split('\n')) {
+        const line = raw.replace(/\s+/g, ' ').trim()
+        if (!line) continue
+        if (isVideoPackageHeaderLine(line)) {
+          passedHeaderLine = true
+          continue
+        }
+        if (!passedHeaderLine) continue
+        if (isVideoPackageStopLine(line)) {
+          return [...content].filter((el) => !elementIsVideoPackageFooter(el))
+        }
+        const host =
+          textNode.parentElement?.closest<HTMLElement>('p, li, pre, blockquote, h1, h2, h3, h4, h5, h6') ||
+          textNode.parentElement
+        if (
+          host &&
+          root.contains(host) &&
+          host !== root &&
+          host !== headerEl &&
+          !headerEl.contains(host) &&
+          !elementIsVideoPackageFooter(host)
+        ) {
+          content.add(host)
+        }
+      }
+    }
+    return [...content].filter((el) => !elementIsVideoPackageFooter(el))
+  }
+
+  const areConsecutiveSiblings = (elements: HTMLElement[]) => {
+    if (elements.length < 2) return true
+    const parent = elements[0].parentElement
+    if (!parent || !elements.every((el) => el.parentElement === parent)) return false
+    const indexOf = (el: HTMLElement) => [...parent.children].indexOf(el)
+    const indices = elements.map(indexOf).sort((a, b) => a - b)
+    for (let i = 1; i < indices.length; i += 1) {
+      if (indices[i] !== indices[i - 1] + 1) return false
+    }
+    return true
+  }
+
+  const HIGHLIGHT_MS = 5000
+  const HIGHLIGHT_MARK = 'data-ai-content-ext-video-highlight'
+  const CONTENT_WRAP_ATTR = 'data-ai-content-ext-video-content-wrap'
+  const HIGHLIGHT_STYLE_KEYS = ['outline', 'outlineOffset', 'boxShadow', 'backgroundColor', 'borderRadius'] as const
+
+  const unwrapContentHighlight = () => {
+    document.querySelectorAll<HTMLElement>(`[${CONTENT_WRAP_ATTR}]`).forEach((wrap) => {
+      const parent = wrap.parentElement
+      if (!parent) return
+      while (wrap.firstChild) parent.insertBefore(wrap.firstChild, wrap)
+      wrap.remove()
+    })
+  }
+
+  const wrapConsecutiveContentSiblings = (elements: HTMLElement[]): HTMLElement | null => {
+    if (!elements.length) return null
+    if (elements.length === 1) return elements[0]
+    if (!areConsecutiveSiblings(elements)) return null
+    const parent = elements[0].parentElement
+    if (!parent) return null
+
+    const wrapNode = document.createElement('div')
+    wrapNode.setAttribute(CONTENT_WRAP_ATTR, '1')
+    parent.insertBefore(wrapNode, elements[0])
+    for (const el of elements) wrapNode.appendChild(el)
+    return wrapNode
+  }
+
+  const resolveSingleContentHighlightHost = (
+    root: HTMLElement,
+    headerEl: HTMLElement,
+    contentEls: HTMLElement[],
+  ): HTMLElement | null => {
+    if (!contentEls.length) return null
+    if (contentEls.length === 1) return contentEls[0]
+
+    const wrapped = wrapConsecutiveContentSiblings(contentEls)
+    if (wrapped) return wrapped
+
+    const contentTextLen = contentEls.reduce((sum, el) => sum + (el.innerText || '').length, 0)
+    let candidate: HTMLElement | null = contentEls[0]
+    while (candidate && root.contains(candidate)) {
+      if (candidate.contains(headerEl)) {
+        candidate = candidate.parentElement
+        continue
+      }
+      const allInside = contentEls.every((el) => candidate!.contains(el))
+      if (allInside) {
+        const hostLen = (candidate.innerText || '').length
+        if (hostLen <= contentTextLen * 1.35) return candidate
+      }
+      candidate = candidate.parentElement
+    }
+    return contentEls[0]
+  }
+
+  const removeHighlights = () => {
+    unwrapContentHighlight()
+    document.querySelectorAll<HTMLElement>(`[${HIGHLIGHT_MARK}]`).forEach((el) => {
+      for (const key of HIGHLIGHT_STYLE_KEYS) {
+        const attr = `data-ai-content-ext-prev-${key}`
+        const prev = el.getAttribute(attr)
+        if (prev !== null) {
+          el.style[key] = prev
+          el.removeAttribute(attr)
+        }
+      }
+      el.removeAttribute(HIGHLIGHT_MARK)
+    })
+  }
+
+  const applyDomHighlight = (el: HTMLElement, kind: 'block' | 'header') => {
+    if (el.hasAttribute(HIGHLIGHT_MARK)) return
+    el.setAttribute(HIGHLIGHT_MARK, kind)
+    for (const key of HIGHLIGHT_STYLE_KEYS) {
+      el.setAttribute(`data-ai-content-ext-prev-${key}`, el.style[key] || '')
+    }
+    if (kind === 'header') {
+      el.style.outline = '3px solid rgba(96, 165, 250, 1)'
+      el.style.outlineOffset = '2px'
+      el.style.boxShadow = '0 0 14px rgba(59, 130, 246, 0.45)'
+      el.style.backgroundColor = 'rgba(59, 130, 246, 0.12)'
+      el.style.borderRadius = '6px'
+      return
+    }
+    el.style.outline = '2px solid rgba(59, 130, 246, 0.65)'
+    el.style.outlineOffset = '4px'
+    el.style.boxShadow = '0 0 0 6px rgba(59, 130, 246, 0.14)'
+    el.style.backgroundColor = 'rgba(59, 130, 246, 0.06)'
+    el.style.borderRadius = '10px'
+  }
+
   const turn = findNewestAssistantWithVideo()
   if (!turn) return false
-  const header = findVideoHeaderElement(turn) || turn
-  scrollElementWithTopInset(header)
+
+  const headerEl = findVideoHeaderElement(turn) || turn
+  scrollElementWithTopInset(headerEl)
+
+  removeHighlights()
+
+  applyDomHighlight(headerEl, 'header')
+  const contentElements = collectContentElementsAfterHeader(turn, headerEl).filter(
+    (el) => el !== headerEl && !headerEl.contains(el),
+  )
+  const contentHost = resolveSingleContentHighlightHost(turn, headerEl, contentElements)
+  if (contentHost) applyDomHighlight(contentHost, 'block')
+
+  window.setTimeout(() => removeHighlights(), HIGHLIGHT_MS)
+
   return true
 }
 
-/** Trích toàn bộ phần VIDEO (một khối — không chia VIDEO 1 / VIDEO 2). */
+/**
+ * Trích khối VIDEO PROMPT duy nhất (package ChatGPT: IMAGE + VIDEO, 4 SEGMENT).
+ * Bắt đầu tại `VIDEO PROMPT:` / `2) EXACTLY 1 VIDEO PROMPT`; dừng trước footer Runway.
+ */
 export function chatgptExtractSingleVideoBlockPageScript(): string {
   const compactLines = (raw: string) => {
     const source = (raw || '').replace(/\r/g, '').trim()
@@ -1266,6 +1531,9 @@ export function chatgptExtractSingleVideoBlockPageScript(): string {
       .map((line) => {
         const trimmed = line.trim()
         if (!trimmed) return ''
+        if (/^(?:This package|These\s+(?:\d+\s+)?prompts)\s+.*\b(?:Runway|Kling|Pika|Luma|Veo|Grok)\b/i.test(trimmed)) {
+          return ''
+        }
         const sentences = trimmed
           .split(/(?<=[.!?])\s+/)
           .map((s) => s.trim())
@@ -1282,6 +1550,7 @@ export function chatgptExtractSingleVideoBlockPageScript(): string {
 
   const stripThesePromptsOptimizedAppendix = (raw: string) =>
     raw
+      .replace(/This\s+package\s+is\s+optimized\s+for\s+Runway[\s\S]*$/gi, '')
       .replace(
         /These\s+\d+\s+prompts\s+are\s+optimized\s+for\s+Runway[\s\S]*?story-accurate\s+suspense\s+progression\.?/gi,
         '',
@@ -1297,12 +1566,20 @@ export function chatgptExtractSingleVideoBlockPageScript(): string {
       .replace(/\n{3,}/g, '\n\n')
       .trim()
 
+  const isVideoPromptLabelLine = (line: string) => {
+    const t = line.trim()
+    return /^\s*VIDEO\s+PROMPT\s*:?\s*$/i.test(t) || /^\s*VIDEO\s+PROMPT\s*:/i.test(t)
+  }
+
+  const isVideoSectionHeaderLine = (line: string) => /^\s*2\)\s*EXACTLY\s+1\s+VIDEO\s+PROMPT/i.test(line.trim())
+
   const isMetadataOrFooterLine = (t: string) => {
     if (/^AI GENERATION SETTINGS\b/i.test(t)) return true
     if (/^STYLE TAGS\b/i.test(t)) return true
     if (/^NEGATIVE PROMPT\b/i.test(t)) return true
     if (/^Apply to all assets\b/i.test(t)) return true
     if (/^This structure ensures\b/i.test(t)) return true
+    if (/^This package is optimized for\b/i.test(t)) return true
     if (/^These\s+(?:\d+\s+)?prompts\s+are\s+optimized\b/i.test(t)) return true
     if (/^(?:Facebook|ChatGPT|Grok|GGSheet|WebBlog)\s*$/i.test(t)) return true
     if (/^title\s*[:-]/i.test(t)) return true
@@ -1310,11 +1587,15 @@ export function chatgptExtractSingleVideoBlockPageScript(): string {
     return false
   }
 
-  const isStopLine = (L: string) => {
+  const isVideoPackageStopLine = (L: string) => {
     const t = L.trim()
+    if (!t) return false
+    if (/^SEGMENT\s+\d+/i.test(t)) return false
     if (/^={10,}$/.test(t)) return true
     if (isMetadataOrFooterLine(t)) return true
-    if (/\b(?:Runway|Kling|Pika|Luma|Veo|Grok)\b/i.test(t)) return true
+    if (/^(?:This package|These\s+(?:\d+\s+)?prompts)\s+.*\b(?:Runway|Kling|Pika|Luma|Veo|Grok)\b/i.test(t)) {
+      return true
+    }
     if (/^✅/.test(t)) return true
     if (/CONTINUITY\s+NOTES\b/i.test(t)) return true
     if (/^CONTINUITY\b/i.test(t)) return true
@@ -1323,22 +1604,35 @@ export function chatgptExtractSingleVideoBlockPageScript(): string {
     return false
   }
 
-  const videoHeaderRe = /^\s*(?:🎬|🎥)?\s*VIDEO\b/i
+  const findVideoBlockStartLine = (lines: string[]) => {
+    for (let i = 0; i < lines.length; i += 1) {
+      if (isVideoPromptLabelLine(lines[i])) return i
+    }
+    for (let i = 0; i < lines.length; i += 1) {
+      if (!isVideoSectionHeaderLine(lines[i])) continue
+      for (let j = i; j < Math.min(lines.length, i + 12); j += 1) {
+        if (isVideoPromptLabelLine(lines[j])) return j
+      }
+      return i
+    }
+    for (let i = 0; i < lines.length; i += 1) {
+      const L = lines[i]
+      if (/IMAGE\s+PROMPT/i.test(L)) continue
+      if (/^\s*1\)\s*EXACTLY\s+1\s+IMAGE/i.test(L)) continue
+      if (/^\s*(?:🎬|🎥)?\s*VIDEO\s*[12]\b/i.test(L)) continue
+      if (/^\s*(?:🎬|🎥)?\s*VIDEO\b/i.test(L)) return i
+    }
+    return -1
+  }
 
   const extractSingleVideoBlock = (full: string) => {
     const lines = full.replace(/\r/g, '').split('\n')
-    let start = -1
-    for (let i = 0; i < lines.length; i += 1) {
-      if (videoHeaderRe.test(lines[i])) {
-        start = i
-        break
-      }
-    }
+    const start = findVideoBlockStartLine(lines)
     if (start < 0) return ''
 
     const out: string[] = []
     for (let i = start; i < lines.length; i += 1) {
-      if (i > start && isStopLine(lines[i])) break
+      if (i > start && isVideoPackageStopLine(lines[i])) break
       out.push(lines[i])
     }
     return out.join('\n').trim()
@@ -1346,24 +1640,51 @@ export function chatgptExtractSingleVideoBlockPageScript(): string {
 
   const extractSingleVideoBlockRegex = (full: string) => {
     const t = full.replace(/\r/g, '')
-    const mEmoji = t.match(/(?:🎬|🎥)\s*VIDEO\b/i)
-    const mPlain = t.match(/(^|\n)\s*VIDEO\b/i)
     const starts: number[] = []
-    if (mEmoji?.index !== undefined) starts.push(mEmoji.index)
-    if (mPlain && mPlain.index !== undefined) starts.push(mPlain.index + (mPlain[1] === '\n' ? 1 : 0))
+
+    const mVideoPrompt = t.match(/(?:^|\n)\s*VIDEO\s+PROMPT\s*:/i)
+    if (mVideoPrompt?.index !== undefined) {
+      starts.push(mVideoPrompt.index + (mVideoPrompt[0].startsWith('\n') ? 1 : 0))
+    }
+
+    const mSection = t.match(/(?:^|\n)\s*2\)\s*EXACTLY\s+1\s+VIDEO\s+PROMPT\b/i)
+    if (mSection?.index !== undefined) {
+      const fromSection = t.slice(mSection.index)
+      const inner = fromSection.match(/(?:^|\n)\s*VIDEO\s+PROMPT\s*:/i)
+      if (inner?.index !== undefined) {
+        starts.push(mSection.index + inner.index + (inner[0].startsWith('\n') ? 1 : 0))
+      } else {
+        starts.push(mSection.index + (mSection[0].startsWith('\n') ? 1 : 0))
+      }
+    }
+
+    if (!starts.length) {
+      const mLegacy = t.match(/(?:^|\n)\s*(?:🎬|🎥)?\s*VIDEO\b(?!\s*[12]\b)/i)
+      if (mLegacy?.index !== undefined) {
+        const idx = mLegacy.index + (mLegacy[0].startsWith('\n') ? 1 : 0)
+        const before = t.slice(0, idx)
+        if (!/IMAGE\s+PROMPT\s*:[\s\S]*$/i.test(before.slice(Math.max(0, before.length - 4000)))) {
+          starts.push(idx)
+        }
+      }
+    }
+
     if (!starts.length) return ''
     const startIdx = Math.min(...starts)
     const tail = t.slice(startIdx)
     let stop = tail.length
+
     const eqSep = tail.search(/\n={10,}\s*(?:\n|$)/)
     if (eqSep >= 0) stop = Math.min(stop, eqSep)
+
     for (const rg of [
+      /\n\s*This package is optimized for\b/i,
+      /\n\s*These\s+(?:\d+\s+)?prompts\s+are\s+optimized\b/i,
       /\n\s*AI GENERATION SETTINGS\b/i,
       /\n\s*STYLE TAGS\b/i,
       /\n\s*NEGATIVE PROMPT\b/i,
       /\n\s*Apply to all assets\b/i,
       /\n\s*This structure ensures\b/i,
-      /\n\s*These\s+(?:\d+\s+)?prompts\s+are\s+optimized\b/i,
       /\n\s*(?:Facebook|ChatGPT|Grok|GGSheet|WebBlog)\s*(?=\n|$)/i,
       /\n\s*title\s*[:-]/i,
       /\n\s*tiêu đề\s*[:-]/i,
@@ -1375,10 +1696,13 @@ export function chatgptExtractSingleVideoBlockPageScript(): string {
       const c = tail.search(rg)
       if (c >= 0) stop = Math.min(stop, c)
     }
-    const toolMention = tail.search(/\n[^\n]*\b(?:Runway|Kling|Pika|Luma|Veo|Grok)\b[^\n]*/i)
-    if (toolMention >= 0) stop = Math.min(stop, toolMention)
     return tail.slice(0, stop).trim()
   }
+
+  const assistantHasVideoBlock = (text: string) =>
+    /VIDEO\s+PROMPT\s*:/i.test(text) ||
+    /EXACTLY\s+1\s+VIDEO\s+PROMPT/i.test(text) ||
+    /(?:^|\n)\s*(?:🎬|🎥)?\s*VIDEO\b/i.test(text)
 
   const assistants = Array.from(
     document.querySelectorAll<HTMLElement>('[data-message-author-role="assistant"]'),
@@ -1386,7 +1710,7 @@ export function chatgptExtractSingleVideoBlockPageScript(): string {
 
   let candidateNode: HTMLElement | null = null
   for (let i = assistants.length - 1; i >= 0; i -= 1) {
-    if (/\bVIDEO\b/i.test(assistants[i].innerText || '')) {
+    if (assistantHasVideoBlock(assistants[i].innerText || '')) {
       candidateNode = assistants[i]
       break
     }

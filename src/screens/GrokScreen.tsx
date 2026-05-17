@@ -304,11 +304,17 @@ export default function GrokScreen() {
 
   useEffect(() => {
     const onFillFromChatgpt = async (event: Event) => {
-      const custom = event as CustomEvent<{ prompt?: string; imageDataUrl?: string; part?: 1 | 2 }>
+      const custom = event as CustomEvent<{
+        prompt?: string
+        imageDataUrl?: string
+        part?: 1 | 2
+        single?: boolean
+      }>
       const prompt = custom.detail?.prompt?.trim() || ''
       const imageDataUrl = custom.detail?.imageDataUrl || ''
+      const isSingle = custom.detail?.single === true
       const part = custom.detail?.part === 2 ? 2 : 1
-      if (!prompt) {
+      if (!prompt && !imageDataUrl) {
         setStatus('Không có nội dung để điền vào Grok.')
         return
       }
@@ -370,14 +376,15 @@ export default function GrokScreen() {
       }
 
       const r = await injectPromptToGrok(target.id, prompt, imageDataUrl)
+      const assetLabel = isSingle ? 'ảnh + VIDEO đơn' : `ảnh ${part} + VIDEO ${part}`
       setStatus(
         typeof r === 'object' && r?.foundInput
           ? r.wroteText
             ? imageDataUrl
-              ? `Đã paste ảnh ${part} + điền VIDEO ${part} vào Grok (không Enter).`
+              ? `Đã paste ${assetLabel} vào Grok (không Enter).`
               : 'Đã điền nội dung vào Grok (không Enter).'
             : imageDataUrl
-              ? `Đã paste ảnh ${part}. Text có thể đã vào nhưng xác nhận chưa chắc (Grok hay re-render).`
+              ? `Đã paste ảnh. Text có thể đã vào nhưng xác nhận chưa chắc (Grok hay re-render).`
               : 'Text có thể đã vào nhưng xác nhận chưa chắc (Grok hay re-render).'
           : 'Không tìm thấy ô nhập của Grok.',
       )

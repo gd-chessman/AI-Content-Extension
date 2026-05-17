@@ -1,6 +1,6 @@
 import type { StepToolLink, ToolItem } from '@/services/StepToolService'
 
-export type BottomBarIconKey = 'grok1' | 'grok2' | 'webblog' | 'ggsheet' | 'saveLocal'
+export type BottomBarIconKey = 'grok1' | 'grok2' | 'grokSingle' | 'webblog' | 'ggsheet' | 'saveLocal'
 
 export type ResolvedBottomBarTool = {
   toolId: string
@@ -18,7 +18,7 @@ export type ResolvedBottomBarTool = {
   }
 }
 
-const BOTTOM_BAR_ICON_KEYS: BottomBarIconKey[] = ['grok1', 'grok2', 'webblog', 'ggsheet', 'saveLocal']
+const BOTTOM_BAR_ICON_KEYS: BottomBarIconKey[] = ['grok1', 'grok2', 'grokSingle', 'webblog', 'ggsheet', 'saveLocal']
 
 function isBottomBarIconKey(value: unknown): value is BottomBarIconKey {
   return typeof value === 'string' && BOTTOM_BAR_ICON_KEYS.includes(value as BottomBarIconKey)

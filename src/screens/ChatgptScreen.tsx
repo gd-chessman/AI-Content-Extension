@@ -100,14 +100,12 @@ import {
 } from '@/utils/toolScriptRunner'
 import {
   CHATGPT_EXTRACT_CONTENT_PROMPT_HINT_KEY,
-  CHATGPT_STEP_ACTION,
   indexChatgptStepsByAction,
   isChatgptExtractContentStep,
   isChatgptExtractVideosStep,
   isChatgptGenerateImagesStep,
   isChatgptRewriteContentStep,
   isChatgptSaveStoryStep,
-  normalizeChatgptActionType,
   stepDisplayLabel,
 } from '@/utils/chatgptWorkflowSteps'
 import {
@@ -431,6 +429,14 @@ function BottomBarToolIcon({
           <span className="absolute -right-2 -top-2 inline-flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-sky-500 px-0.5 text-[8px] font-bold leading-none text-white">
             2
           </span>
+        </>
+      )
+    case 'grokSingle':
+      return (
+        <>
+          <SiX className="h-3 w-3" />
+          <FiImage className="h-3 w-3" />
+          <FiFilm className="h-3 w-3" />
         </>
       )
     case 'webblog':
@@ -1546,22 +1552,8 @@ export default function ChatgptScreen() {
     if (isChatgptExtractVideosStep(step)) {
       const pref = lockedWorkflowTabIdRef.current || undefined
       const extractOpts = { copyToClipboard: false, preferredTabId: pref }
-      const action = normalizeChatgptActionType(step.actionType)
-      let prompts: string[] = []
-
-      if (action === CHATGPT_STEP_ACTION.EXTRACT_CONTENT_VIDEO) {
-        const single = await extractSingleVideoContent(extractOpts)
-        prompts = nonEmptyVideoPrompts([single])
-      } else {
-        const single = await extractSingleVideoContent(extractOpts)
-        if (single.trim()) {
-          prompts = [single.trim()]
-        } else {
-          const pv1 = await extractVideoContent(1, extractOpts)
-          const pv2 = await extractVideoContent(2, extractOpts)
-          prompts = nonEmptyVideoPrompts([pv1, pv2])
-        }
-      }
+      const single = await extractSingleVideoContent(extractOpts)
+      const prompts = nonEmptyVideoPrompts([single])
 
       chatgptDraftVideoPromptsRef.current = prompts
       if (!prompts.length) {
@@ -1851,14 +1843,12 @@ export default function ChatgptScreen() {
     }
   }
 
-  const copyLatestChatImage = async () => {
+  const captureLatestChatImageDataUrl = async (): Promise<string | null> => {
     const extensionChrome = getChrome()
     if (!extensionChrome?.tabs?.query || !extensionChrome.scripting?.executeScript || !extensionChrome.tabs.captureVisibleTab) {
-      setStatus('Môi trường hiện tại không hỗ trợ sao chép ảnh từ ChatGPT.')
-      return
+      setStatus('Môi trường hiện tại không hỗ trợ lấy ảnh từ ChatGPT.')
+      return null
     }
-
-    setStatus('Đang lấy ảnh mới nhất từ ChatGPT và sao chép vào clipboard...')
 
     const currentActive = await queryTabs(undefined, true, true)
     const activeTab = currentActive[0]
@@ -1877,7 +1867,7 @@ export default function ChatgptScreen() {
 
     if (!target?.id) {
       setStatus('Không tìm thấy tab ChatGPT để lấy ảnh.')
-      return
+      return null
     }
 
     await snapChatgptThreadToBottomBeforeRead(target.id)
@@ -1889,13 +1879,53 @@ export default function ChatgptScreen() {
         no_rect: 'Không tìm thấy ảnh phù hợp trong hội thoại ChatGPT.',
         no_screenshot: 'Không thể chụp ảnh màn hình tab ChatGPT.',
         crop_failed: 'Không thể xử lý ảnh đã chụp.',
-        exception: 'Sao chép ảnh thất bại. Hãy thử lại.',
+        exception: 'Lấy ảnh thất bại. Hãy thử lại.',
       }
       setStatus(human[cap.reason])
+      return null
+    }
+
+    return cap.image
+  }
+
+  const copyLatestChatImage = async () => {
+    setStatus('Đang lấy ảnh mới nhất từ ChatGPT và sao chép vào clipboard...')
+    const image = await captureLatestChatImageDataUrl()
+    if (!image) return
+    await copyImageDataUrl(image, 'ảnh', { copiedToolId: 'image-single' })
+  }
+
+  const dispatchFillGrok = (detail: { prompt: string; imageDataUrl: string; part?: 1 | 2; single?: boolean }) => {
+    window.dispatchEvent(new CustomEvent('switch-main-tab', { detail: { tabId: 'grok' } }))
+    window.setTimeout(() => {
+      window.dispatchEvent(
+        new CustomEvent('fill-grok-from-chatgpt-video1-image', {
+          detail,
+        }),
+      )
+    }, 120)
+  }
+
+  const fillGrokWithSinglePackage = async () => {
+    setStatus(
+      `Đang lấy ảnh («${generateImagesStepLabel}») và VIDEO («${extractVideosStepLabel}») cho Grok đơn...`,
+    )
+
+    const imageDataUrl = await captureLatestChatImageDataUrl()
+    if (!imageDataUrl) return
+
+    const prompt = await extractSingleVideoContent({ copyToClipboard: false })
+    if (!prompt) {
+      setStatus(`Không tìm thấy VIDEO PROMPT trong output «${extractVideosStepLabel}».`)
       return
     }
 
-    await copyImageDataUrl(cap.image, 'ảnh', { copiedToolId: 'image-single' })
+    dispatchFillGrok({ prompt, imageDataUrl, single: true })
+    setCopiedTool('grok-single')
+    window.setTimeout(() => setCopiedTool((prev) => (prev === 'grok-single' ? null : prev)), 1200)
+    setStatus(
+      `Đã chuyển Grok: ảnh đơn («${generateImagesStepLabel}») + VIDEO («${extractVideosStepLabel}»), không Enter.`,
+    )
   }
 
   const fillGrokWithVideoImage = async (part: 1 | 2) => {
@@ -1915,15 +1945,7 @@ export default function ChatgptScreen() {
       return
     }
 
-    window.dispatchEvent(new CustomEvent('switch-main-tab', { detail: { tabId: 'grok' } }))
-    window.setTimeout(() => {
-      window.dispatchEvent(
-        new CustomEvent('fill-grok-from-chatgpt-video1-image', {
-          detail: { prompt, imageDataUrl, part },
-        }),
-      )
-    }, 120)
-
+    dispatchFillGrok({ prompt, imageDataUrl, part })
     setStatus(
       `Đã chuyển Grok: ảnh ${part} («${generateImagesStepLabel}») + VIDEO ${part} («${extractVideosStepLabel}»), không Enter.`,
     )
@@ -2404,6 +2426,7 @@ export default function ChatgptScreen() {
   const bottomBarToolHost = useMemo<ToolScriptHost>(
     () => ({
       fillGrokImage: (part: 1 | 2) => fillGrokWithVideoImage(part),
+      fillGrokSingle: () => fillGrokWithSinglePackage(),
       pushWebBlog: () => pushThreadToWebBlog(),
       collectGgSheet: () => runGgSheetCollectTool(),
       saveLocal: () => saveStoryBundleToLocal(),
@@ -2413,6 +2436,7 @@ export default function ChatgptScreen() {
       processSteps.length,
       isSavingStoryLocal,
       fillGrokWithVideoImage,
+      fillGrokWithSinglePackage,
       pushThreadToWebBlog,
       runGgSheetCollectTool,
       saveStoryBundleToLocal,

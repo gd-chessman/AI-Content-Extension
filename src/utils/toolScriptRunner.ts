@@ -24,6 +24,7 @@ type ToolHandlerKind =
   | 'extractVideoContent'
   | 'extractThreadContent'
   | 'fillGrokImage'
+  | 'fillGrokSingle'
   | 'pushWebBlog'
   | 'collectGgSheet'
   | 'saveLocal'
@@ -39,6 +40,7 @@ function resolveToolHandlerKind(body: string): ToolHandlerKind | null {
   if (body.includes('extractThreadContent') || body.includes('extractStep4Content')) {
     return 'extractThreadContent'
   }
+  if (body.includes('fillGrokSingle')) return 'fillGrokSingle'
   if (body.includes('fillGrokImage')) return 'fillGrokImage'
   if (body === 'await host.pushWebBlog();' || body.includes('pushWebBlog')) return 'pushWebBlog'
   if (body.includes('collectGgSheet')) return 'collectGgSheet'
@@ -99,6 +101,9 @@ export async function runToolHandlerScript(
           throw new Error('config.mode không hợp lệ cho extractThreadContent')
       }
     }
+    case 'fillGrokSingle':
+      await callHostVoid(host, 'fillGrokSingle')
+      return
     case 'fillGrokImage':
       await callHostVoid(host, 'fillGrokImage', parseNumericPart(config))
       return
