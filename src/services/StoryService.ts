@@ -25,6 +25,7 @@ export const createStoryFromReel = async (payload: {
   sourceReelUrl: string
   name?: string
   topicId?: string
+  videoPrompts?: string[]
 }) => {
   const response = await axiosClient.post('/stories', payload)
   return response.data as StoryItem

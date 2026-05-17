@@ -44,7 +44,6 @@ import {
   createStoryFromReel,
   getMyStories,
   getMyStorySources,
-  patchStory,
 } from '@/services/StoryService'
 import { chatgptExtractContent } from '@/utils/chatgptExtractContent'
 import {
@@ -175,6 +174,45 @@ async function resolveLatestStoryIdForSource(storySourceId: string): Promise<str
       return tb - ta
     })
   return (linked[0]?._id || '').trim()
+}
+
+/** Sau khi workflow xong: tạo Story mới kèm videoPrompts (caller phải kiểm tra đủ prompt trước). */
+async function createStoryForPipelineRun(
+  videoPrompts: string[],
+): Promise<{ storyId: string; error?: string }> {
+  const sources = await getMyStorySources()
+  const top = sources[0]
+  if (!top?._id) {
+    return {
+      storyId: '',
+      error: 'Chưa có StorySource — hãy Lưu story trên Facebook trước khi chạy workflow.',
+    }
+  }
+
+  const reelUrl = (top.sourceReelUrl || '').trim()
+  if (!reelUrl) {
+    return {
+      storyId: '',
+      error: 'StorySource thiếu URL reel — mở Facebook, chọn reel và bấm Lưu story lại.',
+    }
+  }
+
+  try {
+    const created = await createStoryFromReel({
+      sourceReelUrl: reelUrl,
+      name: (top.name || '').trim().slice(0, 200),
+      videoPrompts,
+    })
+    const storyId = (created._id || created.id || '').trim()
+    if (!storyId) {
+      return { storyId: '', error: 'API tạo story không trả về id.' }
+    }
+    return { storyId }
+  } catch (err) {
+    const msg =
+      err instanceof Error ? err.message : typeof err === 'string' ? err : 'Không tạo được story trên máy chủ.'
+    return { storyId: '', error: msg }
+  }
 }
 
 /** Lưu cục bộ khi không có story trên API — `storyId` dạng `local-…` để phân biệt trong meta.json. */
@@ -1515,18 +1553,6 @@ export default function ChatgptScreen() {
         source: options?.source,
       })
 
-      if (step1ContentSourceRef.current === 'stories') {
-        try {
-          const sources = await getMyStorySources()
-          const top = sources[0]
-          chatgptPipelineStoryIdRef.current = top?._id
-            ? await resolveLatestStoryIdForSource(top._id)
-            : ''
-        } catch {
-          chatgptPipelineStoryIdRef.current = ''
-        }
-      }
-
       for (let index = 0; index < processSteps.length; index += 1) {
         const step = processSteps[index]
         const stepNo = step.stepNo || index + 1
@@ -1599,47 +1625,31 @@ export default function ChatgptScreen() {
         finishedAt: new Date().toISOString(),
       })
 
-      let storyIdToSave = chatgptPipelineStoryIdRef.current.trim()
+      const stepCountLabel = `${processSteps.length}/${processSteps.length}`
       const draftBox = chatgptDraftVideoPromptsRef.current as string[] | null
 
-      if (!storyIdToSave && step1ContentSourceRef.current === 'stories') {
-        try {
-          const sources = await getMyStorySources()
-          const top = sources[0]
-          if (top?._id) {
-            storyIdToSave = await resolveLatestStoryIdForSource(top._id)
-            if (
-              !storyIdToSave &&
-              (top.sourceReelUrl || '').trim()
-            ) {
-              const created = await createStoryFromReel({
-                sourceReelUrl: top.sourceReelUrl.trim(),
-                name: (top.name || '').trim().slice(0, 200),
-              })
-              storyIdToSave = (created._id || created.id || '').trim()
-            }
+      if (step1ContentSourceRef.current === 'stories') {
+        const hasVideoPrompts = draftBox !== null && draftBox.length >= 2
+        if (hasVideoPrompts) {
+          const created = await createStoryForPipelineRun(draftBox)
+          if (created.storyId) {
+            chatgptPipelineStoryIdRef.current = created.storyId
+            setStatus(
+              `Workflow chạy xong ${stepCountLabel} bước. Đã tạo story và lưu prompt Video 1 & 2.`,
+            )
+          } else {
+            const detail =
+              created.error ||
+              'Không tạo được story (hãy Lưu story trên Facebook trước khi chạy workflow).'
+            setStatus(`Workflow chạy xong ${stepCountLabel} bước. Không lưu story — ${detail}`)
           }
-        } catch {
-          /* gán storyIdToSave rỗng */
-        }
-      }
-
-      if (storyIdToSave && draftBox !== null && draftBox.length >= 2) {
-        try {
-          await patchStory(storyIdToSave, { videoPrompts: draftBox })
+        } else {
           setStatus(
-            `Workflow chạy xong ${processSteps.length}/${processSteps.length} bước. Đã lưu prompt Video 1 & 2 vào story.`,
+            `Workflow chạy xong ${stepCountLabel} bước. Không lưu story — chưa lấy đủ VIDEO 1/2 (kiểm tra «${extractVideosStepLabel}»).`,
           )
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : 'Lỗi API'
-          setStatus(`Workflow chạy xong nhưng không lưu được videoPrompts vào story: ${msg}`)
         }
-      } else if (!storyIdToSave && step1ContentSourceRef.current === 'stories') {
-        setStatus(
-          `Workflow chạy xong ${processSteps.length}/${processSteps.length} bước. Không lưu videoPrompts — chưa có story gắn nguồn (thử Lưu story trên Facebook hoặc kiểm tra «${extractVideosStepLabel}» có tách được Video 1/2).`,
-        )
       } else {
-        setStatus(`Workflow chạy xong ${processSteps.length}/${processSteps.length} bước.`)
+        setStatus(`Workflow chạy xong ${stepCountLabel} bước.`)
       }
     } catch (error) {
       if (!workflowRunId) {
