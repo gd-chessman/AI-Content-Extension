@@ -97,6 +97,8 @@ type ExtensionChrome = {
 
 const MIN_VIEW_COUNT = 500_000
 const MAX_SCAN_RESULTS = 5
+/** «Quét hết»: cuộn hết feed một lần, lấy tối đa bấy nhiêu reel mới (chưa có trong danh sách). */
+const MAX_SCAN_FULL_PASS_RESULTS = 300
 const FACEBOOK_REEL_MEMORY_KEY = 'facebookReelCopiedContent'
 
 /** URL tab đang mở là trang reel (facebook.com/reel/, reel_id=, fb.watch). */
@@ -362,6 +364,7 @@ export default function FacebookScreen() {
   const isContentDirtyRef = useRef(false)
   const contentTextareaRef = useRef<HTMLTextAreaElement | null>(null)
   const scanControlRef = useRef<{ token: string; tabId: number } | null>(null)
+  const scanAllStopRef = useRef(false)
   const isScanningRef = useRef(false)
   const scanResultRef = useRef<ScannedReel[]>([])
   const contentTextRef = useRef('')
@@ -1114,7 +1117,10 @@ export default function FacebookScreen() {
   const handleScanReels = (
     append = false,
     viewBounds?: { minViews: number; maxViews?: number },
+    options?: { fullPass?: boolean },
   ) => {
+    const fullPass = Boolean(options?.fullPass)
+    const resultLimit = fullPass ? MAX_SCAN_FULL_PASS_RESULTS : MAX_SCAN_RESULTS
     const extensionChrome = (globalThis as { chrome?: ExtensionChrome }).chrome
     const minViewCount = viewBounds
       ? Math.max(1, Math.floor(viewBounds.minViews))
@@ -1150,9 +1156,11 @@ export default function FacebookScreen() {
     const existingUrls = append ? scannedReels.map((item) => item.url) : []
     setIsScanning(true)
     setScanStatus(
-      append
-        ? 'Đang quét thêm reels theo khoảng lượt xem...'
-        : 'Đang quét reels theo khoảng lượt xem — extension sẽ cuộn trang để tải thêm video nếu cần...',
+      fullPass
+        ? 'Đang quét hết — cuộn toàn bộ trang reels và lấy video còn lại...'
+        : append
+          ? 'Đang quét thêm reels theo khoảng lượt xem...'
+          : 'Đang quét reels theo khoảng lượt xem — extension sẽ cuộn trang để tải thêm video nếu cần...',
     )
     extensionChrome.tabs.query({ url: ['*://*.facebook.com/*'], currentWindow: true }, async (fbTabs) => {
       const list = fbTabs || []
@@ -1198,7 +1206,15 @@ export default function FacebookScreen() {
       try {
         const result = await extensionChrome.scripting?.executeScript?.({
           target: { tabId: targetTab.id },
-          func: (async (minViews: number, maxViewsArgInner: number, limit: number, token: string, excludedUrls: string[]) => {
+          func: (async (
+            minViews: number,
+            maxViewsArgInner: number,
+            limit: number,
+            token: string,
+            excludedUrls: string[],
+            fullPassInner: boolean,
+          ) => {
+            const fullPass = Boolean(fullPassInner)
             const maxViews = maxViewsArgInner > 0 ? maxViewsArgInner : Number.POSITIVE_INFINITY
             const normalizeNumber = (raw: string) => raw.replace(/\./g, '').replace(',', '.')
             ;(window as unknown as { __aiContentScanControl?: Record<string, { stop?: boolean }> }).__aiContentScanControl ??= {}
@@ -1361,10 +1377,12 @@ export default function FacebookScreen() {
             const uniqueByUrl = new Map<string, Row>()
             let stagnantRounds = 0
 
+            let reachedScrollEnd = false
+
             for (let round = 0; round < MAX_SCROLL_ROUNDS; round += 1) {
               if (control[token]?.stop) break
               scrapePass(uniqueByUrl)
-              if (uniqueByUrl.size >= limit) {
+              if (!fullPass && uniqueByUrl.size >= limit) {
                 break
               }
 
@@ -1385,17 +1403,25 @@ export default function FacebookScreen() {
               }
 
               if (stagnantRounds >= 5) {
+                reachedScrollEnd = true
                 break
               }
             }
 
             const sorted = Array.from(uniqueByUrl.values()).sort((a, b) => b.viewCount - a.viewCount)
+            const foundCount = sorted.length
+            const rows = sorted.slice(0, limit)
             return {
-              rows: sorted.slice(0, limit),
-              hasMore: sorted.length > limit,
+              rows,
+              foundCount,
+              reachedScrollEnd,
+              truncated: foundCount > limit,
+              hasMore: fullPass
+                ? !reachedScrollEnd && foundCount > 0
+                : foundCount > limit,
             }
           }) as (...args: unknown[]) => unknown,
-          args: [minViewCount, maxViewArg, MAX_SCAN_RESULTS, scanToken, existingUrls],
+          args: [minViewCount, maxViewArg, resultLimit, scanToken, existingUrls, fullPass],
         })
 
         if (!result) {
@@ -1405,8 +1431,19 @@ export default function FacebookScreen() {
           return
         }
 
-        const payload = (result?.[0]?.result as { rows?: ScannedReel[]; hasMore?: boolean } | undefined) || {}
+        const payload =
+          (result?.[0]?.result as
+            | {
+                rows?: ScannedReel[]
+                hasMore?: boolean
+                foundCount?: number
+                truncated?: boolean
+                reachedScrollEnd?: boolean
+              }
+            | undefined) || {}
         const reels = payload.rows || []
+        const foundCount = Number(payload.foundCount) || reels.length
+        const prevCount = append ? scanResultRef.current.length : 0
         setHasMoreReels(Boolean(payload.hasMore))
         setScannedReels((prev) => {
           if (!append) {
@@ -1420,17 +1457,37 @@ export default function FacebookScreen() {
           scanResultRef.current = merged
           return merged
         })
+        const mergedCount = append ? scanResultRef.current.length : reels.length
+        const addedCount = Math.max(0, mergedCount - prevCount)
         const rangeLabel =
           Number.isFinite(maxViewCount) && maxViewCount !== Number.POSITIVE_INFINITY
             ? `${minViewCount.toLocaleString('en-US')} - ${maxViewCount.toLocaleString('en-US')}`
             : `>= ${minViewCount.toLocaleString('en-US')}`
-        setScanStatus(
-          reels.length > 0
-            ? append
-              ? `Đã quét thêm ${reels.length} video trong khoảng ${rangeLabel} lượt xem.`
-              : `Đã quét được ${reels.length} video trong khoảng ${rangeLabel} lượt xem.`
-            : `Không tìm thấy video nào trong khoảng ${rangeLabel} lượt xem.`,
-        )
+        if (fullPass) {
+          if (reels.length === 0) {
+            setScanStatus(
+              payload.reachedScrollEnd
+                ? `Đã quét hết trang: không còn reel mới trong khoảng ${rangeLabel} lượt xem.`
+                : `Không thấy reel mới (có thể đã lấy hết hoặc bị dừng giữa chừng).`,
+            )
+          } else if (payload.truncated) {
+            setScanStatus(
+              `Đã quét hết (giới hạn ${resultLimit} reel/lần): thêm ${addedCount} reel. Tổng ${mergedCount} trong danh sách (${foundCount} khớp bộ lọc trên trang).`,
+            )
+          } else {
+            setScanStatus(
+              `Đã quét hết trang: thêm ${addedCount} reel. Tổng ${mergedCount} trong danh sách.`,
+            )
+          }
+        } else {
+          setScanStatus(
+            reels.length > 0
+              ? append
+                ? `Đã quét thêm ${reels.length} video (${foundCount} mới trên đoạn vừa quét). Tổng ${mergedCount} — khoảng ${rangeLabel} lượt xem.`
+                : `Đã quét được ${reels.length} video trong khoảng ${rangeLabel} lượt xem.`
+              : `Không tìm thấy video nào trong khoảng ${rangeLabel} lượt xem.`,
+          )
+        }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
         setScanStatus(`Quét thất bại: ${message}. Hãy mở đúng trang reels của fanpage rồi thử lại.`)
@@ -1443,7 +1500,26 @@ export default function FacebookScreen() {
     })
   }
 
+  const handleScanAllReels = async () => {
+    if (isScanningRef.current) return
+    if (scannedReels.length === 0) {
+      setScanStatus('Hãy «Quét reels ngay» trước, sau đó mới «Quét hết».')
+      return
+    }
+
+    scanAllStopRef.current = false
+    handleScanReels(true, undefined, { fullPass: true })
+    try {
+      await waitScanIdle(360_000)
+    } catch {
+      if (!scanAllStopRef.current) {
+        setScanStatus('Quét hết bị gián đoạn (timeout). Hãy cuộn fanpage reels thủ công rồi thử lại.')
+      }
+    }
+  }
+
   const handleStopScan = () => {
+    scanAllStopRef.current = true
     const extensionChrome = (globalThis as { chrome?: ExtensionChrome }).chrome
     const control = scanControlRef.current
     if (!extensionChrome?.scripting?.executeScript || !control?.tabId) return
@@ -2403,15 +2479,31 @@ export default function FacebookScreen() {
                   Chưa có dữ liệu. Nhấn "Quét reels ngay" để lấy tối đa {MAX_SCAN_RESULTS} video theo ngưỡng lượt xem hiện tại.
                 </p>
               ) : null}
-              {scannedReels.length > 0 && hasMoreReels ? (
-                <button
-                  type="button"
-                  onClick={() => handleScanReels(true)}
-                  disabled={isScanning}
-                  className="w-full cursor-pointer rounded-xl border border-blue-300/30 bg-blue-500/15 px-3 py-2 text-[11px] font-semibold text-blue-200 transition hover:bg-blue-500/25 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  Quét thêm
-                </button>
+              {scannedReels.length > 0 ? (
+                <div className="flex gap-2">
+                  {hasMoreReels ? (
+                    <button
+                      type="button"
+                      onClick={() => handleScanReels(true)}
+                      disabled={isScanning}
+                      className="flex-1 cursor-pointer rounded-xl border border-blue-300/30 bg-blue-500/15 px-3 py-2 text-[11px] font-semibold text-blue-200 transition hover:bg-blue-500/25 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      Quét thêm
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    onClick={() => void handleScanAllReels()}
+                    disabled={isScanning}
+                    className={`cursor-pointer rounded-xl border border-cyan-400/35 bg-cyan-500/15 px-3 py-2 text-[11px] font-semibold text-cyan-100 transition hover:bg-cyan-500/25 disabled:cursor-not-allowed disabled:opacity-50 ${hasMoreReels ? 'flex-1' : 'w-full'}`}
+                    title="Cuộn hết trang reels fanpage và lấy toàn bộ video còn lại (một lần)"
+                  >
+                    <span className="inline-flex items-center justify-center gap-1">
+                      <FiRefreshCw aria-hidden className={`h-3 w-3 ${isScanning ? 'animate-spin' : ''}`} />
+                      Quét hết
+                    </span>
+                  </button>
+                </div>
               ) : null}
               </div>
             </section>
