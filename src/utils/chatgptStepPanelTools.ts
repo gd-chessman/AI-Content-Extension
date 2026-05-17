@@ -67,14 +67,27 @@ function isStepPanelIconKey(value: unknown): value is StepPanelIconKey {
 function resolveDisplayGroup(tool: ToolItem): ToolDisplayGroup {
   const ui = tool.uiConfig
   const fromUi = ui && typeof ui === 'object' ? ui.displayGroup : undefined
-  if (fromUi === 'image' || fromUi === 'video' || fromUi === 'content') {
-    return fromUi
+  switch (fromUi) {
+    case 'image':
+    case 'video':
+    case 'content':
+      return fromUi
+    default:
+      break
   }
   const code = (tool.code || '').toLowerCase()
-  if (code.includes('image') || code.includes('split')) return 'image'
-  if (code.includes('video')) return 'video'
-  if (code.includes('title') || code.includes('content')) return 'content'
-  return 'other'
+  switch (true) {
+    case code.includes('image'):
+    case code.includes('split'):
+      return 'image'
+    case code.includes('video'):
+      return 'video'
+    case code.includes('title'):
+    case code.includes('content'):
+      return 'content'
+    default:
+      return 'other'
+  }
 }
 
 function resolveDisplayOrder(tool: ToolItem, link: StepToolLink): number {
@@ -163,11 +176,30 @@ export function buildWorkflowStepPanelComparison(
 }
 
 export function getStepPanelBadgeLabel(config: Record<string, unknown>, ui: StepPanelToolUi) {
-  const part = config.part
-  if (part === 'left' || part === 1 || part === '1') return '1'
-  if (part === 'right' || part === 2 || part === '2') return '2'
+  switch (ui.copiedToolId) {
+    case 'video-1':
+    case 'image-left':
+      return '1'
+    case 'video-2':
+    case 'image-right':
+      return '2'
+    default:
+      break
+  }
+
+  switch (config.part) {
+    case 'left':
+    case 1:
+    case '1':
+      return '1'
+    case 'right':
+    case 2:
+    case '2':
+      return '2'
+    default:
+      break
+  }
+
   if (typeof config.mode === 'string' && config.mode.includes('short')) return ''
-  if (ui.copiedToolId === 'video-1' || ui.copiedToolId === 'image-left') return '1'
-  if (ui.copiedToolId === 'video-2' || ui.copiedToolId === 'image-right') return '2'
   return ''
 }

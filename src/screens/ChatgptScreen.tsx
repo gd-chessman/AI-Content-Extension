@@ -345,48 +345,64 @@ function BottomBarToolIcon({
   icon: ResolvedBottomBarTool['ui']['icon']
   isSavingStoryLocal: boolean
 }) {
-  if (icon === 'grok1' || icon === 'grok2') {
-    const badge = icon === 'grok1' ? '1' : '2'
-    return (
-      <>
-        <SiX className="h-3 w-3" />
-        <FiImage className="h-3 w-3" />
-        <span className="absolute -right-2 -top-2 inline-flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-sky-500 px-0.5 text-[8px] font-bold leading-none text-white">
-          {badge}
-        </span>
-      </>
-    )
+  switch (icon) {
+    case 'grok1':
+      return (
+        <>
+          <SiX className="h-3 w-3" />
+          <FiImage className="h-3 w-3" />
+          <span className="absolute -right-2 -top-2 inline-flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-sky-500 px-0.5 text-[8px] font-bold leading-none text-white">
+            1
+          </span>
+        </>
+      )
+    case 'grok2':
+      return (
+        <>
+          <SiX className="h-3 w-3" />
+          <FiImage className="h-3 w-3" />
+          <span className="absolute -right-2 -top-2 inline-flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-sky-500 px-0.5 text-[8px] font-bold leading-none text-white">
+            2
+          </span>
+        </>
+      )
+    case 'webblog':
+      return (
+        <>
+          <RiAdminFill className="h-3 w-3" />
+          <FiFileText className="h-3 w-3" />
+        </>
+      )
+    case 'ggsheet':
+      return (
+        <>
+          <SiGooglesheets className="h-3 w-3" />
+          <FiDownload className="h-3 w-3" />
+        </>
+      )
+    case 'saveLocal':
+      if (isSavingStoryLocal) {
+        return (
+          <>
+            <FiSave className="h-3 w-3 opacity-40" aria-hidden />
+            <FiRefreshCw className="h-3 w-3 animate-spin" aria-hidden />
+          </>
+        )
+      }
+      return (
+        <>
+          <FiSave className="h-3 w-3" aria-hidden />
+          <FiFolder className="h-3 w-3" aria-hidden />
+        </>
+      )
+    default:
+      return (
+        <>
+          <FiSave className="h-3 w-3" aria-hidden />
+          <FiFolder className="h-3 w-3" aria-hidden />
+        </>
+      )
   }
-  if (icon === 'webblog') {
-    return (
-      <>
-        <RiAdminFill className="h-3 w-3" />
-        <FiFileText className="h-3 w-3" />
-      </>
-    )
-  }
-  if (icon === 'ggsheet') {
-    return (
-      <>
-        <SiGooglesheets className="h-3 w-3" />
-        <FiDownload className="h-3 w-3" />
-      </>
-    )
-  }
-  if (isSavingStoryLocal) {
-    return (
-      <>
-        <FiSave className="h-3 w-3 opacity-40" aria-hidden />
-        <FiRefreshCw className="h-3 w-3 animate-spin" aria-hidden />
-      </>
-    )
-  }
-  return (
-    <>
-      <FiSave className="h-3 w-3" aria-hidden />
-      <FiFolder className="h-3 w-3" aria-hidden />
-    </>
-  )
 }
 
 function BottomBarToolsSection({

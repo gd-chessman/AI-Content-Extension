@@ -25,12 +25,24 @@ function isBottomBarIconKey(value: unknown): value is BottomBarIconKey {
 }
 
 function badgeLabelFromConfig(config: Record<string, unknown>, icon: BottomBarIconKey): string | undefined {
-  if (icon === 'grok1') return '1'
-  if (icon === 'grok2') return '2'
-  const part = config.part
-  if (part === 1 || part === '1') return '1'
-  if (part === 2 || part === '2') return '2'
-  return undefined
+  switch (icon) {
+    case 'grok1':
+      return '1'
+    case 'grok2':
+      return '2'
+    default:
+      break
+  }
+  switch (config.part) {
+    case 1:
+    case '1':
+      return '1'
+    case 2:
+    case '2':
+      return '2'
+    default:
+      return undefined
+  }
 }
 
 function uiFromTool(tool: ToolItem): ResolvedBottomBarTool['ui'] | undefined {

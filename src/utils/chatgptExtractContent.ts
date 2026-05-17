@@ -91,29 +91,42 @@ export function chatgptExtractContent(...args: unknown[]): ChatgptExtractContent
     return best?.node ?? null
   }
 
-  const resolvePromptHint = () => {
-    if (mode === 'clipboard') {
-      if (typeof args[2] === 'string') return args[2]
-      if (typeof args[3] === 'string') return args[3]
-      return ''
+  const promptHint = (() => {
+    switch (mode) {
+      case 'clipboard':
+        if (typeof args[2] === 'string') return args[2]
+        if (typeof args[3] === 'string') return args[3]
+        return ''
+      case 'ready':
+      case 'collect':
+        if (typeof args[1] === 'string') return args[1]
+        if (typeof args[2] === 'string') return args[2]
+        return ''
+      default:
+        return ''
     }
-    if (typeof args[1] === 'string') return args[1]
-    if (typeof args[2] === 'string') return args[2]
-    return ''
-  }
-  const promptHint = resolvePromptHint()
+  })()
 
-  if (mode === 'ready') {
-    if (normalizeCompact(promptHint).length < 30) return false
-    const turns = listThreadTurns()
-    return findExtractContentAssistantTurn(turns, promptHint) !== null
+  switch (mode) {
+    case 'ready': {
+      if (normalizeCompact(promptHint).length < 30) return false
+      const turns = listThreadTurns()
+      return findExtractContentAssistantTurn(turns, promptHint) !== null
+    }
+    default:
+      break
   }
 
   const extractKind =
     mode === 'clipboard' ? (args[1] as ChatgptExtractContentClipboardKind | undefined) : undefined
 
   if (normalizeCompact(promptHint).length < 30) {
-    return mode === 'collect' ? null : ''
+    switch (mode) {
+      case 'collect':
+        return null
+      default:
+        return ''
+    }
   }
 
   const normalize = (text: string) => text.replace(/\r/g, '').trim()
@@ -330,7 +343,14 @@ export function chatgptExtractContent(...args: unknown[]): ChatgptExtractContent
 
   const matchedAssistantNode = findExtractContentAssistantTurn(turns, promptHint)
   const raw = matchedAssistantNode ? normalize(matchedAssistantNode.innerText || '') : ''
-  if (!raw) return mode === 'collect' ? null : ''
+  if (!raw) {
+    switch (mode) {
+      case 'collect':
+        return null
+      default:
+        return ''
+    }
+  }
 
   /** Cuộn do script highlight (ChatgptScreen / GgSheet) — tránh scroll lại gây giật. */
 
@@ -340,18 +360,28 @@ export function chatgptExtractContent(...args: unknown[]): ChatgptExtractContent
   const shortContent =
     matchedAssistantNode ? pickShortFromDom(matchedAssistantNode, raw) : pickShort(raw)
 
-  if (mode === 'collect') {
-    return {
-      title: styledTitle,
-      shortContent,
-      fullContent: pickFull(raw),
-    }
+  switch (mode) {
+    case 'collect':
+      return {
+        title: styledTitle,
+        shortContent,
+        fullContent: pickFull(raw),
+      }
+    case 'clipboard':
+      if (!extractKind) return null
+      switch (extractKind) {
+        case 'title_plain':
+          return plainTitle
+        case 'title_styled':
+          return styledTitle
+        case 'content_short':
+          return shortContent
+        case 'content_full':
+          return pickFull(raw)
+        default:
+          return pickFull(raw)
+      }
+    default:
+      return null
   }
-
-  if (mode !== 'clipboard' || !extractKind) return null
-
-  if (extractKind === 'title_plain') return plainTitle
-  if (extractKind === 'title_styled') return styledTitle
-  if (extractKind === 'content_short') return shortContent
-  return pickFull(raw)
 }

@@ -16,6 +16,44 @@ function callHostVoid(host: ToolScriptHost, key: string, ...args: unknown[]): Pr
   return Promise.resolve(fn(...args))
 }
 
+type ToolHandlerKind =
+  | 'captureAndSplit'
+  | 'copySplitImage'
+  | 'copyLatestChatImage'
+  | 'extractSingleVideoContent'
+  | 'extractVideoContent'
+  | 'extractThreadContent'
+  | 'fillGrokImage'
+  | 'pushWebBlog'
+  | 'collectGgSheet'
+  | 'saveLocal'
+
+function resolveToolHandlerKind(body: string): ToolHandlerKind | null {
+  if (body.includes('captureAndSplitLatestImage') || body.includes('extractAndSplitLatestImageFromStep3')) {
+    return 'captureAndSplit'
+  }
+  if (body.includes('copySplitImage')) return 'copySplitImage'
+  if (body.includes('copyLatestChatImage')) return 'copyLatestChatImage'
+  if (body.includes('extractSingleVideoContent')) return 'extractSingleVideoContent'
+  if (body.includes('extractVideoContent')) return 'extractVideoContent'
+  if (body.includes('extractThreadContent') || body.includes('extractStep4Content')) {
+    return 'extractThreadContent'
+  }
+  if (body.includes('fillGrokImage')) return 'fillGrokImage'
+  if (body === 'await host.pushWebBlog();' || body.includes('pushWebBlog')) return 'pushWebBlog'
+  if (body.includes('collectGgSheet')) return 'collectGgSheet'
+  if (body.includes('saveLocal')) return 'saveLocal'
+  return null
+}
+
+function parseImagePart(config: Record<string, unknown>): 'left' | 'right' {
+  return config.part === 'right' ? 'right' : 'left'
+}
+
+function parseNumericPart(config: Record<string, unknown>): 1 | 2 {
+  return config.part === 2 || config.part === '2' ? 2 : 1
+}
+
 /** Thực thi handlerScript đã đăng ký trong `shared/tools` (khớp chuỗi sau khi compact). */
 export async function runToolHandlerScript(
   handlerScript: string,
@@ -27,69 +65,55 @@ export async function runToolHandlerScript(
     throw new Error('handlerScript trống')
   }
 
-  if (body.includes('captureAndSplitLatestImage') || body.includes('extractAndSplitLatestImageFromStep3')) {
-    await callHostVoid(host, 'captureAndSplitLatestImage')
-    return
+  const kind = resolveToolHandlerKind(body)
+  if (!kind) {
+    throw new Error(`Chưa hỗ trợ handlerScript: ${body.slice(0, 120)}`)
   }
 
-  if (body.includes('copySplitImage')) {
-    const part: 'left' | 'right' = config.part === 'right' ? 'right' : 'left'
-    await callHostVoid(host, 'copySplitImage', part)
-    return
-  }
-
-  if (body.includes('copyLatestChatImage')) {
-    await callHostVoid(host, 'copyLatestChatImage')
-    return
-  }
-
-  if (body.includes('extractSingleVideoContent')) {
-    await callHostVoid(host, 'extractSingleVideoContent')
-    return
-  }
-
-  if (body.includes('extractVideoContent')) {
-    const part: 1 | 2 = config.part === 2 || config.part === '2' ? 2 : 1
-    await callHostVoid(host, 'extractVideoContent', part)
-    return
-  }
-
-  if (body.includes('extractThreadContent') || body.includes('extractStep4Content')) {
-    const mode = config.mode
-    if (
-      mode !== 'title_plain' &&
-      mode !== 'title_styled' &&
-      mode !== 'content_short' &&
-      mode !== 'content_full'
-    ) {
-      throw new Error('config.mode không hợp lệ cho extractThreadContent')
+  switch (kind) {
+    case 'captureAndSplit':
+      await callHostVoid(host, 'captureAndSplitLatestImage')
+      return
+    case 'copySplitImage':
+      await callHostVoid(host, 'copySplitImage', parseImagePart(config))
+      return
+    case 'copyLatestChatImage':
+      await callHostVoid(host, 'copyLatestChatImage')
+      return
+    case 'extractSingleVideoContent':
+      await callHostVoid(host, 'extractSingleVideoContent')
+      return
+    case 'extractVideoContent':
+      await callHostVoid(host, 'extractVideoContent', parseNumericPart(config))
+      return
+    case 'extractThreadContent': {
+      const mode = config.mode
+      switch (mode) {
+        case 'title_plain':
+        case 'title_styled':
+        case 'content_short':
+        case 'content_full':
+          await callHostVoid(host, 'extractThreadContent', mode)
+          return
+        default:
+          throw new Error('config.mode không hợp lệ cho extractThreadContent')
+      }
     }
-    await callHostVoid(host, 'extractThreadContent', mode)
-    return
+    case 'fillGrokImage':
+      await callHostVoid(host, 'fillGrokImage', parseNumericPart(config))
+      return
+    case 'pushWebBlog':
+      await callHostVoid(host, 'pushWebBlog')
+      return
+    case 'collectGgSheet':
+      await callHostVoid(host, 'collectGgSheet')
+      return
+    case 'saveLocal':
+      await callHostVoid(host, 'saveLocal')
+      return
+    default:
+      throw new Error(`Chưa hỗ trợ handlerScript: ${body.slice(0, 120)}`)
   }
-
-  if (body.includes('fillGrokImage')) {
-    const part: 1 | 2 = config.part === 2 || config.part === '2' ? 2 : 1
-    await callHostVoid(host, 'fillGrokImage', part)
-    return
-  }
-
-  if (body === 'await host.pushWebBlog();' || body.includes('pushWebBlog')) {
-    await callHostVoid(host, 'pushWebBlog')
-    return
-  }
-
-  if (body.includes('collectGgSheet')) {
-    await callHostVoid(host, 'collectGgSheet')
-    return
-  }
-
-  if (body.includes('saveLocal')) {
-    await callHostVoid(host, 'saveLocal')
-    return
-  }
-
-  throw new Error(`Chưa hỗ trợ handlerScript: ${body.slice(0, 120)}`)
 }
 
 const GUARD_HANDLERS: Record<string, (host: ToolScriptHost) => boolean> = {
