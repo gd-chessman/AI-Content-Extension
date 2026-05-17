@@ -226,8 +226,6 @@ export function chatgptExtractContent(...args: unknown[]): ChatgptExtractContent
   const turns = listThreadTurns()
   if (!turns.length) return mode === 'collect' ? null : mode === 'clipboard' ? '' : null
 
-  const measureLen = (text: string) => normalize(text).replace(/\s+/g, ' ').length
-
   const findTitleHost = (root: HTMLElement): HTMLElement | null => {
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
     let textNode: Text | null
@@ -289,24 +287,6 @@ export function chatgptExtractContent(...args: unknown[]): ChatgptExtractContent
     return out
   }
 
-  const collectBlocksForTextLength = (
-    root: HTMLElement,
-    targetLen: number,
-    skipHost?: HTMLElement | null,
-  ): HTMLElement[] => {
-    const blocks = orderedBlockHosts(root)
-    const out: HTMLElement[] = []
-    let len = 0
-    for (const el of blocks) {
-      if (skipHost && (el === skipHost || skipHost.contains(el))) continue
-      if (elementHasVideoToolMention(el)) break
-      out.push(el)
-      len += measureLen(el.innerText || '')
-      if (len >= targetLen) break
-    }
-    return out
-  }
-
   const joinBlockTexts = (blocks: HTMLElement[]) =>
     blocks
       .map((el) => (el.innerText || '').trim())
@@ -314,31 +294,18 @@ export function chatgptExtractContent(...args: unknown[]): ChatgptExtractContent
       .join('\n\n')
       .trim()
 
-  /** Cùng vùng DOM với khung highlight — tránh pickShort() cắt text ngắn hơn khung. */
+  /** Luôn cắt tại dấu ? qua pickShort; DOM chỉ fallback khi không cắt được. */
   const pickShortFromDom = (turn: HTMLElement, raw: string) => {
-    const hint = pickShort(raw)
+    const cut = pickShort(raw)
+    if (cut) return cut
+
     const titleHost = findTitleHost(turn)
-    if (!titleHost) return hint
-
-    const targetLen = Math.max(measureLen(hint), 1)
-    const used = new Set<HTMLElement>()
-    let blocks = collectBlocksForTextLength(turn, targetLen, titleHost).filter(
-      (el) => el !== titleHost && !titleHost.contains(el),
+    if (!titleHost) return ''
+    const blocks = collectContentAfterTitle(turn, titleHost).filter(
+      (el) => el !== titleHost && !titleHost.contains(el) && !elementHasVideoToolMention(el),
     )
-    blocks.forEach((el) => used.add(el))
-
-    let joined = joinBlockTexts(blocks)
-    if (measureLen(joined) >= targetLen) return joined || hint
-
-    for (const el of collectContentAfterTitle(turn, titleHost)) {
-      if (used.has(el)) continue
-      blocks.push(el)
-      used.add(el)
-      joined = joinBlockTexts(blocks)
-      if (measureLen(joined) >= targetLen) break
-    }
-
-    return joined || hint
+    const joined = joinBlockTexts(blocks)
+    return joined ? pickShort(joined) : ''
   }
 
   const matchedAssistantNode = findExtractContentAssistantTurn(turns, promptHint)

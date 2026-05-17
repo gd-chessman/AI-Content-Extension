@@ -643,14 +643,27 @@ export function chatgptScrollHighlightStep4ContentPageScript(...injectArgs: unkn
     const searchSpace = full.slice(0, MAX_SCAN)
     const questionWindow = searchSpace.slice(MIN_LEN)
     const lastQuestionAfterMin = questionWindow.lastIndexOf('?')
-    if (lastQuestionAfterMin >= 0) return searchSpace.slice(0, MIN_LEN + lastQuestionAfterMin + 1).trim()
+    if (lastQuestionAfterMin >= 0) {
+      return searchSpace.slice(0, MIN_LEN + lastQuestionAfterMin + 1).trim()
+    }
+
     const qIndex = searchSpace.indexOf('?')
     if (qIndex >= 0) {
       const untilQ = full.slice(0, qIndex + 1).trim()
       if (untilQ.length >= MIN_LEN) return untilQ
+      const rest = full.slice(qIndex + 1)
+      const nextBreak = [rest.indexOf('\n'), rest.search(/[.!?]/)]
+        .filter((idx) => idx >= 0)
+        .sort((a, b) => a - b)[0]
+      if (nextBreak !== undefined && nextBreak >= 0) {
+        return full.slice(0, qIndex + 1 + nextBreak + 1).trim()
+      }
+      return untilQ
     }
     const lastLine = searchSpace.lastIndexOf('\n')
     if (lastLine >= MIN_LEN) return searchSpace.slice(0, lastLine).trim()
+    const lastSentence = Math.max(searchSpace.lastIndexOf('.'), searchSpace.lastIndexOf('!'))
+    if (lastSentence >= MIN_LEN) return searchSpace.slice(0, lastSentence + 1).trim()
     return searchSpace.trim()
   }
 
@@ -802,6 +815,109 @@ export function chatgptScrollHighlightStep4ContentPageScript(...injectArgs: unkn
     return out
   }
 
+  const joinBlockTexts = (blocks: HTMLElement[]) =>
+    blocks
+      .map((el) => (el.innerText || '').trim())
+      .filter(Boolean)
+      .join('\n\n')
+      .trim()
+
+  const measureCompact = (text: string) => normalize(text).replace(/\s+/g, ' ')
+
+  const blockOverlapsCut = (blockText: string, cut: string) => {
+    const t = measureCompact(blockText)
+    const c = measureCompact(cut)
+    if (!t || !c) return false
+    if (c.includes(t) || t.includes(c)) return true
+    for (const size of [80, 50, 30]) {
+      const head = t.slice(0, Math.min(size, t.length))
+      if (head.length >= 16 && c.includes(head)) return true
+      const tail = t.slice(Math.max(0, t.length - size))
+      if (tail.length >= 16 && c.includes(tail)) return true
+    }
+    return false
+  }
+
+  /** Block highlight cho nội dung ngắn — khớp pickShort (cắt tại ?), đủ độ dài, gồm cả khoảng giữa. */
+  const collectBlocksForShortHighlight = (
+    root: HTMLElement,
+    titleHost: HTMLElement,
+    cut: string,
+  ): HTMLElement[] => {
+    if (!cut.trim()) return []
+    const c = measureCompact(cut)
+    const cutLen = c.length
+    const cutTail = c.slice(Math.max(0, c.length - 80))
+
+    const allBlocks = orderedBlockHosts(root).filter((el) => {
+      if (el === titleHost || titleHost.contains(el)) return false
+      if (elementHasVideoToolMention(el)) return false
+      return true
+    })
+
+    let firstIdx = -1
+    let lastIdx = -1
+    for (let i = 0; i < allBlocks.length; i += 1) {
+      if (!blockOverlapsCut(allBlocks[i].innerText || '', cut)) continue
+      if (firstIdx < 0) firstIdx = i
+      lastIdx = i
+    }
+
+    let out: HTMLElement[] =
+      firstIdx >= 0 ? allBlocks.slice(firstIdx, lastIdx + 1) : collectBlocksForTextLength(root, cutLen, titleHost)
+
+    out = out.filter((el) => el !== titleHost && !titleHost.contains(el))
+
+    let joined = measureCompact(joinBlockTexts(out))
+    let nextIdx = lastIdx >= 0 ? lastIdx + 1 : out.length > 0 ? allBlocks.indexOf(out[out.length - 1]) + 1 : 0
+
+    while (nextIdx < allBlocks.length && (joined.length < cutLen || !joined.includes(cutTail.slice(-40)))) {
+      const el = allBlocks[nextIdx]
+      if (elementHasVideoToolMention(el)) break
+      if (!out.includes(el)) out.push(el)
+      joined = measureCompact(joinBlockTexts(out))
+      nextIdx += 1
+    }
+
+    if (out.length === 0) {
+      out = collectBlocksForTextLength(root, cutLen, titleHost).filter(
+        (el) => el !== titleHost && !titleHost.contains(el),
+      )
+    }
+
+    return out
+  }
+
+  const highlightContentBlocks = (
+    turn: HTMLElement,
+    titleHost: HTMLElement,
+    contentEls: HTMLElement[],
+    kind: 'block-short' | 'block-full',
+  ): HTMLElement | null => {
+    const blocks = contentEls.filter((el) => el !== titleHost && !titleHost.contains(el))
+    if (!blocks.length) return null
+
+    const wrapped = wrapConsecutiveContentSiblings([...blocks])
+    if (wrapped) {
+      applyDomHighlight(wrapped, kind)
+      return wrapped
+    }
+
+    const totalLen = blocks.reduce((sum, el) => sum + measureCompact(el.innerText || '').length, 0)
+    const host = resolveSingleContentHighlightHostStep4(turn, titleHost, blocks)
+    const hostLen = host ? measureCompact(host.innerText || '').length : 0
+
+    if (host && hostLen >= totalLen * 0.85) {
+      applyDomHighlight(host, kind)
+      return host
+    }
+
+    for (const el of blocks) {
+      applyDomHighlight(el, kind)
+    }
+    return blocks[0]
+  }
+
   const turn = findExtractContentAssistantTurn()
   if (!turn) return false
 
@@ -820,15 +936,14 @@ export function chatgptScrollHighlightStep4ContentPageScript(...injectArgs: unkn
     applyDomHighlight(titleHost, 'header')
 
     const shortText = pickShort(raw)
-    const shortLen = normalize(shortText).replace(/\s+/g, ' ').length
-    let shortEls =
-      shortLen > 0
-        ? collectBlocksForTextLength(turn, shortLen, titleHost)
-        : collectContentAfterTitle(turn, titleHost)
-    shortEls = shortEls.filter((el) => el !== titleHost && !titleHost.contains(el))
+    let shortEls = collectBlocksForShortHighlight(turn, titleHost, shortText)
+    if (!shortEls.length) {
+      shortEls = collectContentAfterTitle(turn, titleHost).filter(
+        (el) => el !== titleHost && !titleHost.contains(el),
+      )
+    }
 
-    const shortHost = resolveSingleContentHighlightHostStep4(turn, titleHost, shortEls)
-    if (shortHost) applyDomHighlight(shortHost, 'block-short')
+    const shortHost = highlightContentBlocks(turn, titleHost, shortEls, 'block-short')
 
     const blocks = orderedBlockHosts(turn)
     let fullTailEls: HTMLElement[] = []
@@ -855,16 +970,15 @@ export function chatgptScrollHighlightStep4ContentPageScript(...injectArgs: unkn
     applyDomHighlight(titleHost, 'header')
   } else if (isShortOnly) {
     const shortText = pickShort(raw)
-    const targetLen = normalize(shortText).replace(/\s+/g, ' ').length
-    let contentEls =
-      targetLen > 0
-        ? collectBlocksForTextLength(turn, targetLen, titleHost)
-        : collectContentAfterTitle(turn, titleHost)
-    contentEls = contentEls.filter((el) => el !== titleHost && !titleHost.contains(el))
-    const contentHost = resolveSingleContentHighlightHostStep4(turn, titleHost, contentEls)
+    let contentEls = collectBlocksForShortHighlight(turn, titleHost, shortText)
+    if (!contentEls.length) {
+      contentEls = collectContentAfterTitle(turn, titleHost).filter(
+        (el) => el !== titleHost && !titleHost.contains(el),
+      )
+    }
+    const contentHost = highlightContentBlocks(turn, titleHost, contentEls, 'block-short')
     if (contentHost) {
       scrollElementWithTopInset(contentHost)
-      applyDomHighlight(contentHost, 'block-short')
     } else {
       scrollElementWithTopInset(titleHost)
     }
