@@ -2,6 +2,7 @@
 export const CHATGPT_HANDLER_KEYS = {
   splitImage: 'chatgpt.splitImage',
   copyImage: 'chatgpt.copyImage',
+  copySingleImage: 'chatgpt.copySingleImage',
   copyVideo: 'chatgpt.copyVideo',
   extractContent: 'chatgpt.extractContent',
   fillGrok: 'chatgpt.fillGrok',
