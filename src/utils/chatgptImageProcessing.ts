@@ -70,6 +70,37 @@ export async function splitCapturedImage(
   return { left, right }
 }
 
+/** Cắt vùng ảnh từ screenshot tab — không chia đôi (sao chép 1 ảnh). */
+export async function cropCapturedImage(
+  screenshotDataUrl: string,
+  rect: { x: number; y: number; width: number; height: number; viewportWidth?: number; viewportHeight?: number },
+): Promise<string> {
+  const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+    const img = new Image()
+    img.onload = () => resolve(img)
+    img.onerror = () => reject(new Error('Không thể đọc ảnh chụp màn hình.'))
+    img.src = screenshotDataUrl
+  })
+
+  const viewportWidth = rect.viewportWidth && rect.viewportWidth > 0 ? rect.viewportWidth : image.width
+  const viewportHeight = rect.viewportHeight && rect.viewportHeight > 0 ? rect.viewportHeight : image.height
+  const scaleX = image.width / viewportWidth
+  const scaleY = image.height / viewportHeight
+
+  const sourceX = Math.max(0, Math.round(rect.x * scaleX))
+  const sourceY = Math.max(0, Math.round(rect.y * scaleY))
+  const sourceW = Math.max(2, Math.round(rect.width * scaleX))
+  const sourceH = Math.max(2, Math.round(rect.height * scaleY))
+
+  const canvas = document.createElement('canvas')
+  canvas.width = sourceW
+  canvas.height = sourceH
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return ''
+  ctx.drawImage(image, sourceX, sourceY, sourceW, sourceH, 0, 0, sourceW, sourceH)
+  return canvas.toDataURL('image/png')
+}
+
 /** Inject: đếm ảnh assistant (baseline trước bước tạo ảnh). */
 export function chatgptAssistantImageCountPageScript(): number {
   const all = Array.from(document.querySelectorAll<HTMLImageElement>('[data-message-author-role="assistant"] img'))

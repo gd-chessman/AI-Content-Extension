@@ -38,6 +38,11 @@ export async function runToolHandlerScript(
     return
   }
 
+  if (body.includes('copyLatestChatImage')) {
+    await callHostVoid(host, 'copyLatestChatImage')
+    return
+  }
+
   if (body.includes('extractVideoContent')) {
     const part: 1 | 2 = config.part === 2 || config.part === '2' ? 2 : 1
     await callHostVoid(host, 'extractVideoContent', part)

@@ -67,6 +67,7 @@ import {
   chatgptCloseImageLightboxPageScript,
   chatgptLocateLatestChatImageForCapturePageScript,
   chatgptWaitGeneratedImageDonePageScript,
+  cropCapturedImage,
   splitCapturedImage,
   type SplitCaptureRect,
 } from '@/utils/chatgptImageProcessing'
@@ -726,6 +727,10 @@ export default function ChatgptScreen() {
     | { ok: true; left: string; right: string }
     | { ok: false; reason: 'unsupported' | 'no_rect' | 'no_screenshot' | 'split_failed' | 'exception' }
 
+  type CaptureSingleImageResult =
+    | { ok: true; image: string }
+    | { ok: false; reason: 'unsupported' | 'no_rect' | 'no_screenshot' | 'crop_failed' | 'exception' }
+
   /** Định vị ảnh mới nhất trong luồng ChatGPT, chụp tab, cắt đôi — dùng chung cho nút tiến trình 3 và lưu local. */
   const captureSplitPairFromChatgptTab = async (
     tabId: number,
@@ -780,6 +785,65 @@ export default function ChatgptScreen() {
         })
       }
       return { ok: true, left: parts.left, right: parts.right }
+    } catch {
+      return { ok: false, reason: 'exception' }
+    }
+  }
+
+  /** Ảnh nguyên khố — không cắt đôi (công cụ «Sao chép ảnh»). */
+  const captureSingleImageFromChatgptTab = async (
+    tabId: number,
+    windowId: number | undefined,
+  ): Promise<CaptureSingleImageResult> => {
+    const extensionChrome = getChrome()
+    if (!extensionChrome?.scripting?.executeScript || !extensionChrome.tabs?.captureVisibleTab) {
+      return { ok: false, reason: 'unsupported' }
+    }
+    const locateResult = await extensionChrome.scripting.executeScript({
+      target: { tabId },
+      func: chatgptLocateLatestChatImageForCapturePageScript as (...args: unknown[]) => unknown,
+    })
+    const rect = (locateResult?.[0]?.result as SplitCaptureRect | null) || null
+    if (!rect || rect.width < 2 || rect.height < 2) {
+      return { ok: false, reason: 'no_rect' }
+    }
+
+    const tryWindowIds = Array.from(new Set<number | undefined>([windowId, undefined]))
+    let screenshotDataUrl: string | null = null
+    for (let attempt = 0; attempt < 4 && !screenshotDataUrl; attempt += 1) {
+      if (tabId) {
+        // eslint-disable-next-line no-await-in-loop
+        await updateTab(tabId)
+      }
+      if (attempt > 0) {
+        // eslint-disable-next-line no-await-in-loop
+        await sleep(120 + attempt * 120)
+      }
+      for (const wid of tryWindowIds) {
+        // eslint-disable-next-line no-await-in-loop
+        const shot = await captureVisibleTab(wid)
+        if (shot) {
+          screenshotDataUrl = shot
+          break
+        }
+      }
+    }
+    if (!screenshotDataUrl) {
+      return { ok: false, reason: 'no_screenshot' }
+    }
+
+    try {
+      const image = await cropCapturedImage(screenshotDataUrl, rect)
+      if (!image) {
+        return { ok: false, reason: 'crop_failed' }
+      }
+      if (rect.openedModal) {
+        await extensionChrome.scripting.executeScript({
+          target: { tabId },
+          func: chatgptCloseImageLightboxPageScript as (...args: unknown[]) => unknown,
+        })
+      }
+      return { ok: true, image }
     } catch {
       return { ok: false, reason: 'exception' }
     }
@@ -1522,17 +1586,76 @@ export default function ChatgptScreen() {
     }
   }, [canUseWorkflow, processSteps, isWorkflowRunning])
 
-  const copyImageDataUrl = async (dataUrl: string, label: string, part: 'left' | 'right') => {
+  const copyImageDataUrl = async (
+    dataUrl: string,
+    label: string,
+    options?: { part?: 'left' | 'right'; copiedToolId?: string },
+  ) => {
     try {
       const response = await fetch(dataUrl)
       const blob = await response.blob()
       await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })])
-      setCopiedPart(part)
-      window.setTimeout(() => setCopiedPart((prev) => (prev === part ? null : prev)), 1200)
+      if (options?.copiedToolId) {
+        setCopiedTool(options.copiedToolId)
+        window.setTimeout(
+          () => setCopiedTool((prev) => (prev === options.copiedToolId ? null : prev)),
+          1200,
+        )
+      } else if (options?.part) {
+        setCopiedPart(options.part)
+        window.setTimeout(() => setCopiedPart((prev) => (prev === options.part ? null : prev)), 1200)
+      }
       setStatus(`Đã sao chép ${label} vào clipboard (chỉ clipboard, không lưu file trên máy).`)
     } catch {
       setStatus(`Không thể sao chép ${label}. Hãy thử lại.`)
     }
+  }
+
+  const copyLatestChatImage = async () => {
+    const extensionChrome = getChrome()
+    if (!extensionChrome?.tabs?.query || !extensionChrome.scripting?.executeScript || !extensionChrome.tabs.captureVisibleTab) {
+      setStatus('Môi trường hiện tại không hỗ trợ sao chép ảnh từ ChatGPT.')
+      return
+    }
+
+    setStatus('Đang lấy ảnh mới nhất từ ChatGPT và sao chép vào clipboard...')
+
+    const currentActive = await queryTabs(undefined, true, true)
+    const activeTab = currentActive[0]
+    const isActiveChatgpt = Boolean(activeTab?.url && /chatgpt\.com|chat\.openai\.com/i.test(activeTab.url))
+    const activeTabs = isActiveChatgpt ? [activeTab] : await queryTabs(CHATGPT_PATTERNS, true, true)
+    const allTabs = activeTabs.length > 0 ? activeTabs : await queryTabs(CHATGPT_PATTERNS)
+    let target: BrowserTab | null | undefined = allTabs[0]
+
+    if (!target?.id) {
+      target = await createTab(CHATGPT_URL)
+      await sleep(900)
+    } else {
+      target = await updateTab(target.id)
+      await sleep(450)
+    }
+
+    if (!target?.id) {
+      setStatus('Không tìm thấy tab ChatGPT để lấy ảnh.')
+      return
+    }
+
+    await snapChatgptThreadToBottomBeforeRead(target.id)
+
+    const cap = await captureSingleImageFromChatgptTab(target.id, target.windowId)
+    if (!cap.ok) {
+      const human: Record<Exclude<CaptureSingleImageResult, { ok: true }>['reason'], string> = {
+        unsupported: 'Môi trường hiện tại không hỗ trợ chụp tab.',
+        no_rect: 'Không tìm thấy ảnh phù hợp trong hội thoại ChatGPT.',
+        no_screenshot: 'Không thể chụp ảnh màn hình tab ChatGPT.',
+        crop_failed: 'Không thể xử lý ảnh đã chụp.',
+        exception: 'Sao chép ảnh thất bại. Hãy thử lại.',
+      }
+      setStatus(human[cap.reason])
+      return
+    }
+
+    await copyImageDataUrl(cap.image, 'ảnh', { copiedToolId: 'image-single' })
   }
 
   const fillGrokWithVideoImage = async (part: 1 | 2) => {
@@ -1978,10 +2101,11 @@ export default function ChatgptScreen() {
       legacyStepPanelContext,
       splitImages,
       captureAndSplitLatestImage,
+      copyLatestChatImage,
       copySplitImage: async (part: 'left' | 'right') => {
         const dataUrl = part === 'left' ? splitImages?.left : splitImages?.right
         if (dataUrl) {
-          await copyImageDataUrl(dataUrl, `ảnh ${part === 'left' ? '1' : '2'}`, part)
+          await copyImageDataUrl(dataUrl, `ảnh ${part === 'left' ? '1' : '2'}`, { part })
         }
       },
       extractVideoContent: (part: 1 | 2) => extractVideoContent(part),
@@ -1992,6 +2116,7 @@ export default function ChatgptScreen() {
       legacyStepPanelContext,
       splitImages,
       captureAndSplitLatestImage,
+      copyLatestChatImage,
       copyImageDataUrl,
       extractVideoContent,
       extractThreadContent,
