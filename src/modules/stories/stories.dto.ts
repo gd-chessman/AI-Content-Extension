@@ -8,7 +8,7 @@ export class CreateStoryDto {
   /** StoryTopic id (tuỳ chọn) */
   topicId?: string;
 
-  /** Prompt/script video (VD: Video 1, Video 2) — gửi khi tạo, không cần PATCH sau. */
+  /** Prompt/script video (một hoặc nhiều khối VIDEO) — gửi khi tạo, không cần PATCH sau. */
   videoPrompts?: string[];
 }
 
@@ -20,6 +20,6 @@ export class UpsertStorySourceDto {
 }
 
 export class PatchStoryDto {
-  /** Prompt/script video (VD: Video 1, Video 2). */
+  /** Prompt/script video (một hoặc nhiều khối VIDEO). */
   videoPrompts?: string[];
 }

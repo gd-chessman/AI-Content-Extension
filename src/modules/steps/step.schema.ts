@@ -3,6 +3,12 @@ import { HydratedDocument, Types } from 'mongoose';
 
 export type StepDocument = HydratedDocument<Step>;
 
+/** Cách bước hiển thị trên UI extension (tách khỏi `actionType` = hành vi). */
+export enum StepDisplayMode {
+  VISIBLE = 'visible',
+  BACKGROUND = 'background',
+}
+
 export enum StepActionType {
   CUSTOM = 'custom',
   EXTRACT_CONTENT = 'extract_content',
@@ -21,6 +27,8 @@ export enum StepActionType {
   CHATGPT_GENERATE_IMAGE = 'chatgpt_generate_image',
   CHATGPT_GENERATE_IMAGES = 'chatgpt_generate_images',
   CHATGPT_EXTRACT_CONTENT = 'chatgpt_extract_content',
+  /** Extension ChatGPT — tạo Story + videoPrompts (chạy nền, không mở ChatGPT). */
+  CHATGPT_SAVE_STORY = 'chatgpt_save_story',
   FILL_GROK = 'fill_grok',
   COPY_TO_CLIPBOARD = 'copy_to_clipboard',
   PUSH_GGSHEET = 'push_ggsheet',
@@ -64,6 +72,13 @@ export class Step {
     index: true,
   })
   actionType: StepActionType;
+
+  @Prop({
+    default: StepDisplayMode.VISIBLE,
+    enum: Object.values(StepDisplayMode),
+    trim: true,
+  })
+  displayMode: StepDisplayMode;
 
   /** Tham số bước (platform-specific). Facebook: xem `facebook-step-input.setup.ts`. */
   @Prop({ type: Object, default: {} })

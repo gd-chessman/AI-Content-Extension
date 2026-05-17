@@ -1,4 +1,4 @@
-import { StepActionType } from './step.schema';
+import { StepActionType, StepDisplayMode } from './step.schema';
 
 export class CreateStepDto {
   workflowId: string;
@@ -7,6 +7,7 @@ export class CreateStepDto {
   instruction: string;
   prompt?: string;
   actionType?: StepActionType;
+  displayMode?: StepDisplayMode;
   inputSchema?: Record<string, unknown>;
   outputSchema?: Record<string, unknown>;
   isActive?: boolean;
@@ -19,6 +20,7 @@ export class UpdateStepDto {
   instruction?: string;
   prompt?: string;
   actionType?: StepActionType;
+  displayMode?: StepDisplayMode;
   inputSchema?: Record<string, unknown>;
   outputSchema?: Record<string, unknown>;
   isActive?: boolean;

@@ -3,7 +3,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { CreateStepDto, UpdateStepDto } from './steps.dto';
 import { isFacebookStepAction, sanitizeFacebookStepInputSchema } from './facebook-step-input.setup';
-import { Step, StepActionType, StepDocument } from './step.schema';
+import { Step, StepActionType, StepDisplayMode, StepDocument } from './step.schema';
 
 @Injectable()
 export class StepsService {
@@ -110,6 +110,7 @@ export class StepsService {
     instruction?: string;
     prompt?: string;
     actionType?: StepActionType;
+    displayMode?: StepDisplayMode;
     inputSchema?: Record<string, unknown>;
     outputSchema?: Record<string, unknown>;
     isActive?: boolean;
@@ -121,6 +122,7 @@ export class StepsService {
       instruction?: string;
       prompt?: string;
       actionType?: StepActionType;
+      displayMode?: StepDisplayMode;
       inputSchema?: Record<string, unknown>;
       outputSchema?: Record<string, unknown>;
       isActive?: boolean;
@@ -166,6 +168,12 @@ export class StepsService {
       patch.actionType = StepActionType.CUSTOM;
     }
 
+    if ('displayMode' in dto && dto.displayMode !== undefined) {
+      patch.displayMode = this.normalizeDisplayMode(dto.displayMode);
+    } else if (!partial) {
+      patch.displayMode = StepDisplayMode.VISIBLE;
+    }
+
     if ('inputSchema' in dto && dto.inputSchema !== undefined) {
       patch.inputSchema = dto.inputSchema || {};
     } else if (!partial) {
@@ -207,6 +215,13 @@ export class StepsService {
       throw new BadRequestException('Invalid actionType.');
     }
     return actionType;
+  }
+
+  private normalizeDisplayMode(displayMode: StepDisplayMode) {
+    if (!Object.values(StepDisplayMode).includes(displayMode)) {
+      throw new BadRequestException('Invalid displayMode.');
+    }
+    return displayMode;
   }
 
   private assertObjectId(value: string, message: string) {
