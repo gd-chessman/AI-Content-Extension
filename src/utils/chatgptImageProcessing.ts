@@ -14,6 +14,9 @@ export const SPLIT_IMAGE_DOWNLOAD_FOLDER = 'chatgpt-images'
 export const SAVED_SPLIT_IMAGE_HASHES_KEY = 'savedSplitImageCopyHashes'
 export const SAVED_SPLIT_IMAGE_HASHES_MAX = 150
 
+/** Bỏ mép trong khi chia đôi: ảnh 1 hẹp bên phải, ảnh 2 hẹp bên trái (% chiều rộng mỗi nửa). */
+export const SPLIT_INNER_TRIM_RATIO = 0.005
+
 export function hashDataUrl(dataUrl: string): string {
   let h = 5381
   const stride = Math.max(1, Math.floor(dataUrl.length / 12000))
@@ -54,6 +57,10 @@ export async function splitCapturedImage(
   const sourceW = Math.max(2, Math.round(rect.width * scaleX))
   const sourceH = Math.max(2, Math.round(rect.height * scaleY))
   const halfW = Math.max(1, Math.floor(sourceW / 2))
+  const innerTrim = Math.max(2, Math.round(halfW * SPLIT_INNER_TRIM_RATIO))
+  const leftW = Math.max(1, halfW - innerTrim)
+  const rightX = sourceX + halfW + innerTrim
+  const rightW = Math.max(1, sourceW - halfW - innerTrim)
 
   const makePart = (sx: number, sw: number) => {
     const canvas = document.createElement('canvas')
@@ -65,8 +72,8 @@ export async function splitCapturedImage(
     return canvas.toDataURL('image/png')
   }
 
-  const left = makePart(sourceX, halfW)
-  const right = makePart(sourceX + halfW, sourceW - halfW)
+  const left = makePart(sourceX, leftW)
+  const right = makePart(rightX, rightW)
   return { left, right }
 }
 
