@@ -116,7 +116,7 @@ export const CHATGPT_STEP_PANEL_TOOLS: ToolDefinition[] = [
     defaultConfig: { mode: 'title_plain' },
     handlerScript:
       "const mode = config.mode; if (mode === 'title_plain' || mode === 'title_styled' || mode === 'content_short' || mode === 'content_full') { await host.extractThreadContent(mode); }",
-    guardScript: '!host.stepIsExtractContent()',
+    guardScript: '!host.isExtractContentReady',
     uiConfig: {
       displayGroup: 'content',
       displayOrder: 0,
@@ -137,7 +137,7 @@ export const CHATGPT_STEP_PANEL_TOOLS: ToolDefinition[] = [
     defaultConfig: { mode: 'title_styled' },
     handlerScript:
       "const mode = config.mode; if (mode === 'title_plain' || mode === 'title_styled' || mode === 'content_short' || mode === 'content_full') { await host.extractThreadContent(mode); }",
-    guardScript: '!host.stepIsExtractContent()',
+    guardScript: '!host.isExtractContentReady',
     uiConfig: {
       displayGroup: 'content',
       displayOrder: 10,
@@ -158,7 +158,7 @@ export const CHATGPT_STEP_PANEL_TOOLS: ToolDefinition[] = [
     defaultConfig: { mode: 'content_short' },
     handlerScript:
       "const mode = config.mode; if (mode === 'title_plain' || mode === 'title_styled' || mode === 'content_short' || mode === 'content_full') { await host.extractThreadContent(mode); }",
-    guardScript: '!host.stepIsExtractContent()',
+    guardScript: '!host.isExtractContentReady',
     uiConfig: {
       displayGroup: 'content',
       displayOrder: 20,
@@ -179,7 +179,7 @@ export const CHATGPT_STEP_PANEL_TOOLS: ToolDefinition[] = [
     defaultConfig: { mode: 'content_full' },
     handlerScript:
       "const mode = config.mode; if (mode === 'title_plain' || mode === 'title_styled' || mode === 'content_short' || mode === 'content_full') { await host.extractThreadContent(mode); }",
-    guardScript: '!host.stepIsExtractContent()',
+    guardScript: '!host.isExtractContentReady',
     uiConfig: {
       displayGroup: 'content',
       displayOrder: 30,
