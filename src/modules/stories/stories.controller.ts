@@ -5,7 +5,12 @@ import { JwtPayload } from '../auth/jwt.strategy';
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
 import { UserRole } from '../users/users.schema';
-import { CreateStoryDto, PatchStoryDto, UpsertStorySourceDto } from './stories.dto';
+import {
+  CreateStoryDto,
+  ListMyStoriesQueryDto,
+  PatchStoryDto,
+  UpsertStorySourceDto,
+} from './stories.dto';
 import { StoriesService } from './stories.service';
 
 @Controller('stories')
@@ -15,9 +20,9 @@ export class StoriesController {
   constructor(private readonly storiesService: StoriesService) {}
 
   @Get('my')
-  listMy(@Req() req: Request) {
+  listMy(@Req() req: Request, @Query() query: ListMyStoriesQueryDto) {
     const user = req.user as JwtPayload;
-    return this.storiesService.listForUser(user.sub);
+    return this.storiesService.listForUser(user.sub, ListMyStoriesQueryDto.parse(query));
   }
 
   @Get('sources/my')

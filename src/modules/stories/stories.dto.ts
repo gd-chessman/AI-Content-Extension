@@ -32,3 +32,28 @@ export class PatchStoryDto {
   /** Prompt/script video (một hoặc nhiều khối VIDEO). */
   videoPrompts?: string[];
 }
+
+/** Query GET /stories/my — Nest trả plain object, parse qua `parse()`. */
+export class ListMyStoriesQueryDto {
+  page?: string;
+  limit?: string;
+  q?: string;
+  /** Client gửi `true` để chỉ lấy story có longContent (WebBlog import). */
+  hasLongContent?: string;
+
+  static parse(raw: ListMyStoriesQueryDto): ListMyStoriesQuery {
+    return {
+      page: Math.max(1, Number.parseInt(raw.page || '1', 10) || 1),
+      limit: Math.min(100, Math.max(1, Number.parseInt(raw.limit || '20', 10) || 20)),
+      q: (raw.q || '').trim(),
+      hasLongContent: raw.hasLongContent === 'true',
+    };
+  }
+}
+
+export type ListMyStoriesQuery = {
+  page: number;
+  limit: number;
+  q: string;
+  hasLongContent: boolean;
+};

@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
-import { CreateStoryDto, PatchStoryDto, UpsertStorySourceDto } from './stories.dto';
+import { CreateStoryDto, ListMyStoriesQuery, PatchStoryDto, UpsertStorySourceDto } from './stories.dto';
 import { StorySource, StorySourceDocument } from './story-source.schema';
 import { Story, StoryDocument } from './story.schema';
 import { StoryTopic, StoryTopicDocument } from './story-topic.schema';
@@ -43,7 +43,6 @@ export class StoriesService {
       const row = r as Record<string, unknown>;
       return {
         _id: String(row._id || ''),
-        id: String(row._id || ''),
         sourceContent: String(row.sourceContent || ''),
         sourceReelUrl: String(row.sourceReelUrl || ''),
         name: String(row.name || ''),
@@ -54,18 +53,51 @@ export class StoriesService {
     });
   }
 
-  async listForUser(userId: string) {
-    const rows = await this.storyModel
-      .find({ userId: new Types.ObjectId(userId) })
-      .populate({
-        path: 'storySourceId',
-        select: 'sourceContent sourceReelUrl name usageCount',
-      })
-      .sort({ createdAt: -1 })
-      .limit(200)
-      .lean();
+  async listForUser(userId: string, query: ListMyStoriesQuery) {
+    const { page, limit, q, hasLongContent } = query;
+    const userOid = new Types.ObjectId(userId);
 
-    return rows.map((row) => this.serializeStory(row as unknown as Record<string, unknown>));
+    const baseFilter: Record<string, unknown> = { userId: userOid };
+    if (hasLongContent) {
+      baseFilter.longContent = { $exists: true, $nin: ['', null] };
+    }
+
+    if (q) {
+      const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const or: Record<string, unknown>[] = [{ name: { $regex: escaped, $options: 'i' } }];
+      if (Types.ObjectId.isValid(q)) {
+        or.push({ _id: new Types.ObjectId(q) });
+      }
+      baseFilter.$or = or;
+    }
+
+    const populate = {
+      path: 'storySourceId',
+      select: 'sourceContent sourceReelUrl name usageCount',
+    };
+
+    const [total, rows] = await Promise.all([
+      this.storyModel.countDocuments(baseFilter),
+      this.storyModel
+        .find(baseFilter)
+        .populate(populate)
+        .sort({ createdAt: -1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .lean(),
+    ]);
+
+    return {
+      items: rows.map((row) =>
+        this.serializeStory(row as unknown as Record<string, unknown>),
+      ),
+      pagination: {
+        total,
+        page,
+        limit,
+        totalPages: Math.max(1, Math.ceil(total / limit)),
+      },
+    };
   }
 
   async createForUser(userId: string, dto: CreateStoryDto) {
@@ -359,7 +391,6 @@ export class StoriesService {
     const userId = row.userId ? String(row.userId) : '';
     return {
       _id: id,
-      id,
       userId,
       name: (row.name as string) || '',
       sourceContent: (row.sourceContent as string) || '',
@@ -396,7 +427,6 @@ export class StoriesService {
     }
     return {
       _id: id,
-      id,
       userId,
       topicId,
       storySourceId: storySourceIdStr,
