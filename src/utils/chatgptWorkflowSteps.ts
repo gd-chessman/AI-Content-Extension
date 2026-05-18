@@ -46,6 +46,16 @@ export function isChatgptGenerateImagesStep(step: ChatgptProcessStepLike): boole
   return action === CHATGPT_STEP_ACTION.GENERATE_IMAGES || action === CHATGPT_STEP_ACTION.GENERATE_IMAGE
 }
 
+/** `chatgpt_generate_images` — ảnh kép cạnh nhau, cần cắt trái/phải. */
+export function isChatgptGenerateSplitImagesStep(step: ChatgptProcessStepLike): boolean {
+  return normalizeChatgptActionType(step.actionType) === CHATGPT_STEP_ACTION.GENERATE_IMAGES
+}
+
+/** Workflow có bước tạo ảnh kép → chụp và cắt đôi; chỉ `chatgpt_generate_image` → một ảnh nguyên. */
+export function shouldSplitChatgptGeneratedImages(steps: ChatgptProcessStepLike[]): boolean {
+  return steps.some(isChatgptGenerateSplitImagesStep)
+}
+
 export function isChatgptExtractContentStep(step: ChatgptProcessStepLike): boolean {
   return normalizeChatgptActionType(step.actionType) === CHATGPT_STEP_ACTION.EXTRACT_CONTENT
 }

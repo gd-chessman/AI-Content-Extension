@@ -17,6 +17,7 @@ export type StoryItem = {
   /** Lượt ghi nhận trên story nguồn (reel) — chung cho mọi story cùng nguồn */
   usageCount?: number
   videoPrompts?: string[]
+  imageUrls?: string[]
   createdAt?: string
   updatedAt?: string
 }
@@ -26,6 +27,10 @@ export const createStoryFromReel = async (payload: {
   name?: string
   topicId?: string
   videoPrompts?: string[]
+  shortContent?: string
+  longContent?: string
+  /** URL ảnh trên Cloudinary (đã upload trực tiếp từ extension). */
+  imageUrls?: string[]
 }) => {
   const response = await axiosClient.post('/stories', payload)
   return response.data as StoryItem

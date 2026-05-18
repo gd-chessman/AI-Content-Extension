@@ -45,6 +45,7 @@ import {
   getMyStories,
   getMyStorySources,
 } from '@/services/StoryService'
+import { uploadStoryImagesFromDataUrls } from '@/services/CloudinaryUploadService'
 import { chatgptExtractContent } from '@/utils/chatgptExtractContent'
 import {
   chatgptExtractSingleVideoBlockPageScript,
@@ -106,6 +107,7 @@ import {
   isChatgptGenerateImagesStep,
   isChatgptRewriteContentStep,
   isChatgptSaveStoryStep,
+  shouldSplitChatgptGeneratedImages,
   stepDisplayLabel,
 } from '@/utils/chatgptWorkflowSteps'
 import {
@@ -188,9 +190,17 @@ function nonEmptyVideoPrompts(items: string[] | null | undefined): string[] {
   return items.map((s) => String(s ?? '').trim()).filter(Boolean)
 }
 
-/** Sau khi workflow xong: tạo Story mới kèm videoPrompts (caller phải có ≥1 prompt trước). */
+export type ChatgptStorySaveBundle = {
+  title: string
+  shortContent: string
+  longContent: string
+  imageUrls: string[]
+}
+
+/** Sau khi workflow xong: tạo Story mới kèm videoPrompts + nội dung/ảnh từ ChatGPT. */
 async function createStoryForPipelineRun(
   videoPrompts: string[],
+  bundle: ChatgptStorySaveBundle,
 ): Promise<{ storyId: string; error?: string }> {
   const sources = await getMyStorySources()
   const top = sources[0]
@@ -212,8 +222,11 @@ async function createStoryForPipelineRun(
   try {
     const created = await createStoryFromReel({
       sourceReelUrl: reelUrl,
-      name: (top.name || '').trim().slice(0, 200),
+      name: (bundle.title || top.name || '').trim().slice(0, 200),
       videoPrompts,
+      shortContent: bundle.shortContent,
+      longContent: bundle.longContent,
+      imageUrls: bundle.imageUrls,
     })
     const storyId = (created._id || created.id || '').trim()
     if (!storyId) {
@@ -643,6 +656,10 @@ export default function ChatgptScreen() {
   )
 
   const chatgptStepsByAction = useMemo(() => indexChatgptStepsByAction(processSteps), [processSteps])
+  const splitGeneratedImages = useMemo(
+    () => shouldSplitChatgptGeneratedImages(processSteps),
+    [processSteps],
+  )
   const rewriteStepLabel = stepDisplayLabel(chatgptStepsByAction.rewrite, 'bước viết lại nội dung')
   const extractVideosStepLabel = stepDisplayLabel(chatgptStepsByAction.extractVideos, 'bước tách VIDEO')
   const generateImagesStepLabel = stepDisplayLabel(chatgptStepsByAction.generateImages, 'bước tạo ảnh')
@@ -1513,14 +1530,30 @@ export default function ChatgptScreen() {
           `${step.label}: Chưa lấy được nội dung VIDEO (kiểm tra «${extractVideosStepLabel}»).`,
         )
       }
-      const created = await createStoryForPipelineRun(videoPrompts)
+      setStatus(`${step.label}: Đang lấy nội dung ChatGPT và upload ảnh lên Cloudinary...`)
+      const bundle = await collectStoryBundleForApiSave()
+      const created = await createStoryForPipelineRun(videoPrompts, bundle)
       if (!created.storyId) {
         throw new Error(created.error || `${step.label}: Không tạo được story trên máy chủ.`)
       }
       chatgptPipelineStoryIdRef.current = created.storyId
       const videoLabel = videoPrompts.length === 1 ? 'VIDEO' : `${videoPrompts.length} VIDEO`
-      setStatus(`${step.label}: Đã tạo story và lưu prompt ${videoLabel}.`)
-      return { saved: true, storyId: created.storyId, videoPromptCount: videoPrompts.length }
+      const imageNote =
+        bundle.imageUrls.length > 0
+          ? `, ${bundle.imageUrls.length} ảnh Cloudinary`
+          : ' (chưa có ảnh — bước tạo ảnh có thể chưa chạy)'
+      setStatus(
+        `${step.label}: Đã tạo story — tiêu đề, nội dung ngắn/dài, prompt ${videoLabel}${imageNote}.`,
+      )
+      return {
+        saved: true,
+        storyId: created.storyId,
+        videoPromptCount: videoPrompts.length,
+        imageCount: bundle.imageUrls.length,
+        titleLength: bundle.title.length,
+        shortContentLength: bundle.shortContent.length,
+        longContentLength: bundle.longContent.length,
+      }
     }
 
     // User-required behavior: every workflow step in ChatGPT screen
@@ -2060,6 +2093,96 @@ export default function ChatgptScreen() {
     return extracted
   }
 
+  /** Lấy text từ ChatGPT, upload ảnh thẳng Cloudinary, trả URL — POST /stories chỉ nhận JSON nhẹ. */
+  const collectStoryBundleForApiSave = async (): Promise<ChatgptStorySaveBundle> => {
+    if (!extractContentStep || extractContentPromptHint.length < 30) {
+      throw new Error('Workflow chưa có bước actionType = chatgpt_extract_content.')
+    }
+
+    const extensionChrome = getChrome()
+    if (!extensionChrome?.tabs?.query || !extensionChrome.scripting?.executeScript) {
+      throw new Error('Môi trường không hỗ trợ đọc tab ChatGPT.')
+    }
+
+    const currentActive = await queryTabs(undefined, true, true)
+    const activeTab = currentActive[0]
+    const isActiveChatgpt = Boolean(activeTab?.url && /chatgpt\.com|chat\.openai\.com/i.test(activeTab.url))
+    const activeTabs = isActiveChatgpt ? [activeTab] : await queryTabs(CHATGPT_PATTERNS, true, true)
+    const allTabs = activeTabs.length > 0 ? activeTabs : await queryTabs(CHATGPT_PATTERNS)
+    let target: BrowserTab | null | undefined = allTabs[0]
+
+    if (!target?.id) {
+      throw new Error(`Không tìm thấy tab ChatGPT để lấy dữ liệu «${extractContentStepLabel}».`)
+    }
+
+    target = await updateTab(target.id)
+    await sleep(240)
+
+    if (!target?.id) {
+      throw new Error('Không thể kích hoạt tab ChatGPT.')
+    }
+
+    await snapChatgptThreadToBottomBeforeRead(target.id)
+
+    const readyResult = await extensionChrome.scripting.executeScript({
+      target: { tabId: target.id },
+      func: chatgptExtractContent as (...args: unknown[]) => unknown,
+      args: ['ready', extractContentPromptHint],
+    })
+    if (readyResult?.[0]?.result !== true) {
+      throw new Error(
+        `Chưa có phản hồi «${extractContentStepLabel}» trên ChatGPT (hãy chạy xong bước trích nội dung trước).`,
+      )
+    }
+
+    const titlePlain = (await extractThreadContent('title_plain', { copyToClipboard: false })).trim()
+    const shortContent = (await extractThreadContent('content_short', { copyToClipboard: false })).trim()
+    const longContent = (await extractThreadContent('content_full', { copyToClipboard: false })).trim()
+
+    if (!titlePlain || !shortContent || !longContent) {
+      throw new Error(
+        `Không lấy đủ tiêu đề / nội dung ngắn / dài từ «${extractContentStepLabel}».`,
+      )
+    }
+
+    const imageDataUrls: string[] = []
+    if (extensionChrome.tabs?.captureVisibleTab) {
+      await snapChatgptThreadToBottomBeforeRead(target.id)
+      if (splitGeneratedImages) {
+        const cap = await captureSplitPairFromChatgptTab(target.id, target.windowId)
+        if (cap.ok) {
+          if (cap.left) imageDataUrls.push(cap.left)
+          if (cap.right) imageDataUrls.push(cap.right)
+          setSplitImages({ left: cap.left, right: cap.right })
+        }
+      } else {
+        const cap = await captureSingleImageFromChatgptTab(target.id, target.windowId)
+        if (cap.ok && cap.image) {
+          imageDataUrls.push(cap.image)
+          setSplitImages({ left: cap.image, right: '' })
+        }
+      }
+    }
+    if (imageDataUrls.length === 0) {
+      const staleLeft = (splitImages?.left || '').trim()
+      const staleRight = (splitImages?.right || '').trim()
+      if (splitGeneratedImages) {
+        if (staleLeft) imageDataUrls.push(staleLeft)
+        if (staleRight) imageDataUrls.push(staleRight)
+      } else if (staleLeft || staleRight) {
+        imageDataUrls.push(staleLeft || staleRight)
+      }
+    }
+
+    let imageUrls: string[] = []
+    if (imageDataUrls.length > 0) {
+      setStatus('Đang upload ảnh lên Cloudinary (trực tiếp từ extension)...')
+      imageUrls = await uploadStoryImagesFromDataUrls(imageDataUrls)
+    }
+
+    return { title: titlePlain, shortContent, longContent, imageUrls }
+  }
+
   const resolveStoryContextForLocalSave = async (): Promise<{
     storyId: string
     folderSegment: string
@@ -2209,21 +2332,36 @@ export default function ChatgptScreen() {
       let right = ''
       let usedStaleSplitFallback = false
       if (extensionChrome.tabs?.captureVisibleTab && target?.id) {
-        setStatus(`Đang chụp và cắt đôi ảnh mới nhất từ ChatGPT («${generateImagesStepLabel}») để lưu...`)
+        setStatus(
+          splitGeneratedImages
+            ? `Đang chụp và cắt đôi ảnh mới nhất từ ChatGPT («${generateImagesStepLabel}») để lưu...`
+            : `Đang chụp ảnh mới nhất từ ChatGPT («${generateImagesStepLabel}») để lưu...`,
+        )
         await snapChatgptThreadToBottomBeforeRead(target.id)
-        const cap = await captureSplitPairFromChatgptTab(target.id, target.windowId)
-        if (cap.ok) {
-          left = cap.left
-          right = cap.right
-          setSplitImages({ left, right })
+        if (splitGeneratedImages) {
+          const cap = await captureSplitPairFromChatgptTab(target.id, target.windowId)
+          if (cap.ok) {
+            left = cap.left
+            right = cap.right
+            setSplitImages({ left, right })
+          }
+        } else {
+          const cap = await captureSingleImageFromChatgptTab(target.id, target.windowId)
+          if (cap.ok && cap.image) {
+            left = cap.image
+            setSplitImages({ left, right: '' })
+          }
         }
       }
-      if (!left || !right) {
+      if (splitGeneratedImages ? !left || !right : !left) {
         const staleLeft = (splitImages?.left || '').trim()
         const staleRight = (splitImages?.right || '').trim()
-        if (staleLeft && staleRight) {
+        if (splitGeneratedImages && staleLeft && staleRight) {
           left = staleLeft
           right = staleRight
+          usedStaleSplitFallback = true
+        } else if (!splitGeneratedImages && (staleLeft || staleRight)) {
+          left = staleLeft || staleRight
           usedStaleSplitFallback = true
         }
       }
@@ -2238,7 +2376,7 @@ export default function ChatgptScreen() {
         sourceReelUrl: storyCtx.sourceReelUrl || '',
         workflowId: selectedWorkflowId,
         savedAt: new Date().toISOString(),
-        hasSplitImages: Boolean(left && right),
+        hasSplitImages: splitGeneratedImages ? Boolean(left && right) : Boolean(left),
       }
       await writeUtf8File(dirs.infoDir, 'meta.json', JSON.stringify(infoPayload, null, 2))
 
@@ -2251,11 +2389,17 @@ export default function ChatgptScreen() {
         await writeBlobToFile(dirs.imagesDir, 'anh-2.png', blobR)
       }
 
-      const imageNote = left && right
-        ? usedStaleSplitFallback
-          ? ', images/anh-1.png & anh-2.png (dùng ảnh cắt cũ — không chụp lại được từ ChatGPT)'
-          : ', images/anh-1.png & anh-2.png'
-        : ' (chưa có ảnh cắt đôi — bỏ qua images)'
+      const imageNote = splitGeneratedImages
+        ? left && right
+          ? usedStaleSplitFallback
+            ? ', images/anh-1.png & anh-2.png (dùng ảnh cắt cũ — không chụp lại được từ ChatGPT)'
+            : ', images/anh-1.png & anh-2.png'
+          : ' (chưa có ảnh cắt đôi — bỏ qua images)'
+        : left
+          ? usedStaleSplitFallback
+            ? ', images/anh-1.png (dùng ảnh cũ — không chụp lại được từ ChatGPT)'
+            : ', images/anh-1.png'
+          : ' (chưa có ảnh — bỏ qua images)'
       setStatus(
         `Đã lưu cục bộ: …/${storiesSeg}/${storyCtx.folderSegment}/ — content (noi-dung-ngan, noi-dung-dai), info/meta.json${imageNote}.`,
       )
