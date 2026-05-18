@@ -8,14 +8,18 @@ import type { ChatgptExtractContentClipboardKind } from './chatgptExtractContent
 /** Khoảng trống phía trên khi cuộn tới nội dung trên ChatGPT (tránh dính header). */
 export const CHATGPT_SCROLL_TOP_INSET_PX = 96
 
+/** Tách theo đoạn/dòng — giữ nguyên xuống dòng trong từng đoạn (format ChatGPT). */
 function splitLongContentUnits(base: string): string[] {
-  const sentenceUnits = base
-    .split(/(?<=[.!?])\s+/)
-    .map((unit) => unit.trim())
-    .filter(Boolean)
-  return sentenceUnits.length >= 6
-    ? sentenceUnits
-    : base.split('\n').map((line) => line.trim()).filter(Boolean)
+  const normalized = (base || '').replace(/\r\n/g, '\n')
+  if (!normalized.trim()) return []
+
+  const paragraphs = normalized.split(/\n\n/)
+  if (paragraphs.length >= 2) return paragraphs
+
+  const lines = normalized.split('\n')
+  if (lines.length >= 2) return lines
+
+  return [normalized]
 }
 
 /** Chèn một ảnh vào vùng trên–giữa nội dung dài (~22%–42% chiều dài). */

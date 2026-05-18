@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   FiAlertTriangle,
   FiCheck,
@@ -52,18 +52,50 @@ const buildWebBlogPayloadFromStory = (story: StoryItem) => {
   return { title, longContent, image1, image2 }
 }
 
-const toEditorHtml = (raw: string) => {
-  const source = (raw || '').trim()
+const WEBBLOG_IMG_BLOCK_RE = /(<p>\s*<img[\s\S]*?<\/p>)/gi
+
+const formatWebBlogContentForDisplay = (raw: string) => {
+  const source = (raw || '').replace(/\r\n/g, '\n')
   if (!source) return ''
-  const blocks = source.split(/\n\s*\n/).map((b) => b.trim()).filter(Boolean)
-  return blocks
-    .map((block) => {
-      if (/<(?:p|img|div|br|h\d|ul|ol|li|blockquote)\b/i.test(block)) return block
-      const escaped = block
+  return source
+    .split(WEBBLOG_IMG_BLOCK_RE)
+    .map((part) => {
+      if (!part) return ''
+      if (/^<p>\s*<img/i.test(part)) {
+        return part.replace(
+          /<img\b/i,
+          '<img style="max-width:100%;height:auto;display:block;margin:0.75em 0;" ',
+        )
+      }
+      return part
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;')
-      return `<p>${escaped}</p>`
+    })
+    .join('')
+}
+
+const toEditorHtml = (raw: string) => {
+  const source = (raw || '').trim().replace(/\r\n/g, '\n')
+  if (!source) return ''
+  return source
+    .split(WEBBLOG_IMG_BLOCK_RE)
+    .map((part) => {
+      if (!part) return ''
+      if (/^<p>\s*<img/i.test(part)) return part
+      if (/<(?:p|div|br|h\d|ul|ol|li|blockquote)\b/i.test(part)) return part
+      const blocks = part.split(/\n\n/).map((b) => b.trim()).filter(Boolean)
+      if (blocks.length === 0) return ''
+      return blocks
+        .map((block) => {
+          const escaped = block
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/\n/g, '<br />')
+          return `<p>${escaped}</p>`
+        })
+        .join('')
     })
     .join('')
 }
@@ -140,8 +172,6 @@ export default function WebBlogScreen() {
   const [isLoadingDbList, setIsLoadingDbList] = useState(false)
   const [isImportingLocal, setIsImportingLocal] = useState(false)
   const [isImportingDb, setIsImportingDb] = useState(false)
-  const contentEditorRef = useRef<HTMLDivElement | null>(null)
-
   const filteredLocalStoryEntries = useMemo(() => {
     const q = localStorySearch.trim().toLowerCase()
     if (!q) return localStoryEntries
@@ -189,7 +219,7 @@ export default function WebBlogScreen() {
     image2?: string
   }) => {
     const nextTitle = (payload.title || '').trim()
-    const nextLongContent = (payload.longContent || '').trim()
+    const nextLongContent = (payload.longContent || '').replace(/\r\n/g, '\n')
     setTitle(nextTitle)
     setLongContent(nextLongContent)
     setOriginalTitle(nextTitle)
@@ -384,8 +414,7 @@ export default function WebBlogScreen() {
     if (!value.trim()) return
     try {
       if (field === 'content') {
-        const editorEl = contentEditorRef.current
-        const htmlSource = editorEl?.innerHTML?.trim() || toEditorHtml(value)
+        const htmlSource = toEditorHtml(value)
         const wrapper = document.createElement('div')
         wrapper.innerHTML = htmlSource
         wrapper.querySelectorAll('img').forEach((img) => {
@@ -448,10 +477,7 @@ export default function WebBlogScreen() {
       if (field === 'title') {
         next = await translateInChunks(source)
       } else {
-        // Long content may include HTML/images; translate text only to avoid payload overflow.
-        const editorEl = contentEditorRef.current
-        const htmlSource = editorEl?.innerHTML?.trim() || toEditorHtml(source)
-        const plainText = htmlToPlainText(htmlSource)
+        const plainText = htmlToPlainText(toEditorHtml(source))
         next = await translateInChunks(plainText)
       }
       if (!next) {
@@ -779,12 +805,8 @@ export default function WebBlogScreen() {
               </div>
             </div>
             <div
-              ref={contentEditorRef}
-              contentEditable
-              suppressContentEditableWarning
-              onBlur={(event) => setLongContent(event.currentTarget.innerHTML.trim())}
-              className="mt-1 h-[calc(100%-24px)] min-h-0 w-full overflow-y-auto rounded-xl bg-slate-900/80 px-2 py-1.5 text-[11px] text-slate-100 outline-none"
-              dangerouslySetInnerHTML={{ __html: toEditorHtml(longContent) }}
+              className="mt-1 h-[calc(100%-24px)] min-h-0 w-full overflow-y-auto whitespace-pre-wrap rounded-xl bg-slate-900/80 px-2 py-1.5 text-[11px] leading-normal text-slate-100"
+              dangerouslySetInnerHTML={{ __html: formatWebBlogContentForDisplay(longContent) }}
             />
           </div>
 
