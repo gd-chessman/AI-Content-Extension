@@ -41,6 +41,11 @@ export function isChatgptExtractVideosStep(step: ChatgptProcessStepLike): boolea
   )
 }
 
+/** Hai khối VIDEO 1 + VIDEO 2 (khác `chatgpt_extract_content_video` — một khối). */
+export function isChatgptExtractContentVideosPluralStep(step: ChatgptProcessStepLike): boolean {
+  return normalizeChatgptActionType(step.actionType) === CHATGPT_STEP_ACTION.EXTRACT_CONTENT_VIDEOS
+}
+
 export function isChatgptGenerateImagesStep(step: ChatgptProcessStepLike): boolean {
   const action = normalizeChatgptActionType(step.actionType)
   return action === CHATGPT_STEP_ACTION.GENERATE_IMAGES || action === CHATGPT_STEP_ACTION.GENERATE_IMAGE

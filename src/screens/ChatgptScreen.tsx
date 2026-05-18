@@ -103,8 +103,10 @@ import {
 import {
   CHATGPT_EXTRACT_CONTENT_PROMPT_HINT_KEY,
   indexChatgptStepsByAction,
+  type ChatgptProcessStepLike,
   isChatgptExtractContentStep,
   isChatgptExtractVideosStep,
+  isChatgptExtractContentVideosPluralStep,
   isChatgptGenerateImagesStep,
   isChatgptRewriteContentStep,
   isChatgptSaveStoryStep,
@@ -1367,7 +1369,7 @@ export default function ChatgptScreen() {
         func: chatgptScrollToVideoBlockPageScript as (...args: unknown[]) => unknown,
         args: [part],
       })
-      await sleep(copyToClipboard ? 380 : 140)
+      await sleep(copyToClipboard ? 380 : 420)
 
       const result = await extensionChrome.scripting.executeScript({
         target: { tabId: target.id },
@@ -1483,7 +1485,7 @@ export default function ChatgptScreen() {
         target: { tabId: target.id },
         func: chatgptScrollToSingleVideoBlockPageScript as (...args: unknown[]) => unknown,
       })
-      await sleep(copyToClipboard ? 380 : 140)
+      await sleep(copyToClipboard ? 380 : 420)
 
       const result = await extensionChrome.scripting.executeScript({
         target: { tabId: target.id },
@@ -1520,12 +1522,38 @@ export default function ChatgptScreen() {
     return extracted
   }
 
+  const collectVideoPromptsForWorkflow = async (
+    videoStep: ChatgptProcessStepLike,
+    options?: { preferredTabId?: number },
+  ): Promise<string[]> => {
+    const pref = options?.preferredTabId
+    const extractOpts = { copyToClipboard: false, preferredTabId: pref }
+    if (pref) {
+      await snapChatgptThreadToBottomBeforeRead(pref)
+      await sleep(360)
+    }
+    if (isChatgptExtractContentVideosPluralStep(videoStep)) {
+      const video1 = await extractVideoContent(1, extractOpts)
+      const video2 = await extractVideoContent(2, extractOpts)
+      return nonEmptyVideoPrompts([video1, video2])
+    }
+    const single = await extractSingleVideoContent(extractOpts)
+    return nonEmptyVideoPrompts([single])
+  }
+
   const executeWorkflowStep = async (step: ProcessStep) => {
     if (isChatgptSaveStoryStep(step)) {
       if (chatgptWorkflowSourceRef.current !== 'stories') {
         return { skipped: true, reason: 'not_stories_source' }
       }
-      const videoPrompts = nonEmptyVideoPrompts(chatgptDraftVideoPromptsRef.current)
+      let videoPrompts = nonEmptyVideoPrompts(chatgptDraftVideoPromptsRef.current)
+      if (!videoPrompts.length && chatgptStepsByAction.extractVideos) {
+        setStatus(`${step.label}: Đang thử lấy lại nội dung VIDEO...`)
+        videoPrompts = await collectVideoPromptsForWorkflow(chatgptStepsByAction.extractVideos, {
+          preferredTabId: lockedWorkflowTabIdRef.current || undefined,
+        })
+        chatgptDraftVideoPromptsRef.current = videoPrompts
+      }
       if (!videoPrompts.length) {
         throw new Error(
           `${step.label}: Chưa lấy được nội dung VIDEO (kiểm tra «${extractVideosStepLabel}»).`,
@@ -1584,15 +1612,16 @@ export default function ChatgptScreen() {
     }
 
     if (isChatgptExtractVideosStep(step)) {
+      await sleep(500)
       const pref = lockedWorkflowTabIdRef.current || undefined
-      const extractOpts = { copyToClipboard: false, preferredTabId: pref }
-      const single = await extractSingleVideoContent(extractOpts)
-      const prompts = nonEmptyVideoPrompts([single])
-
+      const prompts = await collectVideoPromptsForWorkflow(step, { preferredTabId: pref })
       chatgptDraftVideoPromptsRef.current = prompts
       if (!prompts.length) {
-        setStatus(`${step.label}: Chưa lấy được nội dung VIDEO (kiểm tra «${extractVideosStepLabel}»).`)
-      } else if (prompts.length === 1) {
+        throw new Error(
+          `${step.label}: Chưa lấy được nội dung VIDEO (kiểm tra «${extractVideosStepLabel}»).`,
+        )
+      }
+      if (prompts.length === 1) {
         setStatus(`${step.label}: Đã lấy prompt VIDEO.`)
       } else {
         setStatus(`${step.label}: Đã lấy ${prompts.length} prompt VIDEO.`)
