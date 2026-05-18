@@ -181,17 +181,8 @@ export function chatgptExtractContent(...args: unknown[]): ChatgptExtractContent
     return { body: base, strippedShortHead: false }
   }
 
-  /** Nội dung dài: thân + tiêu đề thường (plain) ở đầu khi đã tách đoạn đầu ngắn — không dùng font kiểu đậm. */
-  const pickFull = (text: string) => {
-    const { body, strippedShortHead } = pickFullBodyOnly(text)
-    if (!strippedShortHead) return body
-    const plainTitle = pickTitle(text)
-    if (!plainTitle) return body
-    if (!body) return plainTitle
-    const bodyFirstLine = (body.split('\n')[0] || '').trim()
-    if (bodyFirstLine === plainTitle || cleanTitleEnd(bodyFirstLine) === plainTitle) return body
-    return `${plainTitle}\n\n${body}`.trim()
-  }
+  /** Nội dung dài: chỉ thân bài (đoạn đầu ngắn coi là tiêu đề thì bỏ, không ghép lại). */
+  const pickFull = (text: string) => pickFullBodyOnly(text).body
   const pickShort = (text: string) => {
     const full = pickFullBodyOnly(text).body
     const MIN_LEN = 1000
