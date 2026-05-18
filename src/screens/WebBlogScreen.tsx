@@ -53,16 +53,18 @@ const buildWebBlogPayloadFromStory = (story: StoryItem) => {
   return { title, longContent, image1, image2 }
 }
 
-const WEBBLOG_IMG_BLOCK_RE = /(<p>\s*<img[\s\S]*?<\/p>)/gi
+const WEBBLOG_IMG_BLOCK_SPLIT_RE = /(<p>\s*<img[\s\S]*?<\/p>)/i
+const WEBBLOG_IMG_BLOCK_TEST_RE = /^<p>\s*<img/i
+
+const splitContentAndImageBlocks = (source: string) => source.split(WEBBLOG_IMG_BLOCK_SPLIT_RE)
 
 const formatWebBlogContentForDisplay = (raw: string) => {
   const source = (raw || '').replace(/\r\n/g, '\n')
   if (!source) return ''
-  return source
-    .split(WEBBLOG_IMG_BLOCK_RE)
+  return splitContentAndImageBlocks(source)
     .map((part) => {
       if (!part) return ''
-      if (/^<p>\s*<img/i.test(part)) {
+      if (WEBBLOG_IMG_BLOCK_TEST_RE.test(part)) {
         return part.replace(
           /<img\b/i,
           '<img style="max-width:100%;height:auto;display:block;margin:0.75em 0;" ',
@@ -79,11 +81,10 @@ const formatWebBlogContentForDisplay = (raw: string) => {
 const toEditorHtml = (raw: string) => {
   const source = (raw || '').trim().replace(/\r\n/g, '\n')
   if (!source) return ''
-  return source
-    .split(WEBBLOG_IMG_BLOCK_RE)
+  return splitContentAndImageBlocks(source)
     .map((part) => {
       if (!part) return ''
-      if (/^<p>\s*<img/i.test(part)) return part
+      if (WEBBLOG_IMG_BLOCK_TEST_RE.test(part)) return part
       if (/<(?:p|div|br|h\d|ul|ol|li|blockquote)\b/i.test(part)) return part
       const blocks = part.split(/\n\n/).map((b) => b.trim()).filter(Boolean)
       if (blocks.length === 0) return ''
@@ -106,6 +107,17 @@ const htmlToPlainText = (html: string) => {
   const div = document.createElement('div')
   div.innerHTML = html
   return (div.textContent || div.innerText || '').trim()
+}
+
+/** Plain text để dịch — bỏ khối ảnh HTML, giữ xuống dòng. */
+const getLongContentPlainForTranslate = (raw: string) => {
+  const withoutImages = (raw || '')
+    .replace(/\r\n/g, '\n')
+    .replace(/<p>\s*<img[\s\S]*?<\/p>/gi, '\n\n')
+  if (/<[a-z][\s\S]*?>/i.test(withoutImages)) {
+    return htmlToPlainText(withoutImages)
+  }
+  return withoutImages.trim()
 }
 
 const translateInChunks = async (source: string) => {
@@ -491,8 +503,19 @@ export default function WebBlogScreen() {
       if (field === 'title') {
         next = await translateInChunks(source)
       } else {
-        const plainText = htmlToPlainText(toEditorHtml(source))
+        const plainText = getLongContentPlainForTranslate(longContent)
+        if (!plainText) {
+          setStatus('Không có nội dung chữ để dịch.')
+          return
+        }
         next = await translateInChunks(plainText)
+        if (next && !/<img\b/i.test(next)) {
+          if (image1 && image2) {
+            next = injectImagesIntoLongContent(next, image1, image2)
+          } else if (image1) {
+            next = injectSingleImageIntoLongContent(next, image1)
+          }
+        }
       }
       if (!next) {
         setStatus('Không nhận được bản dịch.')
