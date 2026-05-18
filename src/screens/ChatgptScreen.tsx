@@ -175,7 +175,7 @@ const CHATGPT_SELECTED_WORKFLOW_STORAGE_KEY = 'chatgptSelectedWorkflowId'
 
 /** Story mới nhất cùng StorySource (để gắn lưu videoPrompts cuối workflow). */
 async function resolveLatestStoryIdForSource(storySourceId: string): Promise<string> {
-  const stories = await getMyStories()
+  const { items: stories } = await getMyStories({ page: 1, limit: 200 })
   const linked = stories
     .filter((s) => (s.storySourceId || '').trim() === storySourceId.trim())
     .sort((a, b) => {
@@ -229,7 +229,7 @@ async function createStoryForPipelineRun(
       longContent: bundle.longContent,
       imageUrls: bundle.imageUrls,
     })
-    const storyId = (created._id || created.id || '').trim()
+    const storyId = (created._id || '').trim()
     if (!storyId) {
       return { storyId: '', error: 'API tạo story không trả về id.' }
     }
@@ -2191,10 +2191,10 @@ export default function ChatgptScreen() {
     sourceReelUrl: string
   } | null> => {
     const storyFromId = async (storyId: string) => {
-      const list = await getMyStories()
-      const s = list.find((x) => (x._id || x.id || '').trim() === storyId.trim())
+      const { items: list } = await getMyStories({ page: 1, limit: 200 })
+      const s = list.find((x) => (x._id || '').trim() === storyId.trim())
       if (!s) return null
-      const id = (s._id || s.id || '').trim()
+      const id = (s._id || '').trim()
       const rawName = (s.name || '').trim()
       const folderSegment = sanitizeWorkspaceFolderSegment(
         rawName,

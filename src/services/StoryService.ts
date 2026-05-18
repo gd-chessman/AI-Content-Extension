@@ -2,7 +2,6 @@ import axiosClient from '@/utils/axiosClient'
 
 export type StoryItem = {
   _id: string
-  id: string
   userId: string
   topicId: string
   /** Story nguồn (reel) — nhiều story có thể cùng một nguồn */
@@ -36,15 +35,43 @@ export const createStoryFromReel = async (payload: {
   return response.data as StoryItem
 }
 
-export const getMyStories = async () => {
-  const response = await axiosClient.get('/stories/my')
-  return (response.data || []) as StoryItem[]
+export type StoriesPagination = {
+  total: number
+  page: number
+  limit: number
+  totalPages: number
+}
+
+export type PaginatedStoriesResponse = {
+  items: StoryItem[]
+  pagination: StoriesPagination
+}
+
+export type GetMyStoriesParams = {
+  page?: number
+  limit?: number
+  q?: string
+  hasLongContent?: boolean
+}
+
+export const getMyStories = async (params?: GetMyStoriesParams) => {
+  const response = await axiosClient.get('/stories/my', {
+    params: {
+      page: params?.page ?? 1,
+      limit: params?.limit ?? 20,
+      ...(params?.q?.trim() ? { q: params.q.trim() } : {}),
+      ...(params?.hasLongContent ? { hasLongContent: 'true' } : {}),
+    },
+  })
+  return (response.data || {
+    items: [],
+    pagination: { total: 0, page: 1, limit: 20, totalPages: 1 },
+  }) as PaginatedStoriesResponse
 }
 
 /** Một bản ghi StorySource (API đã sắp: mới trước, usageCount thấp trước khi trùng thời điểm). */
 export type StorySourceListItem = {
   _id: string
-  id: string
   sourceContent: string
   sourceReelUrl: string
   name: string
@@ -106,7 +133,6 @@ export const syncStorySourceFromReel = async (payload: {
   const response = await axiosClient.post('/stories/sources/sync', payload)
   return response.data as {
     _id: string
-    id: string
     userId: string
     name: string
     sourceContent: string

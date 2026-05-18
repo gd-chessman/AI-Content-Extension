@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   FiAlertTriangle,
   FiCheck,
@@ -26,6 +26,7 @@ import {
   type LocalStoryFolderEntry,
 } from '@/utils/localWorkspacePersistence'
 import translate from 'translate'
+import { normalizeTextForSearch, textMatchesSearch } from '@/utils/textSearchNormalize'
 
 const getChrome = () => (globalThis as { chrome?: { storage?: { local?: unknown } } }).chrome
 
@@ -164,6 +165,7 @@ export default function WebBlogScreen() {
   const [showDbImport, setShowDbImport] = useState(false)
   const [localStoryEntries, setLocalStoryEntries] = useState<LocalStoryFolderEntry[]>([])
   const [dbStories, setDbStories] = useState<StoryItem[]>([])
+  const [dbStoriesTotal, setDbStoriesTotal] = useState(0)
   const [localStorySearch, setLocalStorySearch] = useState('')
   const [dbStorySearch, setDbStorySearch] = useState('')
   const [selectedLocalFolder, setSelectedLocalFolder] = useState('')
@@ -173,23 +175,24 @@ export default function WebBlogScreen() {
   const [isImportingLocal, setIsImportingLocal] = useState(false)
   const [isImportingDb, setIsImportingDb] = useState(false)
   const filteredLocalStoryEntries = useMemo(() => {
-    const q = localStorySearch.trim().toLowerCase()
+    const q = localStorySearch.trim()
     if (!q) return localStoryEntries
     return localStoryEntries.filter((entry) => {
-      const display = entry.displayName.toLowerCase()
-      const folder = entry.folderName.toLowerCase()
       const savedLabel = entry.savedAt
-        ? new Date(entry.savedAt).toLocaleString('vi-VN').toLowerCase()
+        ? new Date(entry.savedAt).toLocaleString('vi-VN')
         : ''
-      return display.includes(q) || folder.includes(q) || savedLabel.includes(q)
+      return (
+        textMatchesSearch(entry.displayName, q) ||
+        textMatchesSearch(entry.folderName, q) ||
+        textMatchesSearch(savedLabel, q)
+      )
     })
   }, [localStoryEntries, localStorySearch])
 
   const dbStoryPickerEntries = useMemo(() => {
     return dbStories
-      .filter((story) => (story.longContent || '').trim())
       .map((story) => {
-        const id = (story.id || story._id || '').trim()
+        const id = (story._id || '').trim()
         const name = (story.name || '').trim()
         return {
           id,
@@ -200,17 +203,45 @@ export default function WebBlogScreen() {
       .filter((entry) => entry.id)
   }, [dbStories])
 
-  const filteredDbStoryEntries = useMemo(() => {
-    const q = dbStorySearch.trim().toLowerCase()
-    if (!q) return dbStoryPickerEntries
-    return dbStoryPickerEntries.filter((entry) => {
-      const display = entry.displayName.toLowerCase()
-      const savedLabel = entry.savedAt
-        ? new Date(entry.savedAt).toLocaleString('vi-VN').toLowerCase()
-        : ''
-      return display.includes(q) || entry.id.toLowerCase().includes(q) || savedLabel.includes(q)
-    })
-  }, [dbStoryPickerEntries, dbStorySearch])
+  const loadDbStories = useCallback(async (q: string) => {
+    setIsLoadingDbList(true)
+    try {
+      const res = await getMyStories({
+        page: 1,
+        limit: 20,
+        q: q.trim() ? normalizeTextForSearch(q) : undefined,
+        hasLongContent: true,
+      })
+      const { pagination } = res
+      setDbStories(res.items)
+      setDbStoriesTotal(pagination.total)
+      const firstId = (res.items[0]?._id || '').trim()
+      setSelectedDbStoryId((prev) => {
+        if (prev && res.items.some((s) => s._id === prev)) return prev
+        return firstId
+      })
+      if (!res.items.length) {
+        setStatus(
+          q.trim()
+            ? 'Không có story khớp tìm kiếm trên server.'
+            : 'Chưa có story nào trên server có nội dung dài. Hãy lưu story từ ChatGPT trước.',
+        )
+      } else {
+        setStatus(
+          q.trim()
+            ? `Tìm thấy ${pagination.total} story.`
+            : `Chọn story trên server (${pagination.total} mục) rồi bấm Nhập.`,
+        )
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      setStatus(`Không tải được danh sách story: ${msg}`)
+      setDbStories([])
+      setDbStoriesTotal(0)
+    } finally {
+      setIsLoadingDbList(false)
+    }
+  }, [])
 
   const applyWebBlogPayload = (payload: {
     title?: string
@@ -260,10 +291,12 @@ export default function WebBlogScreen() {
   }, [showLocalImport, isLoadingLocalList, filteredLocalStoryEntries, selectedLocalFolder])
 
   useEffect(() => {
-    if (!showDbImport || isLoadingDbList || !filteredDbStoryEntries.length) return
-    const visible = filteredDbStoryEntries.some((e) => e.id === selectedDbStoryId)
-    if (!visible) setSelectedDbStoryId(filteredDbStoryEntries[0].id)
-  }, [showDbImport, isLoadingDbList, filteredDbStoryEntries, selectedDbStoryId])
+    if (!showDbImport) return
+    const timer = window.setTimeout(() => {
+      void loadDbStories(dbStorySearch)
+    }, 320)
+    return () => window.clearTimeout(timer)
+  }, [showDbImport, dbStorySearch, loadDbStories])
 
   const openLocalImportPicker = async () => {
     setShowDbImport(false)
@@ -339,32 +372,13 @@ export default function WebBlogScreen() {
     }
   }
 
-  const openDbImportPicker = async () => {
+  const openDbImportPicker = () => {
     setShowLocalImport(false)
     setShowDbImport(true)
-    setIsLoadingDbList(true)
     setDbStories([])
     setDbStorySearch('')
     setSelectedDbStoryId('')
-    try {
-      const stories = await getMyStories()
-      const eligible = stories.filter((story) => (story.longContent || '').trim())
-      if (!eligible.length) {
-        setStatus('Chưa có story nào trên server có nội dung dài (longContent). Hãy lưu story từ ChatGPT trước.')
-        setShowDbImport(false)
-        return
-      }
-      setDbStories(eligible)
-      const firstId = (eligible[0].id || eligible[0]._id || '').trim()
-      setSelectedDbStoryId(firstId)
-      setStatus(`Chọn story trên server (${eligible.length} mục) rồi bấm Nhập.`)
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e)
-      setStatus(`Không tải được danh sách story: ${msg}`)
-      setShowDbImport(false)
-    } finally {
-      setIsLoadingDbList(false)
-    }
+    setDbStoriesTotal(0)
   }
 
   const importFromDatabase = async () => {
@@ -375,7 +389,7 @@ export default function WebBlogScreen() {
     }
     setIsImportingDb(true)
     try {
-      const story = dbStories.find((s) => (s.id || s._id) === storyId)
+      const story = dbStories.find((s) => s._id === storyId)
       if (!story) {
         setStatus('Không tìm thấy story đã chọn.')
         return
@@ -393,10 +407,10 @@ export default function WebBlogScreen() {
           : payload.image1 || payload.image2
             ? ' (có ảnh trên server)'
             : ''
-      setStatus(`Đã nhập từ database: «${payload.title || storyId}»${imgNote}.`)
+      setStatus(`Đã nhập: «${payload.title || storyId}»${imgNote}.`)
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
-      setStatus(`Nhập từ database thất bại: ${msg}`)
+      setStatus(`Nhập thất bại: ${msg}`)
     } finally {
       setIsImportingDb(false)
     }
@@ -528,7 +542,7 @@ export default function WebBlogScreen() {
             }
             className="inline-flex h-7 w-7 cursor-pointer items-center justify-center rounded-lg bg-violet-500/20 text-violet-100 transition hover:bg-violet-500/30 disabled:cursor-not-allowed disabled:opacity-40"
             title="Nhập tiêu đề, nội dung dài và ảnh từ story đã lưu trên server (ChatGPT → Lưu story)"
-            aria-label="Nhập từ database"
+            aria-label="Nhập"
           >
             <FiDatabase className="h-3.5 w-3.5" />
           </button>
@@ -607,7 +621,7 @@ export default function WebBlogScreen() {
       ) : null}
       {showDbImport ? (
         <div className="mt-2 rounded-xl border border-violet-300/30 bg-violet-500/10 p-2">
-          <p className="text-[10px] text-slate-300">Nhập từ database (story trên server)</p>
+          <p className="text-[10px] text-slate-300">Nhập từ máy chủ</p>
           {isLoadingDbList ? (
             <p className="mt-1 text-[10px] text-slate-400">Đang tải danh sách story…</p>
           ) : (
@@ -623,20 +637,20 @@ export default function WebBlogScreen() {
                 />
               </div>
               <p className="mt-1 text-[10px] text-slate-500">
-                {filteredDbStoryEntries.length} / {dbStoryPickerEntries.length} story
+                {dbStoryPickerEntries.length} / {dbStoriesTotal} story
                 {dbStorySearch.trim() ? ' (đã lọc)' : ''}
               </p>
               <select
                 value={selectedDbStoryId}
                 onChange={(e) => setSelectedDbStoryId(e.target.value)}
-                disabled={filteredDbStoryEntries.length === 0}
+                disabled={dbStoryPickerEntries.length === 0}
                 className="mt-1 max-h-40 w-full rounded-lg bg-slate-900/80 px-2 py-1.5 text-[11px] text-slate-100 outline-none disabled:opacity-50"
-                size={Math.min(6, Math.max(3, filteredDbStoryEntries.length))}
+                size={Math.min(6, Math.max(3, dbStoryPickerEntries.length))}
               >
-                {filteredDbStoryEntries.length === 0 ? (
+                {dbStoryPickerEntries.length === 0 ? (
                   <option value="">Không có story khớp tìm kiếm</option>
                 ) : (
-                  filteredDbStoryEntries.map((entry) => (
+                  dbStoryPickerEntries.map((entry) => (
                     <option key={entry.id} value={entry.id}>
                       {entry.displayName}
                       {entry.savedAt ? ` — ${new Date(entry.savedAt).toLocaleString('vi-VN')}` : ''}
@@ -655,9 +669,7 @@ export default function WebBlogScreen() {
                 <button
                   type="button"
                   onClick={() => void importFromDatabase()}
-                  disabled={
-                    !selectedDbStoryId || isImportingDb || filteredDbStoryEntries.length === 0
-                  }
+                  disabled={!selectedDbStoryId || isImportingDb || dbStoryPickerEntries.length === 0}
                   className="cursor-pointer rounded-lg bg-violet-500/30 px-2 py-1 text-[10px] font-semibold text-violet-50 transition hover:bg-violet-500/40 disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   {isImportingDb ? 'Đang nhập…' : 'Nhập'}
