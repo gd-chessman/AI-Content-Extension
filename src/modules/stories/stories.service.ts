@@ -12,6 +12,9 @@ import { Story, StoryDocument } from './story.schema';
 import { StoryTopic, StoryTopicDocument } from './story-topic.schema';
 
 const MIN_SOURCE_CONTENT_LENGTH = 256;
+const MAX_STORY_SHORT_CONTENT = 80_000;
+const MAX_STORY_LONG_CONTENT = 500_000;
+const MAX_STORY_IMAGES = 6;
 
 @Injectable()
 export class StoriesService {
@@ -101,17 +104,26 @@ export class StoriesService {
     }
 
     const name = (dto.name || '').trim().slice(0, 200);
+    const shortContent = (dto.shortContent || '').trim().slice(0, MAX_STORY_SHORT_CONTENT);
+    const longContent = (dto.longContent || '').trim().slice(0, MAX_STORY_LONG_CONTENT);
+    const imageUrls = this.normalizeStoryImageUrls(dto.imageUrls);
 
     const storyPayload: {
       userId: Types.ObjectId;
       storySourceId: Types.ObjectId;
       name: string;
+      shortContent: string;
+      longContent: string;
+      imageUrls: string[];
       topicId?: Types.ObjectId;
       videoPrompts?: string[];
     } = {
       userId: userOid,
       storySourceId: new Types.ObjectId(String(sourceDoc._id)),
       name,
+      shortContent,
+      longContent,
+      imageUrls,
     };
     if (topicId) {
       storyPayload.topicId = topicId;
@@ -423,6 +435,27 @@ export class StoriesService {
     } catch {
       return url.trim();
     }
+  }
+
+  /** Chỉ nhận URL https (ưu tiên Cloudinary CDN). */
+  private normalizeStoryImageUrls(value: unknown): string[] {
+    if (!Array.isArray(value)) return [];
+    const out: string[] = [];
+    for (const raw of value) {
+      if (out.length >= MAX_STORY_IMAGES) break;
+      const trimmed = String(raw ?? '').trim();
+      if (!trimmed) continue;
+      try {
+        const parsed = new URL(trimmed);
+        if (parsed.protocol !== 'https:') continue;
+        const host = parsed.hostname.toLowerCase();
+        if (!host.includes('cloudinary')) continue;
+        out.push(parsed.toString());
+      } catch {
+        continue;
+      }
+    }
+    return out;
   }
 
   private normalizeVideoPrompts(value: unknown): string[] {
