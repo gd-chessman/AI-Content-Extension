@@ -8,15 +8,47 @@ import type { ChatgptExtractContentClipboardKind } from './chatgptExtractContent
 /** Khoảng trống phía trên khi cuộn tới nội dung trên ChatGPT (tránh dính header). */
 export const CHATGPT_SCROLL_TOP_INSET_PX = 96
 
-export function injectImagesIntoLongContent(content: string, image1: string, image2: string): string {
-  const base = (content || '').trim()
-  if (!base) return ''
-
+function splitLongContentUnits(base: string): string[] {
   const sentenceUnits = base
     .split(/(?<=[.!?])\s+/)
     .map((unit) => unit.trim())
     .filter(Boolean)
-  const units = sentenceUnits.length >= 6 ? sentenceUnits : base.split('\n').map((line) => line.trim()).filter(Boolean)
+  return sentenceUnits.length >= 6
+    ? sentenceUnits
+    : base.split('\n').map((line) => line.trim()).filter(Boolean)
+}
+
+/** Chèn một ảnh vào vùng trên–giữa nội dung dài (~22%–42% chiều dài). */
+export function injectSingleImageIntoLongContent(content: string, imageUrl: string): string {
+  const base = (content || '').trim()
+  const imageSrc = (imageUrl || '').trim()
+  if (!imageSrc) return base
+  if (!base) return `<p><img src="${imageSrc}" alt="Ảnh 1" /></p>`
+
+  const units = splitLongContentUnits(base)
+  const imageBlock = `<p><img src="${imageSrc}" alt="Ảnh 1" /></p>`
+  if (units.length < 2) {
+    return `${base}\n\n${imageBlock}`
+  }
+
+  const n = units.length
+  const upperMidStart = Math.max(0, Math.floor(n * 0.22))
+  const upperMidEnd = Math.min(n - 1, Math.max(upperMidStart, Math.floor(n * 0.42)))
+  const insertIdx = Math.floor((upperMidStart + upperMidEnd) / 2)
+
+  const out: string[] = []
+  units.forEach((unit, idx) => {
+    out.push(unit)
+    if (idx === insertIdx) out.push(imageBlock)
+  })
+  return out.join('\n\n')
+}
+
+export function injectImagesIntoLongContent(content: string, image1: string, image2: string): string {
+  const base = (content || '').trim()
+  if (!base) return ''
+
+  const units = splitLongContentUnits(base)
   if (units.length < 3) {
     return `${base}\n\n<p><img src="${image1}" alt="Ảnh 1" /></p>\n\n<p><img src="${image2}" alt="Ảnh 2" /></p>`
   }

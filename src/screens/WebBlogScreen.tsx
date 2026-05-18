@@ -3,6 +3,7 @@ import {
   FiAlertTriangle,
   FiCheck,
   FiCopy,
+  FiDatabase,
   FiFolder,
   FiGlobe,
   FiInfo,
@@ -11,8 +12,12 @@ import {
   FiSearch,
   FiSettings,
 } from 'react-icons/fi'
+import { getMyStories, type StoryItem } from '@/services/StoryService'
 import { getMyWebBlogSetting, updateMyWebBlogSetting } from '@/services/WebBlogService'
-import { injectImagesIntoLongContent } from '@/utils/chatgptContentProcessing'
+import {
+  injectImagesIntoLongContent,
+  injectSingleImageIntoLongContent,
+} from '@/utils/chatgptContentProcessing'
 import {
   getStoriesFolderSegmentFromStorage,
   listLocalStoryFolders,
@@ -29,6 +34,22 @@ type WebBlogPayload = {
   longContent?: string
   image1?: string
   image2?: string
+}
+
+const buildWebBlogPayloadFromStory = (story: StoryItem) => {
+  const title = (story.name || '').trim()
+  let longContent = (story.longContent || '').trim()
+  const urls = (story.imageUrls || []).map((u) => u.trim()).filter(Boolean)
+  const image1 = urls[0] || ''
+  const image2 = urls[1] || ''
+  if (!/<img\b/i.test(longContent)) {
+    if (image1 && image2) {
+      longContent = injectImagesIntoLongContent(longContent, image1, image2)
+    } else if (image1) {
+      longContent = injectSingleImageIntoLongContent(longContent, image1)
+    }
+  }
+  return { title, longContent, image1, image2 }
 }
 
 const toEditorHtml = (raw: string) => {
@@ -108,11 +129,17 @@ export default function WebBlogScreen() {
   const [showSettings, setShowSettings] = useState(false)
   const [webPathInput, setWebPathInput] = useState('')
   const [showLocalImport, setShowLocalImport] = useState(false)
+  const [showDbImport, setShowDbImport] = useState(false)
   const [localStoryEntries, setLocalStoryEntries] = useState<LocalStoryFolderEntry[]>([])
+  const [dbStories, setDbStories] = useState<StoryItem[]>([])
   const [localStorySearch, setLocalStorySearch] = useState('')
+  const [dbStorySearch, setDbStorySearch] = useState('')
   const [selectedLocalFolder, setSelectedLocalFolder] = useState('')
+  const [selectedDbStoryId, setSelectedDbStoryId] = useState('')
   const [isLoadingLocalList, setIsLoadingLocalList] = useState(false)
+  const [isLoadingDbList, setIsLoadingDbList] = useState(false)
   const [isImportingLocal, setIsImportingLocal] = useState(false)
+  const [isImportingDb, setIsImportingDb] = useState(false)
   const contentEditorRef = useRef<HTMLDivElement | null>(null)
 
   const filteredLocalStoryEntries = useMemo(() => {
@@ -127,6 +154,33 @@ export default function WebBlogScreen() {
       return display.includes(q) || folder.includes(q) || savedLabel.includes(q)
     })
   }, [localStoryEntries, localStorySearch])
+
+  const dbStoryPickerEntries = useMemo(() => {
+    return dbStories
+      .filter((story) => (story.longContent || '').trim())
+      .map((story) => {
+        const id = (story.id || story._id || '').trim()
+        const name = (story.name || '').trim()
+        return {
+          id,
+          displayName: name || `Story …${id.slice(-6)}`,
+          savedAt: story.updatedAt || story.createdAt,
+        }
+      })
+      .filter((entry) => entry.id)
+  }, [dbStories])
+
+  const filteredDbStoryEntries = useMemo(() => {
+    const q = dbStorySearch.trim().toLowerCase()
+    if (!q) return dbStoryPickerEntries
+    return dbStoryPickerEntries.filter((entry) => {
+      const display = entry.displayName.toLowerCase()
+      const savedLabel = entry.savedAt
+        ? new Date(entry.savedAt).toLocaleString('vi-VN').toLowerCase()
+        : ''
+      return display.includes(q) || entry.id.toLowerCase().includes(q) || savedLabel.includes(q)
+    })
+  }, [dbStoryPickerEntries, dbStorySearch])
 
   const applyWebBlogPayload = (payload: {
     title?: string
@@ -175,7 +229,14 @@ export default function WebBlogScreen() {
     if (!visible) setSelectedLocalFolder(filteredLocalStoryEntries[0].folderName)
   }, [showLocalImport, isLoadingLocalList, filteredLocalStoryEntries, selectedLocalFolder])
 
+  useEffect(() => {
+    if (!showDbImport || isLoadingDbList || !filteredDbStoryEntries.length) return
+    const visible = filteredDbStoryEntries.some((e) => e.id === selectedDbStoryId)
+    if (!visible) setSelectedDbStoryId(filteredDbStoryEntries[0].id)
+  }, [showDbImport, isLoadingDbList, filteredDbStoryEntries, selectedDbStoryId])
+
   const openLocalImportPicker = async () => {
+    setShowDbImport(false)
     setShowLocalImport(true)
     setIsLoadingLocalList(true)
     setLocalStoryEntries([])
@@ -245,6 +306,69 @@ export default function WebBlogScreen() {
       setStatus(`Nhập từ local thất bại: ${msg}`)
     } finally {
       setIsImportingLocal(false)
+    }
+  }
+
+  const openDbImportPicker = async () => {
+    setShowLocalImport(false)
+    setShowDbImport(true)
+    setIsLoadingDbList(true)
+    setDbStories([])
+    setDbStorySearch('')
+    setSelectedDbStoryId('')
+    try {
+      const stories = await getMyStories()
+      const eligible = stories.filter((story) => (story.longContent || '').trim())
+      if (!eligible.length) {
+        setStatus('Chưa có story nào trên server có nội dung dài (longContent). Hãy lưu story từ ChatGPT trước.')
+        setShowDbImport(false)
+        return
+      }
+      setDbStories(eligible)
+      const firstId = (eligible[0].id || eligible[0]._id || '').trim()
+      setSelectedDbStoryId(firstId)
+      setStatus(`Chọn story trên server (${eligible.length} mục) rồi bấm Nhập.`)
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      setStatus(`Không tải được danh sách story: ${msg}`)
+      setShowDbImport(false)
+    } finally {
+      setIsLoadingDbList(false)
+    }
+  }
+
+  const importFromDatabase = async () => {
+    const storyId = selectedDbStoryId.trim()
+    if (!storyId) {
+      setStatus('Chọn một story trong danh sách server.')
+      return
+    }
+    setIsImportingDb(true)
+    try {
+      const story = dbStories.find((s) => (s.id || s._id) === storyId)
+      if (!story) {
+        setStatus('Không tìm thấy story đã chọn.')
+        return
+      }
+      const payload = buildWebBlogPayloadFromStory(story)
+      if (!payload.title && !payload.longContent) {
+        setStatus('Story trên server thiếu tiêu đề và nội dung dài.')
+        return
+      }
+      applyWebBlogPayload(payload)
+      setShowDbImport(false)
+      const imgNote =
+        payload.image1 && payload.image2
+          ? ' (đã chèn ảnh 1/2 vào nội dung dài)'
+          : payload.image1 || payload.image2
+            ? ' (có ảnh trên server)'
+            : ''
+      setStatus(`Đã nhập từ database: «${payload.title || storyId}»${imgNote}.`)
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      setStatus(`Nhập từ database thất bại: ${msg}`)
+    } finally {
+      setIsImportingDb(false)
     }
   }
 
@@ -355,12 +479,32 @@ export default function WebBlogScreen() {
           <button
             type="button"
             onClick={() => void openLocalImportPicker()}
-            disabled={isLoadingLocalList || isImportingLocal}
+            disabled={
+              isLoadingLocalList ||
+              isImportingLocal ||
+              isLoadingDbList ||
+              isImportingDb
+            }
             className="inline-flex h-7 w-7 cursor-pointer items-center justify-center rounded-lg bg-teal-500/20 text-teal-100 transition hover:bg-teal-500/30 disabled:cursor-not-allowed disabled:opacity-40"
             title="Nhập tiêu đề, nội dung dài và ảnh từ workspace đã lưu (ChatGPT → Lưu local)"
             aria-label="Nhập từ local"
           >
             <FiFolder className="h-3.5 w-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={() => void openDbImportPicker()}
+            disabled={
+              isLoadingDbList ||
+              isImportingDb ||
+              isLoadingLocalList ||
+              isImportingLocal
+            }
+            className="inline-flex h-7 w-7 cursor-pointer items-center justify-center rounded-lg bg-violet-500/20 text-violet-100 transition hover:bg-violet-500/30 disabled:cursor-not-allowed disabled:opacity-40"
+            title="Nhập tiêu đề, nội dung dài và ảnh từ story đã lưu trên server (ChatGPT → Lưu story)"
+            aria-label="Nhập từ database"
+          >
+            <FiDatabase className="h-3.5 w-3.5" />
           </button>
           <button
             type="button"
@@ -429,6 +573,68 @@ export default function WebBlogScreen() {
                   className="cursor-pointer rounded-lg bg-teal-500/30 px-2 py-1 text-[10px] font-semibold text-teal-50 transition hover:bg-teal-500/40 disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   {isImportingLocal ? 'Đang nhập…' : 'Nhập'}
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      ) : null}
+      {showDbImport ? (
+        <div className="mt-2 rounded-xl border border-violet-300/30 bg-violet-500/10 p-2">
+          <p className="text-[10px] text-slate-300">Nhập từ database (story trên server)</p>
+          {isLoadingDbList ? (
+            <p className="mt-1 text-[10px] text-slate-400">Đang tải danh sách story…</p>
+          ) : (
+            <>
+              <div className="relative mt-1">
+                <FiSearch className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-500" />
+                <input
+                  type="search"
+                  value={dbStorySearch}
+                  onChange={(e) => setDbStorySearch(e.target.value)}
+                  placeholder="Tìm theo tên story, ngày cập nhật…"
+                  className="w-full rounded-lg bg-slate-900/80 py-1.5 pl-7 pr-2 text-[11px] text-slate-100 outline-none placeholder:text-slate-500"
+                />
+              </div>
+              <p className="mt-1 text-[10px] text-slate-500">
+                {filteredDbStoryEntries.length} / {dbStoryPickerEntries.length} story
+                {dbStorySearch.trim() ? ' (đã lọc)' : ''}
+              </p>
+              <select
+                value={selectedDbStoryId}
+                onChange={(e) => setSelectedDbStoryId(e.target.value)}
+                disabled={filteredDbStoryEntries.length === 0}
+                className="mt-1 max-h-40 w-full rounded-lg bg-slate-900/80 px-2 py-1.5 text-[11px] text-slate-100 outline-none disabled:opacity-50"
+                size={Math.min(6, Math.max(3, filteredDbStoryEntries.length))}
+              >
+                {filteredDbStoryEntries.length === 0 ? (
+                  <option value="">Không có story khớp tìm kiếm</option>
+                ) : (
+                  filteredDbStoryEntries.map((entry) => (
+                    <option key={entry.id} value={entry.id}>
+                      {entry.displayName}
+                      {entry.savedAt ? ` — ${new Date(entry.savedAt).toLocaleString('vi-VN')}` : ''}
+                    </option>
+                  ))
+                )}
+              </select>
+              <div className="mt-2 flex justify-end gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setShowDbImport(false)}
+                  className="cursor-pointer rounded-lg bg-white/10 px-2 py-1 text-[10px] text-slate-300 transition hover:bg-white/15"
+                >
+                  Hủy
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void importFromDatabase()}
+                  disabled={
+                    !selectedDbStoryId || isImportingDb || filteredDbStoryEntries.length === 0
+                  }
+                  className="cursor-pointer rounded-lg bg-violet-500/30 px-2 py-1 text-[10px] font-semibold text-violet-50 transition hover:bg-violet-500/40 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {isImportingDb ? 'Đang nhập…' : 'Nhập'}
                 </button>
               </div>
             </>

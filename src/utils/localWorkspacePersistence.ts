@@ -3,6 +3,8 @@
  * Handle gốc lưu IndexedDB; tên thư mục con "stories" lưu chrome.storage.local.
  */
 
+import { injectSingleImageIntoLongContent } from './chatgptContentProcessing'
+
 const DB_NAME = 'aicontent-split-image-fs'
 const STORE = 'handles'
 export const CONTENT_ROOT_HANDLE_KEY = 'contentRootDirectory'
@@ -362,8 +364,12 @@ export async function loadLocalStoryBundle(
   }
 
   let longContentWithImages = longContent
-  if (image1 && image2 && !/<img\b/i.test(longContent)) {
-    longContentWithImages = injectImages(longContent, image1, image2)
+  if (!/<img\b/i.test(longContent)) {
+    if (image1 && image2) {
+      longContentWithImages = injectImages(longContent, image1, image2)
+    } else if (image1) {
+      longContentWithImages = injectSingleImageIntoLongContent(longContent, image1)
+    }
   }
 
   return {

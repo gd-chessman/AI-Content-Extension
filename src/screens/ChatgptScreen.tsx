@@ -56,6 +56,7 @@ import {
   chatgptScrollHighlightStep4ContentPageScript,
   getChatgptStep4ContentKindLabel,
   injectImagesIntoLongContent,
+  injectSingleImageIntoLongContent,
 } from '@/utils/chatgptContentProcessing'
 import {
   chatgptInjectPromptPageScript,
@@ -2411,13 +2412,98 @@ export default function ChatgptScreen() {
     }
   }
 
-  const pushThreadToWebBlog = async () => {
-    if (!splitImages?.left || !splitImages?.right) {
-      setStatus(`Chưa có ảnh 1/2 từ «${generateImagesStepLabel}». Hãy cắt ảnh trước khi gửi WebBlog.`)
-      return
+  const ensureImagesForWebBlog = async (): Promise<{ left: string; right: string } | null> => {
+    let left = (splitImages?.left || '').trim()
+    let right = (splitImages?.right || '').trim()
+    if (splitGeneratedImages ? left && right : left) {
+      return { left, right }
     }
 
-    setStatus('Đang lấy tiêu đề thường + nội dung dài và ghép ảnh ngẫu nhiên cho WebBlog...')
+    if (!chatgptStepsByAction.generateImages) {
+      setStatus('Workflow chưa có bước tạo ảnh (chatgpt_generate_image / chatgpt_generate_images).')
+      return null
+    }
+
+    const extensionChrome = getChrome()
+    if (!extensionChrome?.tabs?.query || !extensionChrome.scripting?.executeScript || !extensionChrome.tabs.captureVisibleTab) {
+      setStatus('Môi trường hiện tại không hỗ trợ chụp ảnh từ ChatGPT.')
+      return null
+    }
+
+    setStatus(
+      splitGeneratedImages
+        ? `Đang chụp và cắt đôi ảnh («${generateImagesStepLabel}») cho WebBlog...`
+        : `Đang chụp ảnh («${generateImagesStepLabel}») cho WebBlog...`,
+    )
+
+    const currentActive = await queryTabs(undefined, true, true)
+    const activeTab = currentActive[0]
+    const isActiveChatgpt = Boolean(activeTab?.url && /chatgpt\.com|chat\.openai\.com/i.test(activeTab.url))
+    const activeTabs = isActiveChatgpt ? [activeTab] : await queryTabs(CHATGPT_PATTERNS, true, true)
+    const allTabs = activeTabs.length > 0 ? activeTabs : await queryTabs(CHATGPT_PATTERNS)
+    let target: BrowserTab | null | undefined = allTabs[0]
+
+    if (!target?.id) {
+      target = await createTab(CHATGPT_URL)
+      await sleep(900)
+    } else {
+      target = await updateTab(target.id)
+      await sleep(450)
+    }
+
+    if (!target?.id) {
+      setStatus('Không tìm thấy tab ChatGPT để lấy ảnh.')
+      return null
+    }
+
+    await snapChatgptThreadToBottomBeforeRead(target.id)
+
+    if (splitGeneratedImages) {
+      const cap = await captureSplitPairFromChatgptTab(target.id, target.windowId)
+      if (!cap.ok) {
+        const human: Record<Exclude<CaptureSplitPairResult, { ok: true }>['reason'], string> = {
+          unsupported: 'Môi trường hiện tại không hỗ trợ chụp tab.',
+          no_rect: `Không tìm thấy ảnh phù hợp từ hội thoại («${generateImagesStepLabel}»).`,
+          no_screenshot: 'Không thể chụp ảnh màn hình tab ChatGPT.',
+          split_failed: 'Không thể tách ảnh thành 2 phần.',
+          exception: 'Xử lý ảnh thất bại. Hãy thử lại.',
+        }
+        setStatus(human[cap.reason])
+        return null
+      }
+      left = cap.left
+      right = cap.right
+      setSplitImages({ left, right })
+    } else {
+      const cap = await captureSingleImageFromChatgptTab(target.id, target.windowId)
+      if (!cap.ok) {
+        const human: Record<Exclude<CaptureSingleImageResult, { ok: true }>['reason'], string> = {
+          unsupported: 'Môi trường hiện tại không hỗ trợ chụp tab.',
+          no_rect: `Không tìm thấy ảnh phù hợp từ hội thoại («${generateImagesStepLabel}»).`,
+          no_screenshot: 'Không thể chụp ảnh màn hình tab ChatGPT.',
+          crop_failed: 'Không thể xử lý ảnh đã chụp.',
+          exception: 'Lấy ảnh thất bại. Hãy thử lại.',
+        }
+        setStatus(human[cap.reason])
+        return null
+      }
+      left = cap.image
+      right = ''
+      setSplitImages({ left, right: '' })
+    }
+
+    return { left, right }
+  }
+
+  const pushThreadToWebBlog = async () => {
+    const images = await ensureImagesForWebBlog()
+    if (!images) return
+
+    setStatus(
+      splitGeneratedImages
+        ? 'Đang lấy tiêu đề thường + nội dung dài và ghép ảnh 1/2 cho WebBlog...'
+        : 'Đang lấy tiêu đề thường + nội dung dài và ghép ảnh cho WebBlog...',
+    )
     const titlePlain = await extractThreadContent('title_plain', { copyToClipboard: false })
     const fullContent = await extractThreadContent('content_full', { copyToClipboard: false })
     if (!titlePlain || !fullContent) {
@@ -2425,7 +2511,10 @@ export default function ChatgptScreen() {
       return
     }
 
-    const contentWithImages = injectImagesIntoLongContent(fullContent, splitImages.left, splitImages.right)
+    const contentWithImages = splitGeneratedImages
+      ? injectImagesIntoLongContent(fullContent, images.left, images.right)
+      : injectSingleImageIntoLongContent(fullContent, images.left)
+
     window.dispatchEvent(new CustomEvent('switch-main-tab', { detail: { tabId: 'webblog' } }))
     window.setTimeout(() => {
       window.dispatchEvent(
@@ -2433,13 +2522,17 @@ export default function ChatgptScreen() {
           detail: {
             title: titlePlain,
             longContent: contentWithImages,
-            image1: splitImages.left,
-            image2: splitImages.right,
+            image1: images.left,
+            image2: images.right,
           },
         }),
       )
     }, 120)
-    setStatus('Đã gửi dữ liệu sang WebBlog (tiêu đề + nội dung dài có chèn ảnh 1/2).')
+    setStatus(
+      splitGeneratedImages
+        ? 'Đã gửi dữ liệu sang WebBlog (tiêu đề + nội dung dài có chèn ảnh 1/2).'
+        : 'Đã gửi dữ liệu sang WebBlog (tiêu đề + nội dung dài có chèn 1 ảnh).',
+    )
   }
 
   const runGgSheetCollectTool = () => {
@@ -2461,7 +2554,11 @@ export default function ChatgptScreen() {
       return
     }
 
-    setStatus(`Đang lấy ảnh mới nhất («${generateImagesStepLabel}») và cắt đôi...`)
+    setStatus(
+      splitGeneratedImages
+        ? `Đang lấy ảnh mới nhất («${generateImagesStepLabel}») và cắt đôi...`
+        : `Đang lấy ảnh mới nhất («${generateImagesStepLabel}»)...`,
+    )
 
     const currentActive = await queryTabs(undefined, true, true)
     const activeTab = currentActive[0]
@@ -2486,20 +2583,37 @@ export default function ChatgptScreen() {
 
     await snapChatgptThreadToBottomBeforeRead(target.id)
 
-    const cap = await captureSplitPairFromChatgptTab(target.id, target.windowId)
-    if (!cap.ok) {
-      const human: Record<Exclude<CaptureSplitPairResult, { ok: true }>['reason'], string> = {
-        unsupported: 'Môi trường hiện tại không hỗ trợ chụp tab.',
-        no_rect: `Không tìm thấy ảnh phù hợp từ hội thoại («${generateImagesStepLabel}»).`,
-        no_screenshot: 'Không thể chụp ảnh màn hình tab ChatGPT.',
-        split_failed: 'Không thể tách ảnh thành 2 phần.',
-        exception: 'Xử lý ảnh thất bại. Hãy thử lại.',
+    if (splitGeneratedImages) {
+      const cap = await captureSplitPairFromChatgptTab(target.id, target.windowId)
+      if (!cap.ok) {
+        const human: Record<Exclude<CaptureSplitPairResult, { ok: true }>['reason'], string> = {
+          unsupported: 'Môi trường hiện tại không hỗ trợ chụp tab.',
+          no_rect: `Không tìm thấy ảnh phù hợp từ hội thoại («${generateImagesStepLabel}»).`,
+          no_screenshot: 'Không thể chụp ảnh màn hình tab ChatGPT.',
+          split_failed: 'Không thể tách ảnh thành 2 phần.',
+          exception: 'Xử lý ảnh thất bại. Hãy thử lại.',
+        }
+        setStatus(human[cap.reason])
+        return
       }
-      setStatus(human[cap.reason])
-      return
+      setSplitImages({ left: cap.left, right: cap.right })
+      setStatus('Đã lấy và cắt đôi ảnh thành công. Có thể sao chép ảnh 1/2.')
+    } else {
+      const cap = await captureSingleImageFromChatgptTab(target.id, target.windowId)
+      if (!cap.ok) {
+        const human: Record<Exclude<CaptureSingleImageResult, { ok: true }>['reason'], string> = {
+          unsupported: 'Môi trường hiện tại không hỗ trợ chụp tab.',
+          no_rect: `Không tìm thấy ảnh phù hợp từ hội thoại («${generateImagesStepLabel}»).`,
+          no_screenshot: 'Không thể chụp ảnh màn hình tab ChatGPT.',
+          crop_failed: 'Không thể xử lý ảnh đã chụp.',
+          exception: 'Lấy ảnh thất bại. Hãy thử lại.',
+        }
+        setStatus(human[cap.reason])
+        return
+      }
+      setSplitImages({ left: cap.image, right: '' })
+      setStatus('Đã lấy ảnh thành công (workflow đơn). Có thể sao chép hoặc đẩy WebBlog.')
     }
-    setSplitImages({ left: cap.left, right: cap.right })
-    setStatus('Đã lấy và cắt đôi ảnh thành công. Có thể sao chép ảnh 1/2.')
   }
 
   const stepPanelToolHost = useMemo<ToolScriptHost>(
