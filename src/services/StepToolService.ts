@@ -5,6 +5,8 @@ export type ToolPlatform = 'chatgpt' | 'grok' | 'facebook' | 'webblog' | 'ggshee
 
 export type ToolPlacement = 'step_panel' | 'bottom_bar' | 'global'
 
+export type ToolStepPhase = 'independent' | 'before_step' | 'after_step'
+
 export type ToolItem = {
   _id: string
   code: string
@@ -13,6 +15,7 @@ export type ToolItem = {
   handlerKey: string
   guardScript?: string
   placement: ToolPlacement
+  stepPhase?: ToolStepPhase
   sortOrder: number
   defaultConfig: Record<string, unknown>
   uiConfig?: Record<string, unknown>
@@ -27,8 +30,11 @@ export type StepToolLink = {
   toolId: string
   sortOrder: number
   config: Record<string, unknown>
+  /** Ghi đè phase trên tool catalog (null = dùng mặc định tool). */
+  stepPhase?: ToolStepPhase | null
   isActive: boolean
   tool?: ToolItem
+  effectiveStepPhase?: ToolStepPhase
 }
 
 export type WorkflowStepToolsGroup = {
@@ -62,6 +68,7 @@ export const createStepTool = async (payload: {
   toolId: string
   sortOrder?: number
   config?: Record<string, unknown>
+  stepPhase?: ToolStepPhase | null
   isActive?: boolean
 }) => {
   const response = await axiosClient.post('/step-tools', payload)
@@ -74,6 +81,7 @@ export const setStepToolsForStep = async (
     toolId: string
     sortOrder?: number
     config?: Record<string, unknown>
+    stepPhase?: ToolStepPhase | null
     isActive?: boolean
   }>,
 ) => {

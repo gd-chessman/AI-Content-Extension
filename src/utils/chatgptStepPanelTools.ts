@@ -2,7 +2,8 @@
  * Adapter UI step_panel — một lưới cho cả workflow (không chia khối theo stepNo).
  * Thứ tự: uiConfig.displayGroup (image → video → content) rồi displayOrder.
  */
-import type { StepToolLink, ToolItem } from '@/services/StepToolService'
+import type { StepToolLink, ToolItem, ToolStepPhase } from '@/services/StepToolService'
+import { resolveEffectiveStepPhase } from '@/utils/toolStepPhase'
 
 export type StepPanelIconKey =
   | 'scissors'
@@ -35,6 +36,7 @@ export type ResolvedStepPanelTool = {
   ownerStepId: string
   sortOrder: number
   config: Record<string, unknown>
+  stepPhase: ToolStepPhase
   guardScript?: string
   ui: StepPanelToolUi
 }
@@ -165,6 +167,11 @@ export function buildWorkflowStepPanelComparison(
         ownerStepId,
         sortOrder: link.sortOrder ?? tool?.sortOrder ?? 0,
         config: mergeConfig(tool, link),
+        stepPhase: resolveEffectiveStepPhase({
+          stepPhase: link.stepPhase,
+          tool,
+          effectiveStepPhase: link.effectiveStepPhase,
+        }),
         guardScript: (tool?.guardScript || '').trim() || undefined,
         ui: { ...ui, displayOrder },
       })

@@ -113,6 +113,7 @@ import {
   shouldSplitChatgptGeneratedImages,
   stepDisplayLabel,
 } from '@/utils/chatgptWorkflowSteps'
+import { TOOL_STEP_PHASE_LABEL, type ToolStepPhase } from '@/utils/toolStepPhase'
 import {
   canManualChatgptStep,
   isBackgroundDisplayMode,
@@ -569,6 +570,10 @@ export default function ChatgptScreen() {
   const [extractContentReady, setExtractContentReady] = useState(false)
   const [isWorkflowRunning, setIsWorkflowRunning] = useState(false)
   const [isWorkflowStopping, setIsWorkflowStopping] = useState(false)
+  /** Tiến trình đang chạy trong workflow — highlight tím trên sidebar. */
+  const [workflowActiveStepId, setWorkflowActiveStepId] = useState('')
+  const workflowStepsScrollRef = useRef<HTMLDivElement>(null)
+  const workflowStepItemRefs = useRef(new Map<string, HTMLDivElement>())
   const workflowStopRef = useRef(false)
   const lockedWorkflowTabIdRef = useRef<number>(0)
   const runningWorkflowRunIdRef = useRef('')
@@ -576,6 +581,11 @@ export default function ChatgptScreen() {
   const chatgptPipelineStoryIdRef = useRef('')
   /** Prompt VIDEO (1 hoặc nhiều) sau bước tách — commit DB ở bước save story. */
   const chatgptDraftVideoPromptsRef = useRef<string[] | null>(null)
+  /** Workflow: gọi công cụ step_panel — gom text VIDEO, không copy clipboard. */
+  const workflowVideoCaptureRef = useRef<{ active: boolean; prompts: string[] }>({
+    active: false,
+    prompts: [],
+  })
   /** Bước `chatgpt_rewrite_content`: gán lúc bắt đầu workflow — mặc định story (`sourceContent`). */
   /** Nguồn caption workflow: `stories` = StorySource DB; `localstorage` = bản nhớ tạm Facebook. */
   const chatgptWorkflowSourceRef = useRef<ChatgptWorkflowSource>('stories')
@@ -745,6 +755,16 @@ export default function ChatgptScreen() {
       return (processSteps[0] || sidebarSteps[0]).id
     })
   }, [sidebarSteps, processSteps])
+
+  useEffect(() => {
+    if (!isWorkflowRunning || !workflowActiveStepId) return
+    const frame = window.requestAnimationFrame(() => {
+      const el = workflowStepItemRefs.current.get(workflowActiveStepId)
+      if (!el) return
+      el.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' })
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [workflowActiveStepId, isWorkflowRunning])
 
   const queryTabs = (pattern?: string[], currentWindow = false, active = false) =>
     new Promise<BrowserTab[]>((resolve) => {
@@ -1292,7 +1312,8 @@ export default function ChatgptScreen() {
     part: 1 | 2,
     options?: { copyToClipboard?: boolean; preferredTabId?: number },
   ) => {
-    const copyToClipboard = options?.copyToClipboard !== false
+    const workflowCapture = workflowVideoCaptureRef.current.active
+    const copyToClipboard = !workflowCapture && options?.copyToClipboard !== false
     const extensionChrome = getChrome()
     if (!extensionChrome?.tabs?.query || !extensionChrome.scripting?.executeScript) {
       setStatus('Môi trường hiện tại không hỗ trợ lấy nội dung VIDEO.')
@@ -1310,7 +1331,8 @@ export default function ChatgptScreen() {
       setStatus(`Đang lấy nội dung VIDEO ${part} từ «${extractVideosStepLabel}»...`)
     }
 
-    const prefId = options?.preferredTabId
+    // Giống nút công cụ: tab ChatGPT đang mở (không ép tab khóa workflow).
+    const prefId = workflowCapture ? undefined : options?.preferredTabId
     let target: BrowserTab | null | undefined
 
     if (prefId) {
@@ -1392,6 +1414,10 @@ export default function ChatgptScreen() {
       return ''
     }
 
+    if (workflowCapture && extracted) {
+      workflowVideoCaptureRef.current.prompts.push(extracted)
+    }
+
     if (copyToClipboard) {
       try {
         await navigator.clipboard.writeText(extracted)
@@ -1407,7 +1433,8 @@ export default function ChatgptScreen() {
   }
 
   const extractSingleVideoContent = async (options?: { copyToClipboard?: boolean; preferredTabId?: number }) => {
-    const copyToClipboard = options?.copyToClipboard !== false
+    const workflowCapture = workflowVideoCaptureRef.current.active
+    const copyToClipboard = !workflowCapture && options?.copyToClipboard !== false
     const extensionChrome = getChrome()
     if (!extensionChrome?.tabs?.query || !extensionChrome.scripting?.executeScript) {
       setStatus('Môi trường hiện tại không hỗ trợ lấy nội dung VIDEO.')
@@ -1427,7 +1454,7 @@ export default function ChatgptScreen() {
       setStatus(`Đang lấy nội dung VIDEO từ «${extractVideosStepLabel}»...`)
     }
 
-    const prefId = options?.preferredTabId
+    const prefId = workflowCapture ? undefined : options?.preferredTabId
     let target: BrowserTab | null | undefined
 
     if (prefId) {
@@ -1509,6 +1536,10 @@ export default function ChatgptScreen() {
       return ''
     }
 
+    if (workflowCapture && extracted) {
+      workflowVideoCaptureRef.current.prompts.push(extracted)
+    }
+
     if (copyToClipboard) {
       try {
         await navigator.clipboard.writeText(extracted)
@@ -1522,23 +1553,93 @@ export default function ChatgptScreen() {
     return extracted
   }
 
-  const collectVideoPromptsForWorkflow = async (
-    videoStep: ChatgptProcessStepLike,
-    options?: { preferredTabId?: number },
+  const resolveProcessStepForVideo = (
+    videoStep: ChatgptProcessStepLike | ProcessStep,
+  ): ProcessStep | null => {
+    if ('backendStepId' in videoStep && (videoStep as ProcessStep).backendStepId) {
+      return videoStep as ProcessStep
+    }
+    return processSteps.find((s) => s.id === videoStep.id) || null
+  }
+
+  const isVideoStepPanelToolCode = (code: string) =>
+    code === 'chatgpt_copy_single_video' ||
+    code === 'chatgpt_copy_video_1' ||
+    code === 'chatgpt_copy_video_2'
+
+  const buildWorkflowVideoToolHost = (): ToolScriptHost => ({
+    stepIsExtractVideos: () => true,
+    extractVideoContent: (part: 1 | 2) => extractVideoContent(part, { copyToClipboard: false }),
+    extractSingleVideoContent: () => extractSingleVideoContent({ copyToClipboard: false }),
+  })
+
+  const fallbackExtractVideoPrompts = async (ownerStep: ProcessStep): Promise<string[]> => {
+    if (isChatgptExtractContentVideosPluralStep(ownerStep)) {
+      return nonEmptyVideoPrompts([
+        await extractVideoContent(1, { copyToClipboard: false }),
+        await extractVideoContent(2, { copyToClipboard: false }),
+      ])
+    }
+    return nonEmptyVideoPrompts([await extractSingleVideoContent({ copyToClipboard: false })])
+  }
+
+  /** Workflow: chạy công cụ step_panel theo `stepPhase` (cùng handler như bấm nút). */
+  const runWorkflowStepTools = async (
+    step: ProcessStep,
+    phase: ToolStepPhase,
   ): Promise<string[]> => {
-    const pref = options?.preferredTabId
-    const extractOpts = { copyToClipboard: false, preferredTabId: pref }
-    if (pref) {
-      await snapChatgptThreadToBottomBeforeRead(pref)
-      await sleep(360)
+    const toolsToRun = workflowStepPanelComparison.display.filter(
+      (tool) => tool.ownerStepId === step.backendStepId && tool.stepPhase === phase,
+    )
+    if (!toolsToRun.length) return []
+
+    const capturesVideo = toolsToRun.some((tool) => isVideoStepPanelToolCode(tool.code))
+
+    if (lockedWorkflowTabIdRef.current) {
+      await updateTab(lockedWorkflowTabIdRef.current)
+      await sleep(200)
     }
-    if (isChatgptExtractContentVideosPluralStep(videoStep)) {
-      const video1 = await extractVideoContent(1, extractOpts)
-      const video2 = await extractVideoContent(2, extractOpts)
-      return nonEmptyVideoPrompts([video1, video2])
+
+    if (capturesVideo) {
+      workflowVideoCaptureRef.current = { active: true, prompts: [] }
     }
-    const single = await extractSingleVideoContent(extractOpts)
-    return nonEmptyVideoPrompts([single])
+
+    setStatus(`${step.label}: Công cụ — ${TOOL_STEP_PHASE_LABEL[phase]}...`)
+
+    try {
+      for (const tool of toolsToRun) {
+        if (isStepPanelToolDisabled(tool, step)) continue
+        const payload = await fetchToolHandler(tool.toolId)
+        const config = {
+          ...(payload.defaultConfig || {}),
+          ...tool.config,
+        }
+        const host: ToolScriptHost = capturesVideo
+          ? { ...buildStepGuardHost(step), ...buildWorkflowVideoToolHost() }
+          : buildStepGuardHost(step)
+        await runToolHandlerScript(payload.handlerScript, host, config)
+      }
+    } finally {
+      if (capturesVideo) {
+        workflowVideoCaptureRef.current.active = false
+      }
+    }
+
+    if (capturesVideo) {
+      return nonEmptyVideoPrompts(workflowVideoCaptureRef.current.prompts)
+    }
+    return []
+  }
+
+  const collectVideoPromptsForWorkflow = async (
+    videoStep: ChatgptProcessStepLike | ProcessStep,
+  ): Promise<string[]> => {
+    const ownerStep = resolveProcessStepForVideo(videoStep)
+    if (!ownerStep) return []
+
+    const fromTools = await runWorkflowStepTools(ownerStep, 'after_step')
+    if (fromTools.length) return fromTools
+    return fallbackExtractVideoPrompts(ownerStep)
   }
 
   const executeWorkflowStep = async (step: ProcessStep) => {
@@ -1549,9 +1650,7 @@ export default function ChatgptScreen() {
       let videoPrompts = nonEmptyVideoPrompts(chatgptDraftVideoPromptsRef.current)
       if (!videoPrompts.length && chatgptStepsByAction.extractVideos) {
         setStatus(`${step.label}: Đang thử lấy lại nội dung VIDEO...`)
-        videoPrompts = await collectVideoPromptsForWorkflow(chatgptStepsByAction.extractVideos, {
-          preferredTabId: lockedWorkflowTabIdRef.current || undefined,
-        })
+        videoPrompts = await collectVideoPromptsForWorkflow(chatgptStepsByAction.extractVideos)
         chatgptDraftVideoPromptsRef.current = videoPrompts
       }
       if (!videoPrompts.length) {
@@ -1590,6 +1689,8 @@ export default function ChatgptScreen() {
     const isGenerateImageStep = isChatgptGenerateImagesStep(step)
     const baselineImageCount = isGenerateImageStep ? await getAssistantImageCount(lockedWorkflowTabIdRef.current || undefined) : 0
 
+    await runWorkflowStepTools(step, 'before_step')
+
     const sent = await runFastProcess(step)
     if (!sent) {
       throw new Error(`${step.label}: Không điền/gửi được prompt vào ChatGPT.`)
@@ -1611,10 +1712,9 @@ export default function ChatgptScreen() {
       setCopiedPart(null)
     }
 
+    const afterToolPrompts = await runWorkflowStepTools(step, 'after_step')
     if (isChatgptExtractVideosStep(step)) {
-      await sleep(500)
-      const pref = lockedWorkflowTabIdRef.current || undefined
-      const prompts = await collectVideoPromptsForWorkflow(step, { preferredTabId: pref })
+      const prompts = afterToolPrompts.length ? afterToolPrompts : await fallbackExtractVideoPrompts(step)
       chatgptDraftVideoPromptsRef.current = prompts
       if (!prompts.length) {
         throw new Error(
@@ -1724,6 +1824,7 @@ export default function ChatgptScreen() {
           progress,
         })
 
+        setWorkflowActiveStepId(step.id)
         if (!isBackground) {
           setSelectedStepId(step.id)
         }
@@ -1807,6 +1908,7 @@ export default function ChatgptScreen() {
       }
     } finally {
       workflowStopRef.current = false
+      setWorkflowActiveStepId('')
       lockedWorkflowTabIdRef.current = 0
       runningWorkflowRunIdRef.current = ''
       chatgptPipelineStoryIdRef.current = ''
@@ -2873,20 +2975,42 @@ export default function ChatgptScreen() {
               )}
             </div>
           ) : null}
-          <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto pr-0.5">
-            {sidebarSteps.map((step) => (
-                <div key={step.id} className="rounded-xl border border-white/10 bg-white/5 p-1.5">
+          <div ref={workflowStepsScrollRef} className="min-h-0 flex-1 space-y-1.5 overflow-y-auto pr-0.5">
+            {sidebarSteps.map((step) => {
+              const isWorkflowActive =
+                isWorkflowRunning && workflowActiveStepId === step.id
+              return (
+                <div
+                  key={step.id}
+                  ref={(node) => {
+                    if (node) workflowStepItemRefs.current.set(step.id, node)
+                    else workflowStepItemRefs.current.delete(step.id)
+                  }}
+                  className={`rounded-xl border p-1.5 transition-all duration-300 ${
+                    isWorkflowActive
+                      ? 'border-violet-400/70 bg-violet-500/15 shadow-[0_0_18px_rgba(168,85,247,0.45)]'
+                      : 'border-white/10 bg-white/5'
+                  }`}
+                >
                   <button
                     type="button"
                     onClick={() => setSelectedStepId(step.id)}
                     className={`inline-flex h-8 w-full cursor-pointer items-center justify-center gap-1 rounded-lg transition ${
-                      selectedStepId === step.id
-                        ? 'bg-blue-500/25 text-blue-100 ring-1 ring-blue-300/40'
-                        : 'bg-white/10 text-slate-200 hover:bg-white/20'
+                      isWorkflowActive
+                        ? 'bg-violet-500/35 text-violet-50 ring-2 ring-violet-300/80 shadow-[0_0_12px_rgba(168,85,247,0.5)]'
+                        : selectedStepId === step.id
+                          ? 'bg-blue-500/25 text-blue-100 ring-1 ring-blue-300/40'
+                          : 'bg-white/10 text-slate-200 hover:bg-white/20'
                     }`}
                     title={`Xem chi tiết ${step.label}`}
                   >
-                    <span className="inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-blue-500 px-1 text-[9px] font-bold leading-none text-white">
+                    <span
+                      className={`inline-flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[9px] font-bold leading-none text-white transition ${
+                        isWorkflowActive
+                          ? 'bg-violet-500 shadow-[0_0_10px_rgba(196,181,253,0.95)]'
+                          : 'bg-blue-500'
+                      }`}
+                    >
                       {step.id.replace('step-', '')}
                     </span>
                   </button>
@@ -2898,7 +3022,7 @@ export default function ChatgptScreen() {
                           setSelectedStepId(step.id)
                           void runFastProcess(step)
                         }}
-                        disabled={isLoadingProcessSteps}
+                        disabled={isLoadingProcessSteps || isWorkflowRunning}
                         className="inline-flex h-7 w-full cursor-pointer items-center justify-center rounded-md bg-emerald-500/25 text-emerald-100 transition hover:bg-emerald-500/35 disabled:cursor-not-allowed disabled:opacity-40"
                         title={
                           isChatgptRewriteContentStep(step)
@@ -2914,7 +3038,7 @@ export default function ChatgptScreen() {
                           setSelectedStepId(step.id)
                           void runFillProcess(step)
                         }}
-                        disabled={isLoadingProcessSteps}
+                        disabled={isLoadingProcessSteps || isWorkflowRunning}
                         className="inline-flex h-7 w-full cursor-pointer items-center justify-center rounded-md bg-amber-500/20 text-amber-100 transition hover:bg-amber-500/30 disabled:cursor-not-allowed disabled:opacity-40"
                         title={
                           isChatgptRewriteContentStep(step)
@@ -2927,7 +3051,8 @@ export default function ChatgptScreen() {
                     </div>
                   ) : null}
                 </div>
-            ))}
+              )
+            })}
             {!isLoadingProcessSteps && sidebarSteps.length === 0 ? (
               <p className="rounded-xl border border-white/10 bg-white/5 px-2 py-2 text-[10px] text-slate-400">
                 Chưa có workflow/steps cho ChatGPT. Hãy tạo dữ liệu.
