@@ -1331,43 +1331,14 @@ export default function ChatgptScreen() {
       setStatus(`Đang lấy nội dung VIDEO ${part} từ «${extractVideosStepLabel}»...`)
     }
 
-    // Giống nút công cụ: tab ChatGPT đang mở (không ép tab khóa workflow).
-    const prefId = workflowCapture ? undefined : options?.preferredTabId
-    let target: BrowserTab | null | undefined
-
-    if (prefId) {
-      const t = await updateTab(prefId)
-      if (t?.id) {
-        const url = t.url || ''
-        if (!/chatgpt\.com|chat\.openai\.com/i.test(url)) {
-          target = await updateTab(t.id, CHATGPT_URL)
-        } else {
-          target = await updateTab(t.id)
-        }
-      }
-    }
-
-    if (!target?.id) {
-      const currentActive = await queryTabs(undefined, true, true)
-      const activeTab = currentActive[0]
-      const isActiveChatgpt = Boolean(activeTab?.url && /chatgpt\.com|chat\.openai\.com/i.test(activeTab.url))
-      const activeTabs = isActiveChatgpt ? [activeTab] : await queryTabs(CHATGPT_PATTERNS, true, true)
-      const allTabs = activeTabs.length > 0 ? activeTabs : await queryTabs(CHATGPT_PATTERNS)
-      target = allTabs[0]
-    }
-
+    const target = await pickChatgptTab(
+      lockedWorkflowTabIdRef.current || options?.preferredTabId,
+    )
     if (!target?.id) {
       setStatus('Không tìm thấy tab ChatGPT để lấy nội dung VIDEO.')
       return ''
     }
-
-    target = await updateTab(target.id)
     await sleep(240)
-
-    if (!target?.id) {
-      setStatus('Không thể kích hoạt tab ChatGPT để lấy nội dung VIDEO.')
-      return ''
-    }
 
     await extensionChrome.scripting.executeScript({
       target: { tabId: target.id },
@@ -1454,42 +1425,14 @@ export default function ChatgptScreen() {
       setStatus(`Đang lấy nội dung VIDEO từ «${extractVideosStepLabel}»...`)
     }
 
-    const prefId = workflowCapture ? undefined : options?.preferredTabId
-    let target: BrowserTab | null | undefined
-
-    if (prefId) {
-      const t = await updateTab(prefId)
-      if (t?.id) {
-        const url = t.url || ''
-        if (!/chatgpt\.com|chat\.openai\.com/i.test(url)) {
-          target = await updateTab(t.id, CHATGPT_URL)
-        } else {
-          target = await updateTab(t.id)
-        }
-      }
-    }
-
-    if (!target?.id) {
-      const currentActive = await queryTabs(undefined, true, true)
-      const activeTab = currentActive[0]
-      const isActiveChatgpt = Boolean(activeTab?.url && /chatgpt\.com|chat\.openai\.com/i.test(activeTab.url))
-      const activeTabs = isActiveChatgpt ? [activeTab] : await queryTabs(CHATGPT_PATTERNS, true, true)
-      const allTabs = activeTabs.length > 0 ? activeTabs : await queryTabs(CHATGPT_PATTERNS)
-      target = allTabs[0]
-    }
-
+    const target = await pickChatgptTab(
+      lockedWorkflowTabIdRef.current || options?.preferredTabId,
+    )
     if (!target?.id) {
       setStatus('Không tìm thấy tab ChatGPT để lấy nội dung VIDEO.')
       return ''
     }
-
-    target = await updateTab(target.id)
     await sleep(240)
-
-    if (!target?.id) {
-      setStatus('Không thể kích hoạt tab ChatGPT để lấy nội dung VIDEO.')
-      return ''
-    }
 
     await extensionChrome.scripting.executeScript({
       target: { tabId: target.id },
@@ -2144,29 +2087,14 @@ export default function ChatgptScreen() {
       setStatus(`Đang lấy ${kindLabel} từ «${extractContentStepLabel}»...`)
     }
 
-    const currentActive = await queryTabs(undefined, true, true)
-    const activeTab = currentActive[0]
-    const isActiveChatgpt = Boolean(activeTab?.url && /chatgpt\.com|chat\.openai\.com/i.test(activeTab.url))
-    const activeTabs = isActiveChatgpt ? [activeTab] : await queryTabs(CHATGPT_PATTERNS, true, true)
-    const allTabs = activeTabs.length > 0 ? activeTabs : await queryTabs(CHATGPT_PATTERNS)
-    let target: BrowserTab | null | undefined = allTabs[0]
-
+    const target = await pickChatgptTab(lockedWorkflowTabIdRef.current || undefined)
     if (!target?.id) {
       if (copyToClipboard) {
         setStatus(`Không tìm thấy tab ChatGPT để lấy dữ liệu «${extractContentStepLabel}».`)
       }
       return ''
     }
-
-    target = await updateTab(target.id)
     await sleep(240)
-
-    if (!target?.id) {
-      if (copyToClipboard) {
-        setStatus(`Không thể kích hoạt tab ChatGPT để lấy dữ liệu «${extractContentStepLabel}».`)
-      }
-      return ''
-    }
 
     const readyResult = await extensionChrome.scripting.executeScript({
       target: { tabId: target.id },
@@ -2236,23 +2164,11 @@ export default function ChatgptScreen() {
       throw new Error('Môi trường không hỗ trợ đọc tab ChatGPT.')
     }
 
-    const currentActive = await queryTabs(undefined, true, true)
-    const activeTab = currentActive[0]
-    const isActiveChatgpt = Boolean(activeTab?.url && /chatgpt\.com|chat\.openai\.com/i.test(activeTab.url))
-    const activeTabs = isActiveChatgpt ? [activeTab] : await queryTabs(CHATGPT_PATTERNS, true, true)
-    const allTabs = activeTabs.length > 0 ? activeTabs : await queryTabs(CHATGPT_PATTERNS)
-    let target: BrowserTab | null | undefined = allTabs[0]
-
+    const target = await pickChatgptTab(lockedWorkflowTabIdRef.current || undefined)
     if (!target?.id) {
       throw new Error(`Không tìm thấy tab ChatGPT để lấy dữ liệu «${extractContentStepLabel}».`)
     }
-
-    target = await updateTab(target.id)
     await sleep(240)
-
-    if (!target?.id) {
-      throw new Error('Không thể kích hoạt tab ChatGPT.')
-    }
 
     await snapChatgptThreadToBottomBeforeRead(target.id)
 
