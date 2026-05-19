@@ -1,5 +1,6 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument } from 'mongoose';
+import { ToolStepPhase } from '../../shared/tools/tool-step-phase';
 import { WorkflowPlatform } from '../workflows/workflow.schema';
 
 export type ToolDocument = HydratedDocument<Tool>;
@@ -46,6 +47,18 @@ export class Tool {
     index: true,
   })
   placement: ToolPlacement;
+
+  /**
+   * Workflow: `before_step` | `after_step` | `independent` (chỉ bấm tay).
+   * Ghi đè trên `steptools.stepPhase` nếu cần theo từng bước.
+   */
+  @Prop({
+    required: true,
+    enum: Object.values(ToolStepPhase),
+    default: ToolStepPhase.INDEPENDENT,
+    index: true,
+  })
+  stepPhase: ToolStepPhase;
 
   @Prop({ default: 0 })
   sortOrder: number;

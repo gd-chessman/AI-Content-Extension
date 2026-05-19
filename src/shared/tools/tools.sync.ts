@@ -2,6 +2,7 @@ import type { Model } from 'mongoose';
 import type { ToolDefinition, ToolPlatform } from './tool-definition.types';
 import type { Tool, ToolDocument } from '../../modules/tools/tool.schema';
 import { ToolPlacement } from '../../modules/tools/tool.schema';
+import { ToolStepPhase, normalizeToolStepPhase } from './tool-step-phase';
 import { WorkflowPlatform } from '../../modules/workflows/workflow.schema';
 
 export type ToolSyncResult = {
@@ -29,6 +30,7 @@ export async function syncToolDefinitions(
       handlerScript: seed.handlerScript.trim(),
       guardScript: (seed.guardScript || '').trim(),
       placement: seed.placement as ToolPlacement,
+      stepPhase: normalizeToolStepPhase(seed.stepPhase, ToolStepPhase.INDEPENDENT),
       sortOrder: seed.sortOrder ?? 0,
       defaultConfig: seed.defaultConfig ?? {},
       uiConfig: seed.uiConfig ?? {},

@@ -1,3 +1,5 @@
+import type { ToolStepPhase } from './tool-step-phase';
+
 /** Metadata hiển thị nút trên extension (FE đọc từ `uiConfig` sau khi sync DB). */
 export type ToolUiConfig = {
   icon: string;
@@ -31,6 +33,8 @@ export type ToolDefinition = {
   /** Metadata / log — FE không switch theo khóa này. */
   handlerKey: string;
   placement: ToolPlacementType;
+  /** Workflow: trước / sau bước, hoặc chỉ thủ công. Mặc định `independent`. */
+  stepPhase?: ToolStepPhase;
   sortOrder: number;
   defaultConfig?: Record<string, unknown>;
   uiConfig?: ToolUiConfig;

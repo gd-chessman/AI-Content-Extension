@@ -1,4 +1,5 @@
 import type { ToolDefinition } from '../tool-definition.types';
+import { ToolStepPhase } from '../tool-step-phase';
 import { CHATGPT_HANDLER_KEYS } from './chatgpt-handler.keys';
 
 export const CHATGPT_STEP_PANEL_TOOLS: ToolDefinition[] = [
@@ -89,6 +90,7 @@ export const CHATGPT_STEP_PANEL_TOOLS: ToolDefinition[] = [
     platform: 'chatgpt',
     handlerKey: CHATGPT_HANDLER_KEYS.copyVideo,
     placement: 'step_panel',
+    stepPhase: ToolStepPhase.AFTER_STEP,
     sortOrder: 30,
     defaultConfig: { part: 1 },
     handlerScript:
@@ -110,6 +112,7 @@ export const CHATGPT_STEP_PANEL_TOOLS: ToolDefinition[] = [
     platform: 'chatgpt',
     handlerKey: CHATGPT_HANDLER_KEYS.copyVideo,
     placement: 'step_panel',
+    stepPhase: ToolStepPhase.AFTER_STEP,
     sortOrder: 40,
     defaultConfig: { part: 2 },
     handlerScript:
@@ -131,6 +134,7 @@ export const CHATGPT_STEP_PANEL_TOOLS: ToolDefinition[] = [
     platform: 'chatgpt',
     handlerKey: CHATGPT_HANDLER_KEYS.copySingleVideo,
     placement: 'step_panel',
+    stepPhase: ToolStepPhase.AFTER_STEP,
     sortOrder: 25,
     defaultConfig: {},
     handlerScript: 'await host.extractSingleVideoContent();',

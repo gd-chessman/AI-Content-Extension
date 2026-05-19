@@ -1,4 +1,5 @@
 import { ToolPlacement } from './tool.schema';
+import { ToolStepPhase } from '../../shared/tools/tool-step-phase';
 import { WorkflowPlatform } from '../workflows/workflow.schema';
 
 export class CreateToolDto {
@@ -9,6 +10,7 @@ export class CreateToolDto {
   handlerScript: string;
   guardScript?: string;
   placement?: ToolPlacement;
+  stepPhase?: ToolStepPhase;
   sortOrder?: number;
   defaultConfig?: Record<string, unknown>;
   uiConfig?: Record<string, unknown>;
@@ -23,6 +25,7 @@ export class UpdateToolDto {
   handlerScript?: string;
   guardScript?: string;
   placement?: ToolPlacement;
+  stepPhase?: ToolStepPhase;
   sortOrder?: number;
   defaultConfig?: Record<string, unknown>;
   uiConfig?: Record<string, unknown>;

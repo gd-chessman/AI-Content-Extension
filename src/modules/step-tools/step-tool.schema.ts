@@ -1,5 +1,6 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Types } from 'mongoose';
+import { ToolStepPhase } from '../../shared/tools/tool-step-phase';
 import { Step } from '../steps/step.schema';
 import { Tool } from '../tools/tool.schema';
 
@@ -20,6 +21,10 @@ export class StepTool {
   /** Ghi đè `defaultConfig` của Tool cho riêng step này. */
   @Prop({ type: Object, default: {} })
   config: Record<string, unknown>;
+
+  /** Ghi đè `stepPhase` của Tool cho riêng step này (null = dùng mặc định tool). */
+  @Prop({ type: String, enum: Object.values(ToolStepPhase), default: null })
+  stepPhase: ToolStepPhase | null;
 
   @Prop({ default: true, index: true })
   isActive: boolean;

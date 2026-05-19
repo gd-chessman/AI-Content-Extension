@@ -2,6 +2,7 @@ import { BadRequestException, ConflictException, Injectable, NotFoundException }
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { Step, StepDocument } from '../steps/step.schema';
+import { normalizeToolStepPhase, ToolStepPhase } from '../../shared/tools/tool-step-phase';
 import { Tool, ToolDocument } from '../tools/tool.schema';
 import { CreateStepToolDto, SetStepToolsDto, UpdateStepToolDto } from './step-tools.dto';
 import { StepTool, StepToolDocument } from './step-tool.schema';
@@ -182,6 +183,10 @@ export class StepToolsService {
         toolId: await this.normalizeToolId(item.toolId),
         sortOrder: item.sortOrder ?? index * 10,
         config: item.config ?? {},
+        stepPhase:
+          item.stepPhase === null || item.stepPhase === undefined
+            ? null
+            : normalizeToolStepPhase(item.stepPhase),
         isActive: item.isActive ?? true,
       });
     }
@@ -211,6 +216,7 @@ export class StepToolsService {
       toolId: tool ? String(tool._id) : String(row.toolId),
       sortOrder: Number(row.sortOrder ?? 0),
       config: (row.config || {}) as Record<string, unknown>,
+      stepPhase: row.stepPhase ? normalizeToolStepPhase(row.stepPhase) : null,
       isActive: Boolean(row.isActive ?? true),
       tool: tool
         ? {
@@ -221,12 +227,17 @@ export class StepToolsService {
             handlerKey: tool.handlerKey,
             guardScript: tool.guardScript || '',
             placement: tool.placement,
+            stepPhase: tool.stepPhase,
             sortOrder: tool.sortOrder,
             defaultConfig: tool.defaultConfig || {},
             uiConfig: tool.uiConfig || {},
             isActive: tool.isActive,
           }
         : undefined,
+      effectiveStepPhase: normalizeToolStepPhase(
+        row.stepPhase ?? tool?.stepPhase,
+        ToolStepPhase.INDEPENDENT,
+      ),
     };
   }
 
@@ -255,6 +266,15 @@ export class StepToolsService {
       patch.config = dto.config;
     } else if (!partial) {
       patch.config = {};
+    }
+
+    if ('stepPhase' in dto) {
+      patch.stepPhase =
+        dto.stepPhase === null || dto.stepPhase === undefined
+          ? null
+          : normalizeToolStepPhase(dto.stepPhase);
+    } else if (!partial) {
+      patch.stepPhase = null;
     }
 
     if ('isActive' in dto && dto.isActive !== undefined) {

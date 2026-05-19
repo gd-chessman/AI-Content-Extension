@@ -16,6 +16,7 @@ import {
 } from '../../shared/tools/tools.sync';
 import { WorkflowPlatform } from '../workflows/workflow.schema';
 import { CreateToolDto, UpdateToolDto } from './tools.dto';
+import { ToolStepPhase, normalizeToolStepPhase } from '../../shared/tools/tool-step-phase';
 import { Tool, ToolDocument, ToolPlacement } from './tool.schema';
 
 @Injectable()
@@ -155,6 +156,7 @@ export class ToolsService implements OnModuleInit {
       handlerScript: tool.handlerScript,
       guardScript: tool.guardScript || '',
       placement: tool.placement,
+      stepPhase: tool.stepPhase,
       sortOrder: tool.sortOrder,
       defaultConfig: tool.defaultConfig || {},
       uiConfig: tool.uiConfig || {},
@@ -203,6 +205,12 @@ export class ToolsService implements OnModuleInit {
       patch.placement = this.normalizePlacement(dto.placement);
     } else if (!partial) {
       patch.placement = ToolPlacement.STEP_PANEL;
+    }
+
+    if ('stepPhase' in dto && dto.stepPhase !== undefined) {
+      patch.stepPhase = normalizeToolStepPhase(dto.stepPhase);
+    } else if (!partial) {
+      patch.stepPhase = ToolStepPhase.INDEPENDENT;
     }
 
     if ('sortOrder' in dto && dto.sortOrder !== undefined) {
