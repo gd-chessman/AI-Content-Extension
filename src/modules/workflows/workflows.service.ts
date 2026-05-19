@@ -44,7 +44,7 @@ export class WorkflowsService {
     }
     return this.workflowModel
       .find(filter)
-      .sort({ createdAt: -1 })
+      .sort({ createdAt: 1 })
       .lean();
   }
 
