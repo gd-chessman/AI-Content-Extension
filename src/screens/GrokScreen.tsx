@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import { FiAlertTriangle, FiCheck, FiInfo, FiImage } from 'react-icons/fi'
+import { FiAlertTriangle, FiCheck, FiGlobe, FiImage, FiInfo, FiRotateCcw } from 'react-icons/fi'
+import translate from 'translate'
 type BrowserTab = { id?: number; url?: string; active?: boolean }
 type ExtensionChrome = {
   tabs?: {
@@ -60,6 +61,43 @@ const shouldRedirectPostToImagine = (raw?: string) => {
 const getChrome = () => (globalThis as { chrome?: ExtensionChrome }).chrome
 
 const sleep = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms))
+
+const translateInChunks = async (source: string) => {
+  const value = (source || '').trim()
+  if (!value) return ''
+
+  const MAX_CHUNK = 1800
+  const blocks = value
+    .split(/\n\s*\n/)
+    .map((b) => b.trim())
+    .filter(Boolean)
+
+  const chunks: string[] = []
+  let current = ''
+  for (const block of blocks) {
+    if (!current) {
+      current = block
+      continue
+    }
+    const next = `${current}\n\n${block}`
+    if (next.length <= MAX_CHUNK) {
+      current = next
+    } else {
+      chunks.push(current)
+      current = block
+    }
+  }
+  if (current) chunks.push(current)
+  if (chunks.length === 0) chunks.push(value.slice(0, MAX_CHUNK))
+
+  const out: string[] = []
+  for (const chunk of chunks) {
+    // eslint-disable-next-line no-await-in-loop
+    const translated = await translate(chunk, { to: 'vi' })
+    out.push((translated || '').trim())
+  }
+  return out.join('\n\n').trim()
+}
 
 const queryTabs = (urlPatterns?: string[], currentWindow?: boolean, active?: boolean) =>
   new Promise<BrowserTab[]>((resolve) => {
@@ -292,6 +330,9 @@ async function waitForGrokComposer(tabId: number, options?: { allowPost?: boolea
 export default function GrokScreen() {
   const [status, setStatus] = useState('Đợi dữ liệu từ ChatGPT để điền vào Grok.')
   const [lastPrompt, setLastPrompt] = useState('')
+  const [originalLastPrompt, setOriginalLastPrompt] = useState('')
+  const [isContentTranslated, setIsContentTranslated] = useState(false)
+  const [isTranslating, setIsTranslating] = useState(false)
   const [lastImageDataUrl, setLastImageDataUrl] = useState('')
   const statusLower = status.toLowerCase()
   const statusTone = statusLower.includes('không thể') || statusLower.includes('không tìm thấy') || statusLower.includes('thất bại') || statusLower.includes('lỗi')
@@ -320,6 +361,8 @@ export default function GrokScreen() {
       }
 
       setLastPrompt(prompt)
+      setOriginalLastPrompt('')
+      setIsContentTranslated(false)
       setLastImageDataUrl(imageDataUrl)
       setStatus('Đang mở Grok và điền nội dung...')
 
@@ -394,6 +437,39 @@ export default function GrokScreen() {
     return () => window.removeEventListener('fill-grok-from-chatgpt-video1-image', onFillFromChatgpt as EventListener)
   }, [])
 
+  const translateLastPrompt = async () => {
+    if (isContentTranslated) {
+      setLastPrompt(originalLastPrompt)
+      setIsContentTranslated(false)
+      setStatus('Đã khôi phục nội dung gốc.')
+      return
+    }
+
+    const source = lastPrompt.trim()
+    if (!source || isTranslating) return
+
+    if (!originalLastPrompt.trim()) {
+      setOriginalLastPrompt(source)
+    }
+
+    setIsTranslating(true)
+    setStatus('Đang dịch nội dung sang tiếng Việt...')
+    try {
+      const translated = await translateInChunks(source)
+      if (!translated) {
+        setStatus('Không nhận được bản dịch.')
+        return
+      }
+      setLastPrompt(translated)
+      setIsContentTranslated(true)
+      setStatus('Đã dịch nội dung gần nhất sang tiếng Việt.')
+    } catch {
+      setStatus('Dịch nội dung thất bại. Hãy thử lại.')
+    } finally {
+      setIsTranslating(false)
+    }
+  }
+
   return (
     <section className="glass-panel flex h-full min-h-0 flex-col rounded-3xl p-4">
       <h2 className="text-sm font-semibold text-white">Grok</h2>
@@ -427,7 +503,36 @@ export default function GrokScreen() {
             <img src={lastImageDataUrl} alt="Ảnh gần nhất từ ChatGPT" className="max-h-36 w-full rounded-md object-contain" />
           </div>
         ) : null}
-        <p className="shrink-0 text-[10px] text-slate-500">Nội dung gần nhất</p>
+        <div className="flex shrink-0 items-center justify-between gap-2">
+          <p className="text-[10px] text-slate-500">Nội dung gần nhất</p>
+          <button
+            type="button"
+            onClick={() => void translateLastPrompt()}
+            disabled={!lastPrompt.trim() || isTranslating}
+            title={
+              isTranslating
+                ? 'Đang dịch...'
+                : isContentTranslated
+                  ? 'Quay về nội dung gốc'
+                  : 'Dịch sang tiếng Việt'
+            }
+            aria-label={isContentTranslated ? 'Quay về nội dung gốc' : 'Dịch nội dung'}
+            className="relative inline-flex cursor-pointer items-center rounded-md bg-violet-500/20 px-2 py-1 text-[10px] font-semibold text-violet-100 transition hover:bg-violet-500/30 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {isTranslating ? (
+              <span className="animate-pulse">…</span>
+            ) : isContentTranslated ? (
+              <FiRotateCcw className="h-3.5 w-3.5" />
+            ) : (
+              <FiGlobe className="h-3.5 w-3.5" />
+            )}
+            {isContentTranslated ? (
+              <span className="absolute -right-1 -top-1 rounded-full bg-violet-500 px-1 text-[7px] leading-none text-white">
+                VI
+              </span>
+            ) : null}
+          </button>
+        </div>
         <div className="mt-1 min-h-0 flex-1 overflow-y-auto whitespace-pre-wrap text-[11px] text-slate-200">
           {lastPrompt || 'Chưa có dữ liệu.'}
         </div>
