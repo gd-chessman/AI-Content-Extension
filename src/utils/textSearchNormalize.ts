@@ -11,6 +11,21 @@ export function normalizeStyledTextToPlain(text: string): string {
   return out.join('').normalize('NFKC')
 }
 
+/** Tiêu đề hiển thị kiểu chữ đậm Unicode (cùng logic extract ChatGPT). */
+export function stylizeTitleForDisplay(title: string): string {
+  const upper = normalizeStyledTextToPlain(title).toUpperCase()
+  const plain = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+  const styled = '𝑨𝑩𝑪𝑫𝑬𝑭𝑮𝑯𝑰𝑱𝑲𝑳𝑴𝑵𝑶𝑷𝑸𝑹𝑺𝑻𝑼𝑽𝑾𝑿𝒀𝒁'
+  const styledChars = Array.from(styled)
+  return upper
+    .split('')
+    .map((char) => {
+      const index = plain.indexOf(char)
+      return index >= 0 ? styledChars[index] || char : char
+    })
+    .join('')
+}
+
 export function normalizeTextForSearch(text: string): string {
   return normalizeStyledTextToPlain(text).toLowerCase()
 }

@@ -1,5 +1,18 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import { FiAlertTriangle, FiCheck, FiCopy, FiDownload, FiInfo, FiSave, FiSend, FiSettings, FiX } from 'react-icons/fi'
+import {
+  FiAlertTriangle,
+  FiCheck,
+  FiCopy,
+  FiDownload,
+  FiGlobe,
+  FiInfo,
+  FiRotateCcw,
+  FiSave,
+  FiSend,
+  FiSettings,
+  FiX,
+} from 'react-icons/fi'
+import translate from 'translate'
 import {
   extractGgSheetRow,
   getMyGgSheetSetting,
@@ -14,6 +27,7 @@ import {
   chatgptScrollHighlightStep4ContentPageScript,
   chatgptWarmThreadScrollContainersPageScript,
 } from '@/utils/chatgptContentProcessing'
+import { normalizeStyledTextToPlain, stylizeTitleForDisplay } from '@/utils/textSearchNormalize'
 
 type BrowserTab = { id?: number; url?: string; active?: boolean }
 type ExtensionChrome = {
@@ -72,6 +86,45 @@ const CHATGPT_URL = 'https://chatgpt.com/'
 const CHATGPT_PATTERNS = ['*://chatgpt.com/*', '*://chat.openai.com/*']
 const extractSheetId = (url: string) => url.match(/\/spreadsheets\/d\/([^/]+)/)?.[1] || ''
 
+type DataField = keyof CollectedData
+
+const translateInChunks = async (source: string) => {
+  const value = (source || '').trim()
+  if (!value) return ''
+
+  const MAX_CHUNK = 1800
+  const blocks = value
+    .split(/\n\s*\n/)
+    .map((b) => b.trim())
+    .filter(Boolean)
+
+  const chunks: string[] = []
+  let current = ''
+  for (const block of blocks) {
+    if (!current) {
+      current = block
+      continue
+    }
+    const next = `${current}\n\n${block}`
+    if (next.length <= MAX_CHUNK) {
+      current = next
+    } else {
+      chunks.push(current)
+      current = block
+    }
+  }
+  if (current) chunks.push(current)
+  if (chunks.length === 0) chunks.push(value.slice(0, MAX_CHUNK))
+
+  const out: string[] = []
+  for (const chunk of chunks) {
+    // eslint-disable-next-line no-await-in-loop
+    const translated = await translate(chunk, { to: 'vi' })
+    out.push((translated || '').trim())
+  }
+  return out.join('\n\n').trim()
+}
+
 function GgsheetContentScrollBox({
   maxHeightClass,
   children,
@@ -109,6 +162,17 @@ export default function GgSheetScreen() {
         ? 'success'
         : 'info'
   const [data, setData] = useState<CollectedData>({ title: '', shortContent: '', fullContent: '' })
+  const [originalData, setOriginalData] = useState<CollectedData>({
+    title: '',
+    shortContent: '',
+    fullContent: '',
+  })
+  const [translatedFields, setTranslatedFields] = useState<Record<DataField, boolean>>({
+    title: false,
+    shortContent: false,
+    fullContent: false,
+  })
+  const [translatingField, setTranslatingField] = useState<DataField | null>(null)
   const [isSaving, setIsSaving] = useState(false)
   const [previewData, setPreviewData] = useState<GgSheetPushPreview | null>(null)
   const [showPreviewModal, setShowPreviewModal] = useState(false)
@@ -202,6 +266,95 @@ export default function GgSheetScreen() {
   const getChrome = () => (globalThis as { chrome?: ExtensionChrome }).chrome
   const sleep = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms))
 
+  const resetTranslationState = () => {
+    setOriginalData({ title: '', shortContent: '', fullContent: '' })
+    setTranslatedFields({ title: false, shortContent: false, fullContent: false })
+    setTranslatingField(null)
+  }
+
+  const applyCollectedData = (next: CollectedData) => {
+    resetTranslationState()
+    setData(next)
+  }
+
+  const translateDataField = async (field: DataField) => {
+    if (translatedFields[field]) {
+      setData((prev) => ({ ...prev, [field]: originalData[field] }))
+      setTranslatedFields((prev) => ({ ...prev, [field]: false }))
+      setStatus('Đã khôi phục nội dung gốc.')
+      return
+    }
+
+    const source = (data[field] || '').trim()
+    if (!source || translatingField) return
+
+    if (!(originalData[field] || '').trim()) {
+      setOriginalData((prev) => ({ ...prev, [field]: source }))
+    }
+
+    const fieldLabel =
+      field === 'title' ? 'tiêu đề' : field === 'shortContent' ? 'nội dung ngắn' : 'nội dung dài'
+
+    setTranslatingField(field)
+    setStatus(`Đang dịch ${fieldLabel}...`)
+    try {
+      const plainSource = normalizeStyledTextToPlain(source).trim()
+      if (!plainSource) {
+        setStatus(`Không có chữ để dịch ${fieldLabel}.`)
+        return
+      }
+      const translated = await translateInChunks(plainSource)
+      if (!translated) {
+        setStatus(`Không nhận được bản dịch ${fieldLabel}.`)
+        return
+      }
+      const nextValue = field === 'title' ? stylizeTitleForDisplay(translated) : translated
+      setData((prev) => ({ ...prev, [field]: nextValue }))
+      setTranslatedFields((prev) => ({ ...prev, [field]: true }))
+      setStatus(`Đã dịch ${fieldLabel} sang tiếng Việt.`)
+    } catch {
+      setStatus(`Dịch ${fieldLabel} thất bại. Hãy thử lại.`)
+    } finally {
+      setTranslatingField(null)
+    }
+  }
+
+  const renderTranslateButton = (field: DataField, ariaBase: string) => {
+    const isTranslated = translatedFields[field]
+    const isTranslating = translatingField === field
+    const disabled = !(data[field] || '').trim() || (translatingField !== null && !isTranslating)
+
+    return (
+      <button
+        type="button"
+        onClick={() => void translateDataField(field)}
+        disabled={disabled}
+        title={
+          isTranslating
+            ? 'Đang dịch...'
+            : isTranslated
+              ? `Quay về ${ariaBase} gốc`
+              : `Dịch ${ariaBase}`
+        }
+        aria-label={isTranslated ? `Quay về ${ariaBase} gốc` : `Dịch ${ariaBase}`}
+        className="relative inline-flex cursor-pointer items-center rounded-md bg-violet-500/20 px-2 py-1 text-[10px] font-semibold text-violet-100 transition hover:bg-violet-500/30 disabled:cursor-not-allowed disabled:opacity-40"
+      >
+        {isTranslating ? (
+          <span className="animate-pulse">…</span>
+        ) : isTranslated ? (
+          <FiRotateCcw className="h-3.5 w-3.5" />
+        ) : (
+          <FiGlobe className="h-3.5 w-3.5" />
+        )}
+        {isTranslated ? (
+          <span className="absolute -right-1 -top-1 rounded-full bg-violet-500 px-1 text-[7px] leading-none text-white">
+            VI
+          </span>
+        ) : null}
+      </button>
+    )
+  }
+
   const queryTabs = (pattern?: string[], currentWindow = false, active = false) =>
     new Promise<BrowserTab[]>((resolve) => {
       const extensionChrome = getChrome()
@@ -288,7 +441,7 @@ export default function GgSheetScreen() {
       return null
     }
 
-    setData({
+    applyCollectedData({
       title: extracted.title || '',
       shortContent: extracted.shortContent || '',
       fullContent: extracted.fullContent || '',
@@ -391,7 +544,7 @@ export default function GgSheetScreen() {
     setStatus(`Đang trích xuất dữ liệu từ hàng ${row}...`)
     try {
       const extracted = await extractGgSheetRow(row)
-      setData({
+      applyCollectedData({
         title: extracted?.data?.title || '',
         shortContent: extracted?.data?.shortContent || '',
         fullContent: extracted?.data?.fullContent || '',
@@ -612,31 +765,40 @@ export default function GgSheetScreen() {
 
       <div className="grid min-h-0 flex-1 grid-cols-1 grid-rows-[auto_auto_minmax(0,1fr)] gap-2 overflow-hidden rounded-xl border border-white/10 bg-white/5 p-2.5">
         <div>
-          <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Tiêu đề</p>
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Tiêu đề</p>
+            {renderTranslateButton('title', 'tiêu đề')}
+          </div>
           <p className="mt-1 whitespace-pre-wrap rounded-lg border border-white/10 bg-black/20 p-2 text-[11px] text-slate-100">
             {data.title || '...'}
           </p>
         </div>
         <div className="min-h-0">
-          <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">
-            Nội dung ngắn
-            {data.shortContent.trim() ? (
-              <span className="ml-1.5 font-normal normal-case text-slate-500">
-                ({countContentLines(data.shortContent)} dòng)
-              </span>
-            ) : null}
-          </p>
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+              Nội dung ngắn
+              {data.shortContent.trim() ? (
+                <span className="ml-1.5 font-normal normal-case text-slate-500">
+                  ({countContentLines(data.shortContent)} dòng)
+                </span>
+              ) : null}
+            </p>
+            {renderTranslateButton('shortContent', 'nội dung ngắn')}
+          </div>
           <GgsheetContentScrollBox maxHeightClass="max-h-36">{data.shortContent || '...'}</GgsheetContentScrollBox>
         </div>
         <div className="flex min-h-0 flex-col">
-          <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">
-            Nội dung dài (link bài báo)
-            {data.fullContent.trim() ? (
-              <span className="ml-1.5 font-normal normal-case text-slate-500">
-                ({countContentLines(data.fullContent)} dòng)
-              </span>
-            ) : null}
-          </p>
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+              Nội dung dài (link bài báo)
+              {data.fullContent.trim() ? (
+                <span className="ml-1.5 font-normal normal-case text-slate-500">
+                  ({countContentLines(data.fullContent)} dòng)
+                </span>
+              ) : null}
+            </p>
+            {renderTranslateButton('fullContent', 'nội dung dài')}
+          </div>
           <GgsheetContentScrollBox maxHeightClass="min-h-0 max-h-52 flex-1" roomyEnd>
             {data.fullContent || '...'}
           </GgsheetContentScrollBox>
