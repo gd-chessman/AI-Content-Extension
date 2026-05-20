@@ -183,35 +183,152 @@ export function chatgptExtractContent(...args: unknown[]): ChatgptExtractContent
 
   /** Nội dung dài: chỉ thân bài (đoạn đầu ngắn coi là tiêu đề thì bỏ, không ghép lại). */
   const pickFull = (text: string) => pickFullBodyOnly(text).body
+
+  const SHORT_MIN_RATIO = 0.3
+  const SHORT_MAX_SCAN_RATIO = 0.5
+  const SHORT_TO_FULL_MAX_RATIO = SHORT_MAX_SCAN_RATIO
+
+  /** Nếu ngắn > 50% dài thì chỉ giữ tối đa 50% độ dài nội dung dài (cắt từ cuối, ưu tiên xuống dòng / câu). */
+  const capShortToMaxRatioOfFull = (shortText: string, fullText: string, maxRatio = SHORT_TO_FULL_MAX_RATIO) => {
+    const short = (shortText || '').trim()
+    const full = (fullText || '').trim()
+    if (!short || !full) return short
+    const maxLen = Math.floor(full.length * maxRatio)
+    if (short.length <= maxLen) return short
+
+    let cut = short.slice(0, maxLen)
+    const minKeep = Math.floor(maxLen * 0.45)
+
+    const lastPara = cut.lastIndexOf('\n\n')
+    if (lastPara >= minKeep) return cut.slice(0, lastPara).trim()
+
+    const lastLine = cut.lastIndexOf('\n')
+    if (lastLine >= minKeep) return cut.slice(0, lastLine).trim()
+
+    const lastSentence = Math.max(cut.lastIndexOf('.'), cut.lastIndexOf('!'), cut.lastIndexOf('?'))
+    if (lastSentence >= minKeep) return cut.slice(0, lastSentence + 1).trim()
+
+    return cut.trim()
+  }
+
+  const finalizeShortContent = (shortCandidate: string, sourceText: string) =>
+    capShortToMaxRatioOfFull(shortCandidate, pickFull(sourceText), SHORT_TO_FULL_MAX_RATIO)
+
+  const measureCompact = (text: string) => normalize(text).replace(/\s+/g, ' ')
+
+  /** ? cuối trong [minLen, maxScan] — không cắt trước minLen (tránh ~28%). */
+  const cutAtLastQuestionInShortRange = (normalized: string, minLen: number, maxScan: number): string | null => {
+    const end = Math.min(normalized.length, maxScan)
+    if (end <= minLen) return null
+    const slice = normalized.slice(0, end)
+    const tail = slice.slice(minLen)
+    const lastQ = tail.lastIndexOf('?')
+    if (lastQ < 0) return null
+    return slice.slice(0, minLen + lastQ + 1).trim()
+  }
+
+  /** Đảm bảo nội dung ngắn ≥ minLen (30%), tối đa maxScan. */
+  const ensureMinShortLength = (
+    candidate: string,
+    normalized: string,
+    minLen: number,
+    maxScan: number,
+  ): string => {
+    const end = Math.min(normalized.length, maxScan)
+    const s = (candidate || '').trim()
+    if (s.length >= minLen) return s.length <= end ? s : normalized.slice(0, end).trim()
+    let extended = normalized.slice(0, end)
+    if (extended.length < minLen) extended = normalized.slice(0, minLen)
+    const para = extended.lastIndexOf('\n\n')
+    if (para >= Math.floor(minLen * 0.9)) return extended.slice(0, para).trim()
+    return extended.trim()
+  }
+
+  const alignExtractedShortToCut = (joined: string, cut: string): string => {
+    const joinedTrim = (joined || '').trim()
+    const cutTrim = (cut || '').trim()
+    if (!cutTrim) return joinedTrim
+    if (!joinedTrim) return cutTrim
+    const j = measureCompact(joinedTrim)
+    const c = measureCompact(cutTrim)
+    if (j.length <= c.length) return joinedTrim
+    if (c.length > 0 && j.startsWith(c)) return cutTrim
+    const tail = cutTrim.slice(Math.max(0, cutTrim.length - 48))
+    const idx = joinedTrim.lastIndexOf(tail)
+    if (idx >= 0) return joinedTrim.slice(0, idx + tail.length).trim()
+    return cutTrim
+  }
+
+  const SHORT_SECTION_HEADER =
+    /(?:^|\n)\s*(?:#{1,6}\s*)?(?:\*\*)?(?:short\s*content|nội dung ngắn|bản ngắn|phiên bản ngắn)(?:\*\*)?\s*[:\-]?\s*(?:\n|$)/i
+  const LONG_SECTION_HEADER =
+    /(?:^|\n)\s*(?:#{1,6}\s*)?(?:\*\*)?(?:full[\s-]*length|long\s*content|nội dung dài|bản đầy đủ|full\s*version)(?:\*\*)?\s*[:\-]?\s*(?:\n|$)/i
+
   const pickShort = (text: string) => {
     const full = pickFullBodyOnly(text).body
-    const MIN_LEN = 1200
-    const MAX_SCAN = 3600
     if (!full) return ''
-    const searchSpace = full.slice(0, MAX_SCAN)
-    const questionWindow = searchSpace.slice(MIN_LEN)
-    const lastQuestionAfterMin = questionWindow.lastIndexOf('?')
-    if (lastQuestionAfterMin >= 0) {
-      return searchSpace.slice(0, MIN_LEN + lastQuestionAfterMin + 1).trim()
+
+    const normalized = normalize(full)
+    const fullLen = normalized.length
+    const MIN_LEN = Math.max(1, Math.floor(fullLen * SHORT_MIN_RATIO))
+    const MAX_SCAN = Math.max(MIN_LEN, Math.floor(fullLen * SHORT_MAX_SCAN_RATIO))
+    const shortHm = normalized.match(SHORT_SECTION_HEADER)
+    const longHm = normalized.match(LONG_SECTION_HEADER)
+
+    if (shortHm && shortHm.index !== undefined) {
+      const start = shortHm.index + shortHm[0].length
+      let end = normalized.length
+      if (longHm && longHm.index !== undefined && longHm.index > start) {
+        end = longHm.index
+      } else {
+        end = Math.min(normalized.length, start + MAX_SCAN)
+      }
+      const section = normalized.slice(start, end).trim()
+      if (section.length >= MIN_LEN) {
+        const byQuestion = cutAtLastQuestionInShortRange(normalized, MIN_LEN, MAX_SCAN)
+        const body = ensureMinShortLength(byQuestion || section, normalized, MIN_LEN, MAX_SCAN)
+        return finalizeShortContent(body, text)
+      }
     }
 
-    const qIndex = searchSpace.indexOf('?')
-    if (qIndex >= 0) {
-      const untilQ = full.slice(0, qIndex + 1).trim()
-      if (untilQ.length >= MIN_LEN) return untilQ
-      const rest = full.slice(qIndex + 1)
-      const nextBreak = [rest.indexOf('\n'), rest.search(/[.!?]/)]
-        .filter((idx) => idx >= 0)
-        .sort((a, b) => a - b)[0]
-      if (nextBreak !== undefined && nextBreak >= 0)
-        return full.slice(0, qIndex + 1 + nextBreak + 1).trim()
-      return untilQ
+    if (longHm && longHm.index !== undefined && longHm.index >= MIN_LEN) {
+      const beforeLong = normalized.slice(0, longHm.index).trim()
+      if (beforeLong.length >= MIN_LEN) {
+        const byQuestion = cutAtLastQuestionInShortRange(normalized, MIN_LEN, MAX_SCAN)
+        const body = ensureMinShortLength(byQuestion || beforeLong, normalized, MIN_LEN, MAX_SCAN)
+        return finalizeShortContent(body, text)
+      }
     }
+
+    const searchEnd =
+      longHm && longHm.index !== undefined && longHm.index > 0
+        ? Math.min(longHm.index, MAX_SCAN)
+        : MAX_SCAN
+    const searchSpace = normalized.slice(0, searchEnd)
+
+    const byQuestion = cutAtLastQuestionInShortRange(normalized, MIN_LEN, MAX_SCAN)
+    if (byQuestion) {
+      return finalizeShortContent(ensureMinShortLength(byQuestion, normalized, MIN_LEN, MAX_SCAN), text)
+    }
+
     const lastLine = searchSpace.lastIndexOf('\n')
-    if (lastLine >= MIN_LEN) return searchSpace.slice(0, lastLine).trim()
+    if (lastLine >= MIN_LEN) {
+      return finalizeShortContent(
+        ensureMinShortLength(searchSpace.slice(0, lastLine).trim(), normalized, MIN_LEN, MAX_SCAN),
+        text,
+      )
+    }
     const lastSentence = Math.max(searchSpace.lastIndexOf('.'), searchSpace.lastIndexOf('!'))
-    if (lastSentence >= MIN_LEN) return searchSpace.slice(0, lastSentence + 1).trim()
-    return searchSpace.trim()
+    if (lastSentence >= MIN_LEN) {
+      return finalizeShortContent(
+        ensureMinShortLength(searchSpace.slice(0, lastSentence + 1).trim(), normalized, MIN_LEN, MAX_SCAN),
+        text,
+      )
+    }
+    return finalizeShortContent(
+      ensureMinShortLength(searchSpace.trim(), normalized, MIN_LEN, MAX_SCAN),
+      text,
+    )
   }
 
   const turns = listThreadTurns()
@@ -285,18 +402,89 @@ export function chatgptExtractContent(...args: unknown[]): ChatgptExtractContent
       .join('\n\n')
       .trim()
 
-  /** Luôn cắt tại dấu ? qua pickShort; DOM chỉ fallback khi không cắt được. */
-  const pickShortFromDom = (turn: HTMLElement, raw: string) => {
-    const cut = pickShort(raw)
-    if (cut) return cut
+  const collectBlocksForTextLength = (
+    root: HTMLElement,
+    targetLen: number,
+    skipHost?: HTMLElement | null,
+  ) => {
+    const blocks = orderedBlockHosts(root)
+    const out: HTMLElement[] = []
+    let len = 0
+    for (const el of blocks) {
+      if (skipHost && (el === skipHost || skipHost.contains(el))) continue
+      if (elementHasVideoToolMention(el)) break
+      out.push(el)
+      len += measureCompact(el.innerText || '').length
+      if (len >= targetLen) break
+    }
+    return out
+  }
 
+  /** Cùng logic highlight — tuần tự từ sau title, dừng khi khớp đuôi cut. */
+  const collectBlocksForShortExtract = (
+    root: HTMLElement,
+    titleHost: HTMLElement,
+    cut: string,
+  ): HTMLElement[] => {
+    if (!cut.trim()) return []
+    const c = measureCompact(cut)
+    if (!c) return []
+    const cutLen = c.length
+    const cutTailKey = c.slice(-Math.min(48, c.length))
+
+    const allBlocks = orderedBlockHosts(root).filter((el) => {
+      if (el === titleHost || titleHost.contains(el)) return false
+      if (elementHasVideoToolMention(el)) return false
+      return true
+    })
+
+    const out: HTMLElement[] = []
+    let joined = ''
+
+    for (const el of allBlocks) {
+      out.push(el)
+      joined = measureCompact(joinBlockTexts(out))
+      const hasTail = cutTailKey.length >= 10 && joined.includes(cutTailKey)
+      if (hasTail && joined.length >= cutLen * 0.88) break
+      if (joined.length >= cutLen && hasTail) break
+      if (joined.length > cutLen * 1.25) break
+    }
+
+    while (out.length > 1) {
+      const j = measureCompact(joinBlockTexts(out))
+      const hasTail = cutTailKey.length >= 10 && j.includes(cutTailKey)
+      if (j.length <= cutLen * 1.04 && hasTail) break
+      if (j.length <= cutLen) break
+      const withoutLast = measureCompact(joinBlockTexts(out.slice(0, -1)))
+      if (cutTailKey.length >= 10 && !withoutLast.includes(cutTailKey)) break
+      out.pop()
+    }
+
+    if (out.length === 0) {
+      return collectBlocksForTextLength(root, cutLen, titleHost).filter(
+        (el) => el !== titleHost && !titleHost.contains(el),
+      )
+    }
+
+    return out
+  }
+
+  /** Ưu tiên text từ DOM (khớp khung highlight); pickShort(raw) chỉ làm mốc cắt. */
+  const extractShortContentFromDom = (turn: HTMLElement, raw: string) => {
     const titleHost = findTitleHost(turn)
-    if (!titleHost) return ''
-    const blocks = collectContentAfterTitle(turn, titleHost).filter(
-      (el) => el !== titleHost && !titleHost.contains(el) && !elementHasVideoToolMention(el),
-    )
+    if (!titleHost) return pickShort(raw)
+
+    const cut = pickShort(raw)
+    let blocks = cut ? collectBlocksForShortExtract(turn, titleHost, cut) : []
+    if (!blocks.length) {
+      blocks = collectContentAfterTitle(turn, titleHost).filter(
+        (el) => el !== titleHost && !titleHost.contains(el) && !elementHasVideoToolMention(el),
+      )
+    }
+
     const joined = joinBlockTexts(blocks)
-    return joined ? pickShort(joined) : ''
+    if (joined) return finalizeShortContent(alignExtractedShortToCut(joined, cut), raw)
+    return finalizeShortContent(cut || '', raw)
   }
 
   const matchedAssistantNode = findExtractContentAssistantTurn(turns, promptHint)
@@ -315,8 +503,9 @@ export function chatgptExtractContent(...args: unknown[]): ChatgptExtractContent
   const plainTitle = pickTitle(raw)
   const styledTitle = stylizeTitle(plainTitle)
 
-  const shortContent =
-    matchedAssistantNode ? pickShortFromDom(matchedAssistantNode, raw) : pickShort(raw)
+  const shortContent = matchedAssistantNode
+    ? extractShortContentFromDom(matchedAssistantNode, raw)
+    : pickShort(raw)
 
   switch (mode) {
     case 'collect':

@@ -671,36 +671,131 @@ export function chatgptScrollHighlightStep4ContentPageScript(...injectArgs: unkn
     return base
   }
 
+  const SHORT_SECTION_HEADER =
+    /(?:^|\n)\s*(?:#{1,6}\s*)?(?:\*\*)?(?:short\s*content|nội dung ngắn|bản ngắn|phiên bản ngắn)(?:\*\*)?\s*[:\-]?\s*(?:\n|$)/i
+  const LONG_SECTION_HEADER =
+    /(?:^|\n)\s*(?:#{1,6}\s*)?(?:\*\*)?(?:full[\s-]*length|long\s*content|nội dung dài|bản đầy đủ|full\s*version)(?:\*\*)?\s*[:\-]?\s*(?:\n|$)/i
+
+  const SHORT_MIN_RATIO = 0.3
+  const SHORT_MAX_SCAN_RATIO = 0.5
+  const SHORT_TO_FULL_MAX_RATIO = SHORT_MAX_SCAN_RATIO
+
+  const capShortToMaxRatioOfFull = (shortText: string, fullText: string, maxRatio = SHORT_TO_FULL_MAX_RATIO) => {
+    const short = (shortText || '').trim()
+    const full = (fullText || '').trim()
+    if (!short || !full) return short
+    const maxLen = Math.floor(full.length * maxRatio)
+    if (short.length <= maxLen) return short
+
+    let cut = short.slice(0, maxLen)
+    const minKeep = Math.floor(maxLen * 0.45)
+
+    const lastPara = cut.lastIndexOf('\n\n')
+    if (lastPara >= minKeep) return cut.slice(0, lastPara).trim()
+
+    const lastLine = cut.lastIndexOf('\n')
+    if (lastLine >= minKeep) return cut.slice(0, lastLine).trim()
+
+    const lastSentence = Math.max(cut.lastIndexOf('.'), cut.lastIndexOf('!'), cut.lastIndexOf('?'))
+    if (lastSentence >= minKeep) return cut.slice(0, lastSentence + 1).trim()
+
+    return cut.trim()
+  }
+
+  const finalizeShortContent = (shortCandidate: string, sourceText: string) =>
+    capShortToMaxRatioOfFull(shortCandidate, pickFullBodyOnly(sourceText), SHORT_TO_FULL_MAX_RATIO)
+
+  const cutAtLastQuestionInShortRange = (normalized: string, minLen: number, maxScan: number): string | null => {
+    const end = Math.min(normalized.length, maxScan)
+    if (end <= minLen) return null
+    const slice = normalized.slice(0, end)
+    const tail = slice.slice(minLen)
+    const lastQ = tail.lastIndexOf('?')
+    if (lastQ < 0) return null
+    return slice.slice(0, minLen + lastQ + 1).trim()
+  }
+
+  const ensureMinShortLength = (
+    candidate: string,
+    normalized: string,
+    minLen: number,
+    maxScan: number,
+  ): string => {
+    const end = Math.min(normalized.length, maxScan)
+    const s = (candidate || '').trim()
+    if (s.length >= minLen) return s.length <= end ? s : normalized.slice(0, end).trim()
+    let extended = normalized.slice(0, end)
+    if (extended.length < minLen) extended = normalized.slice(0, minLen)
+    const para = extended.lastIndexOf('\n\n')
+    if (para >= Math.floor(minLen * 0.9)) return extended.slice(0, para).trim()
+    return extended.trim()
+  }
+
   const pickShort = (text: string) => {
     const full = pickFullBodyOnly(text)
-    const MIN_LEN = 1200
-    const MAX_SCAN = 3600
     if (!full) return ''
-    const searchSpace = full.slice(0, MAX_SCAN)
-    const questionWindow = searchSpace.slice(MIN_LEN)
-    const lastQuestionAfterMin = questionWindow.lastIndexOf('?')
-    if (lastQuestionAfterMin >= 0) {
-      return searchSpace.slice(0, MIN_LEN + lastQuestionAfterMin + 1).trim()
+
+    const normalized = normalize(full)
+    const fullLen = normalized.length
+    const MIN_LEN = Math.max(1, Math.floor(fullLen * SHORT_MIN_RATIO))
+    const MAX_SCAN = Math.max(MIN_LEN, Math.floor(fullLen * SHORT_MAX_SCAN_RATIO))
+    const shortHm = normalized.match(SHORT_SECTION_HEADER)
+    const longHm = normalized.match(LONG_SECTION_HEADER)
+
+    if (shortHm && shortHm.index !== undefined) {
+      const start = shortHm.index + shortHm[0].length
+      let end = normalized.length
+      if (longHm && longHm.index !== undefined && longHm.index > start) {
+        end = longHm.index
+      } else {
+        end = Math.min(normalized.length, start + MAX_SCAN)
+      }
+      const section = normalized.slice(start, end).trim()
+      if (section.length >= MIN_LEN) {
+        const byQuestion = cutAtLastQuestionInShortRange(normalized, MIN_LEN, MAX_SCAN)
+        const body = ensureMinShortLength(byQuestion || section, normalized, MIN_LEN, MAX_SCAN)
+        return finalizeShortContent(body, text)
+      }
     }
 
-    const qIndex = searchSpace.indexOf('?')
-    if (qIndex >= 0) {
-      const untilQ = full.slice(0, qIndex + 1).trim()
-      if (untilQ.length >= MIN_LEN) return untilQ
-      const rest = full.slice(qIndex + 1)
-      const nextBreak = [rest.indexOf('\n'), rest.search(/[.!?]/)]
-        .filter((idx) => idx >= 0)
-        .sort((a, b) => a - b)[0]
-      if (nextBreak !== undefined && nextBreak >= 0) {
-        return full.slice(0, qIndex + 1 + nextBreak + 1).trim()
+    if (longHm && longHm.index !== undefined && longHm.index >= MIN_LEN) {
+      const beforeLong = normalized.slice(0, longHm.index).trim()
+      if (beforeLong.length >= MIN_LEN) {
+        const byQuestion = cutAtLastQuestionInShortRange(normalized, MIN_LEN, MAX_SCAN)
+        const body = ensureMinShortLength(byQuestion || beforeLong, normalized, MIN_LEN, MAX_SCAN)
+        return finalizeShortContent(body, text)
       }
-      return untilQ
     }
+
+    const searchEnd =
+      longHm && longHm.index !== undefined && longHm.index > 0
+        ? Math.min(longHm.index, MAX_SCAN)
+        : MAX_SCAN
+    const searchSpace = normalized.slice(0, searchEnd)
+
+    const byQuestion = cutAtLastQuestionInShortRange(normalized, MIN_LEN, MAX_SCAN)
+    if (byQuestion) {
+      return finalizeShortContent(ensureMinShortLength(byQuestion, normalized, MIN_LEN, MAX_SCAN), text)
+    }
+
     const lastLine = searchSpace.lastIndexOf('\n')
-    if (lastLine >= MIN_LEN) return searchSpace.slice(0, lastLine).trim()
+    if (lastLine >= MIN_LEN) {
+      return finalizeShortContent(
+        ensureMinShortLength(searchSpace.slice(0, lastLine).trim(), normalized, MIN_LEN, MAX_SCAN),
+        text,
+      )
+    }
     const lastSentence = Math.max(searchSpace.lastIndexOf('.'), searchSpace.lastIndexOf('!'))
-    if (lastSentence >= MIN_LEN) return searchSpace.slice(0, lastSentence + 1).trim()
-    return searchSpace.trim()
+    if (lastSentence >= MIN_LEN) {
+      return finalizeShortContent(
+        ensureMinShortLength(searchSpace.slice(0, lastSentence + 1).trim(), normalized, MIN_LEN, MAX_SCAN),
+        text,
+      )
+    }
+    return finalizeShortContent(
+      ensureMinShortLength(searchSpace.trim(), normalized, MIN_LEN, MAX_SCAN),
+      text,
+    )
   }
 
   const findExtractContentAssistantTurn = (): HTMLElement | null => {
@@ -860,21 +955,10 @@ export function chatgptScrollHighlightStep4ContentPageScript(...injectArgs: unkn
 
   const measureCompact = (text: string) => normalize(text).replace(/\s+/g, ' ')
 
-  const blockOverlapsCut = (blockText: string, cut: string) => {
-    const t = measureCompact(blockText)
-    const c = measureCompact(cut)
-    if (!t || !c) return false
-    if (c.includes(t) || t.includes(c)) return true
-    for (const size of [80, 50, 30]) {
-      const head = t.slice(0, Math.min(size, t.length))
-      if (head.length >= 16 && c.includes(head)) return true
-      const tail = t.slice(Math.max(0, t.length - size))
-      if (tail.length >= 16 && c.includes(tail)) return true
-    }
-    return false
-  }
-
-  /** Block highlight cho nội dung ngắn — khớp pickShort (cắt tại ?), đủ độ dài, gồm cả khoảng giữa. */
+  /**
+   * Gom khối DOM khớp đoạn pickShort: đi tuần tự từ sau title, dừng khi đủ cut (có đuôi),
+   * không slice first..last (tránh bôi cả đoạn giữa / sau hook).
+   */
   const collectBlocksForShortHighlight = (
     root: HTMLElement,
     titleHost: HTMLElement,
@@ -882,8 +966,9 @@ export function chatgptScrollHighlightStep4ContentPageScript(...injectArgs: unkn
   ): HTMLElement[] => {
     if (!cut.trim()) return []
     const c = measureCompact(cut)
+    if (!c) return []
     const cutLen = c.length
-    const cutTail = c.slice(Math.max(0, c.length - 80))
+    const cutTailKey = c.slice(-Math.min(48, c.length))
 
     const allBlocks = orderedBlockHosts(root).filter((el) => {
       if (el === titleHost || titleHost.contains(el)) return false
@@ -891,32 +976,30 @@ export function chatgptScrollHighlightStep4ContentPageScript(...injectArgs: unkn
       return true
     })
 
-    let firstIdx = -1
-    let lastIdx = -1
-    for (let i = 0; i < allBlocks.length; i += 1) {
-      if (!blockOverlapsCut(allBlocks[i].innerText || '', cut)) continue
-      if (firstIdx < 0) firstIdx = i
-      lastIdx = i
+    const out: HTMLElement[] = []
+    let joined = ''
+
+    for (const el of allBlocks) {
+      out.push(el)
+      joined = measureCompact(joinBlockTexts(out))
+      const hasTail = cutTailKey.length >= 10 && joined.includes(cutTailKey)
+      if (hasTail && joined.length >= cutLen * 0.88) break
+      if (joined.length >= cutLen && hasTail) break
+      if (joined.length > cutLen * 1.25) break
     }
 
-    let out: HTMLElement[] =
-      firstIdx >= 0 ? allBlocks.slice(firstIdx, lastIdx + 1) : collectBlocksForTextLength(root, cutLen, titleHost)
-
-    out = out.filter((el) => el !== titleHost && !titleHost.contains(el))
-
-    let joined = measureCompact(joinBlockTexts(out))
-    let nextIdx = lastIdx >= 0 ? lastIdx + 1 : out.length > 0 ? allBlocks.indexOf(out[out.length - 1]) + 1 : 0
-
-    while (nextIdx < allBlocks.length && (joined.length < cutLen || !joined.includes(cutTail.slice(-40)))) {
-      const el = allBlocks[nextIdx]
-      if (elementHasVideoToolMention(el)) break
-      if (!out.includes(el)) out.push(el)
-      joined = measureCompact(joinBlockTexts(out))
-      nextIdx += 1
+    while (out.length > 1) {
+      const j = measureCompact(joinBlockTexts(out))
+      const hasTail = cutTailKey.length >= 10 && j.includes(cutTailKey)
+      if (j.length <= cutLen * 1.04 && hasTail) break
+      if (j.length <= cutLen) break
+      const withoutLast = measureCompact(joinBlockTexts(out.slice(0, -1)))
+      if (cutTailKey.length >= 10 && !withoutLast.includes(cutTailKey)) break
+      out.pop()
     }
 
     if (out.length === 0) {
-      out = collectBlocksForTextLength(root, cutLen, titleHost).filter(
+      return collectBlocksForTextLength(root, cutLen, titleHost).filter(
         (el) => el !== titleHost && !titleHost.contains(el),
       )
     }
