@@ -673,7 +673,7 @@ export function chatgptScrollHighlightStep4ContentPageScript(...injectArgs: unkn
 
   const pickShort = (text: string) => {
     const full = pickFullBodyOnly(text)
-    const MIN_LEN = 1000
+    const MIN_LEN = 1200
     const MAX_SCAN = 3600
     if (!full) return ''
     const searchSpace = full.slice(0, MAX_SCAN)

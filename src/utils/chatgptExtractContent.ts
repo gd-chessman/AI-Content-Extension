@@ -185,7 +185,7 @@ export function chatgptExtractContent(...args: unknown[]): ChatgptExtractContent
   const pickFull = (text: string) => pickFullBodyOnly(text).body
   const pickShort = (text: string) => {
     const full = pickFullBodyOnly(text).body
-    const MIN_LEN = 1000
+    const MIN_LEN = 1200
     const MAX_SCAN = 3600
     if (!full) return ''
     const searchSpace = full.slice(0, MAX_SCAN)
