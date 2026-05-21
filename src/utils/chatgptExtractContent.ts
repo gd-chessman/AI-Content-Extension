@@ -12,9 +12,8 @@ export type ChatgptExtractContentCollectedForSheet = {
 }
 
 /**
- * ready: ['ready', promptHint, minPercent?, maxPercent?] → boolean
- * collect: ['collect', promptHint, minPercent?, maxPercent?]
- * clipboard: ['clipboard', kind, promptHint, minPercent?, maxPercent?]
+ * ready / collect / clipboard — cuối args: [mode, min, max]
+ * mode = 'percent' | 'lines'; min/max là % hoặc số dòng. Legacy: chỉ [min%, max%].
  */
 export function chatgptExtractContent(...args: unknown[]): ChatgptExtractContentCollectedForSheet | string | boolean | null {
   const mode = args[0] as string
@@ -184,26 +183,39 @@ export function chatgptExtractContent(...args: unknown[]): ChatgptExtractContent
   /** Nội dung dài: chỉ thân bài (đoạn đầu ngắn coi là tiêu đề thì bỏ, không ghép lại). */
   const pickFull = (text: string) => pickFullBodyOnly(text).body
 
-  const readShortCutRatios = () => {
-    const dMin = 25
-    const dMax = 45
-    let minP = dMin
-    let maxP = dMax
-    const apply = (a: unknown, b: unknown) => {
-      if (typeof a === 'number' && typeof b === 'number' && a >= 1 && b > a && b <= 100) {
-        minP = a
-        maxP = b
+  const parseShortCutFromInject = (): { mode: 'percent' | 'lines'; min: number; max: number } => {
+    const tail = mode === 'clipboard' ? 3 : 2
+    const a = args[tail]
+    const b = args[tail + 1]
+    const c = args[tail + 2]
+    if (a === 'percent' || a === 'lines') {
+      return {
+        mode: a,
+        min: typeof b === 'number' ? b : a === 'lines' ? 45 : 25,
+        max: typeof c === 'number' ? c : a === 'lines' ? 100 : 45,
       }
     }
-    if (mode === 'clipboard') apply(args[3], args[4])
-    else apply(args[2], args[3])
-    return { minRatio: minP / 100, maxRatio: maxP / 100 }
+    if (typeof a === 'number' && typeof b === 'number') {
+      return { mode: 'percent', min: a, max: b }
+    }
+    return { mode: 'percent', min: 25, max: 45 }
   }
-  const { minRatio: SHORT_MIN_RATIO, maxRatio: SHORT_MAX_SCAN_RATIO } = readShortCutRatios()
-  const SHORT_TO_FULL_MAX_RATIO = SHORT_MAX_SCAN_RATIO
 
-  /** Nếu ngắn > 45% dài thì chỉ giữ tối đa 45% độ dài nội dung dài (cắt từ cuối, ưu tiên xuống dòng / câu). */
-  const capShortToMaxRatioOfFull = (shortText: string, fullText: string, maxRatio = SHORT_TO_FULL_MAX_RATIO) => {
+  const capShortToMaxChars = (shortText: string, maxLen: number) => {
+    const short = (shortText || '').trim()
+    if (!short || short.length <= maxLen) return short
+    let cut = short.slice(0, maxLen)
+    const minKeep = Math.floor(maxLen * 0.45)
+    const lastPara = cut.lastIndexOf('\n\n')
+    if (lastPara >= minKeep) return cut.slice(0, lastPara).trim()
+    const lastLine = cut.lastIndexOf('\n')
+    if (lastLine >= minKeep) return cut.slice(0, lastLine).trim()
+    const lastSentence = Math.max(cut.lastIndexOf('.'), cut.lastIndexOf('!'), cut.lastIndexOf('?'))
+    if (lastSentence >= minKeep) return cut.slice(0, lastSentence + 1).trim()
+    return cut.trim()
+  }
+
+  const capShortToMaxRatioOfFull = (shortText: string, fullText: string, maxRatio: number) => {
     const short = (shortText || '').trim()
     const full = (fullText || '').trim()
     if (!short || !full) return short
@@ -225,8 +237,42 @@ export function chatgptExtractContent(...args: unknown[]): ChatgptExtractContent
     return cut.trim()
   }
 
-  const finalizeShortContent = (shortCandidate: string, sourceText: string) =>
-    capShortToMaxRatioOfFull(shortCandidate, pickFull(sourceText), SHORT_TO_FULL_MAX_RATIO)
+  const resolvePickShortBounds = (
+    normalized: string,
+    cfg: { mode: 'percent' | 'lines'; min: number; max: number },
+  ) => {
+    const fullLen = normalized.length
+    if (cfg.mode === 'lines') {
+      const lines = normalized.split('\n')
+      const total = Math.max(1, lines.length)
+      const minL = Math.max(1, Math.min(Math.round(cfg.min), total))
+      const maxL = Math.max(minL, Math.min(Math.round(cfg.max), total))
+      const charEndAtLine = (n: number) => {
+        if (n <= 0) return 0
+        if (n >= lines.length) return normalized.length
+        return lines.slice(0, n).join('\n').length
+      }
+      const MIN_LEN = Math.max(1, charEndAtLine(minL))
+      const MAX_SCAN = Math.max(MIN_LEN, charEndAtLine(maxL))
+      return { MIN_LEN, MAX_SCAN, capByChar: true as const, maxCapLen: MAX_SCAN }
+    }
+    const minP = Math.max(1, Math.min(99, Math.round(cfg.min)))
+    const maxP = Math.max(minP + 1, Math.min(100, Math.round(cfg.max)))
+    const MIN_LEN = Math.max(1, Math.floor(fullLen * (minP / 100)))
+    const MAX_SCAN = Math.max(MIN_LEN, Math.floor(fullLen * (maxP / 100)))
+    return { MIN_LEN, MAX_SCAN, capByChar: false as const, maxRatio: maxP / 100 }
+  }
+
+  const finalizeShortContent = (
+    shortCandidate: string,
+    sourceText: string,
+    bounds: { capByChar: boolean; maxCapLen?: number; maxRatio?: number },
+  ) => {
+    if (bounds.capByChar && bounds.maxCapLen) {
+      return capShortToMaxChars(shortCandidate, bounds.maxCapLen)
+    }
+    return capShortToMaxRatioOfFull(shortCandidate, pickFull(sourceText), bounds.maxRatio ?? 0.45)
+  }
 
   const measureCompact = (text: string) => normalize(text).replace(/\s+/g, ' ')
 
@@ -283,9 +329,9 @@ export function chatgptExtractContent(...args: unknown[]): ChatgptExtractContent
     if (!full) return ''
 
     const normalized = normalize(full)
-    const fullLen = normalized.length
-    const MIN_LEN = Math.max(1, Math.floor(fullLen * SHORT_MIN_RATIO))
-    const MAX_SCAN = Math.max(MIN_LEN, Math.floor(fullLen * SHORT_MAX_SCAN_RATIO))
+    const cutCfg = parseShortCutFromInject()
+    const bounds = resolvePickShortBounds(normalized, cutCfg)
+    const { MIN_LEN, MAX_SCAN } = bounds
     const shortHm = normalized.match(SHORT_SECTION_HEADER)
     const longHm = normalized.match(LONG_SECTION_HEADER)
 
@@ -301,7 +347,7 @@ export function chatgptExtractContent(...args: unknown[]): ChatgptExtractContent
       if (section.length >= MIN_LEN) {
         const byQuestion = cutAtLastQuestionInShortRange(normalized, MIN_LEN, MAX_SCAN)
         const body = ensureMinShortLength(byQuestion || section, normalized, MIN_LEN, MAX_SCAN)
-        return finalizeShortContent(body, text)
+        return finalizeShortContent(body, text, bounds)
       }
     }
 
@@ -310,7 +356,7 @@ export function chatgptExtractContent(...args: unknown[]): ChatgptExtractContent
       if (beforeLong.length >= MIN_LEN) {
         const byQuestion = cutAtLastQuestionInShortRange(normalized, MIN_LEN, MAX_SCAN)
         const body = ensureMinShortLength(byQuestion || beforeLong, normalized, MIN_LEN, MAX_SCAN)
-        return finalizeShortContent(body, text)
+        return finalizeShortContent(body, text, bounds)
       }
     }
 
@@ -322,7 +368,7 @@ export function chatgptExtractContent(...args: unknown[]): ChatgptExtractContent
 
     const byQuestion = cutAtLastQuestionInShortRange(normalized, MIN_LEN, MAX_SCAN)
     if (byQuestion) {
-      return finalizeShortContent(ensureMinShortLength(byQuestion, normalized, MIN_LEN, MAX_SCAN), text)
+      return finalizeShortContent(ensureMinShortLength(byQuestion, normalized, MIN_LEN, MAX_SCAN), text, bounds)
     }
 
     const lastLine = searchSpace.lastIndexOf('\n')
@@ -330,6 +376,7 @@ export function chatgptExtractContent(...args: unknown[]): ChatgptExtractContent
       return finalizeShortContent(
         ensureMinShortLength(searchSpace.slice(0, lastLine).trim(), normalized, MIN_LEN, MAX_SCAN),
         text,
+        bounds,
       )
     }
     const lastSentence = Math.max(searchSpace.lastIndexOf('.'), searchSpace.lastIndexOf('!'))
@@ -337,11 +384,13 @@ export function chatgptExtractContent(...args: unknown[]): ChatgptExtractContent
       return finalizeShortContent(
         ensureMinShortLength(searchSpace.slice(0, lastSentence + 1).trim(), normalized, MIN_LEN, MAX_SCAN),
         text,
+        bounds,
       )
     }
     return finalizeShortContent(
       ensureMinShortLength(searchSpace.trim(), normalized, MIN_LEN, MAX_SCAN),
       text,
+      bounds,
     )
   }
 
@@ -497,8 +546,10 @@ export function chatgptExtractContent(...args: unknown[]): ChatgptExtractContent
     }
 
     const joined = joinBlockTexts(blocks)
-    if (joined) return finalizeShortContent(alignExtractedShortToCut(joined, cut), raw)
-    return finalizeShortContent(cut || '', raw)
+    const bodyNorm = normalize(pickFullBodyOnly(raw).body)
+    const domBounds = resolvePickShortBounds(bodyNorm, parseShortCutFromInject())
+    if (joined) return finalizeShortContent(alignExtractedShortToCut(joined, cut), raw, domBounds)
+    return finalizeShortContent(cut || '', raw, domBounds)
   }
 
   const matchedAssistantNode = findExtractContentAssistantTurn(turns, promptHint)

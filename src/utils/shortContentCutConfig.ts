@@ -1,14 +1,27 @@
-/** % min/max độ dài nội dung ngắn so với thân bài dài — lưu chrome.storage.local, tab Cấu hình hồ sơ. */
+/** Cắt nội dung ngắn ChatGPT — chrome.storage.local, tab Cấu hình hồ sơ. */
+
+export type ShortContentCutMode = 'percent' | 'lines'
+
+export const SHORT_CONTENT_CUT_MODE_STORAGE_KEY = 'shortContentCutMode'
 
 export const SHORT_CONTENT_MIN_PERCENT_STORAGE_KEY = 'shortContentMinPercent'
 export const SHORT_CONTENT_MAX_PERCENT_STORAGE_KEY = 'shortContentMaxPercent'
 
+export const SHORT_CONTENT_MIN_LINES_STORAGE_KEY = 'shortContentMinLines'
+export const SHORT_CONTENT_MAX_LINES_STORAGE_KEY = 'shortContentMaxLines'
+
+export const DEFAULT_SHORT_CONTENT_CUT_MODE: ShortContentCutMode = 'percent'
 export const DEFAULT_SHORT_CONTENT_MIN_PERCENT = 25
 export const DEFAULT_SHORT_CONTENT_MAX_PERCENT = 45
+export const DEFAULT_SHORT_CONTENT_MIN_LINES = 45
+export const DEFAULT_SHORT_CONTENT_MAX_LINES = 100
 
-export type ShortContentCutPercents = {
+export type ShortContentCutConfig = {
+  mode: ShortContentCutMode
   minPercent: number
   maxPercent: number
+  minLines: number
+  maxLines: number
 }
 
 type ChromeStorageLocal = {
@@ -19,10 +32,14 @@ type ChromeStorageLocal = {
 const getChromeStorageLocal = (): ChromeStorageLocal | undefined =>
   (globalThis as { chrome?: { storage?: { local?: ChromeStorageLocal } } }).chrome?.storage?.local
 
+export function normalizeShortContentCutMode(raw: unknown): ShortContentCutMode {
+  return raw === 'lines' ? 'lines' : 'percent'
+}
+
 export function normalizeShortContentCutPercents(
   minPercent: number,
   maxPercent: number,
-): ShortContentCutPercents {
+): { minPercent: number; maxPercent: number } {
   let min = Math.round(Number(minPercent))
   let max = Math.round(Number(maxPercent))
   if (!Number.isFinite(min)) min = DEFAULT_SHORT_CONTENT_MIN_PERCENT
@@ -32,59 +49,88 @@ export function normalizeShortContentCutPercents(
   return { minPercent: min, maxPercent: max }
 }
 
-export function toShortContentCutRatios(percents: ShortContentCutPercents) {
-  return {
-    minRatio: percents.minPercent / 100,
-    maxRatio: percents.maxPercent / 100,
-  }
+export function normalizeShortContentCutLines(
+  minLines: number,
+  maxLines: number,
+): { minLines: number; maxLines: number } {
+  let min = Math.round(Number(minLines))
+  let max = Math.round(Number(maxLines))
+  if (!Number.isFinite(min)) min = DEFAULT_SHORT_CONTENT_MIN_LINES
+  if (!Number.isFinite(max)) max = DEFAULT_SHORT_CONTENT_MAX_LINES
+  min = Math.max(1, min)
+  max = Math.max(min + 1, max)
+  return { minLines: min, maxLines: max }
 }
 
-export function appendShortCutInjectArgs(
-  baseArgs: unknown[],
-  percents: ShortContentCutPercents,
-): unknown[] {
-  return [...baseArgs, percents.minPercent, percents.maxPercent]
+export function normalizeShortContentCutConfig(
+  partial: Partial<ShortContentCutConfig> & { mode?: unknown },
+): ShortContentCutConfig {
+  const mode = normalizeShortContentCutMode(partial.mode)
+  const percents = normalizeShortContentCutPercents(
+    partial.minPercent ?? DEFAULT_SHORT_CONTENT_MIN_PERCENT,
+    partial.maxPercent ?? DEFAULT_SHORT_CONTENT_MAX_PERCENT,
+  )
+  const lines = normalizeShortContentCutLines(
+    partial.minLines ?? DEFAULT_SHORT_CONTENT_MIN_LINES,
+    partial.maxLines ?? DEFAULT_SHORT_CONTENT_MAX_LINES,
+  )
+  return { mode, ...percents, ...lines }
 }
 
-export async function getShortContentCutPercentsFromStorage(
+/** Inject: [..., mode, min, max] — min/max là % hoặc dòng tùy mode. Legacy: [..., min%, max%]. */
+export function appendShortCutInjectArgs(baseArgs: unknown[], config: ShortContentCutConfig): unknown[] {
+  const c = normalizeShortContentCutConfig(config)
+  const min = c.mode === 'lines' ? c.minLines : c.minPercent
+  const max = c.mode === 'lines' ? c.maxLines : c.maxPercent
+  return [...baseArgs, c.mode, min, max]
+}
+
+export async function getShortContentCutConfigFromStorage(
   storageLocal = getChromeStorageLocal(),
-): Promise<ShortContentCutPercents> {
+): Promise<ShortContentCutConfig> {
   if (!storageLocal?.get) {
-    return normalizeShortContentCutPercents(
-      DEFAULT_SHORT_CONTENT_MIN_PERCENT,
-      DEFAULT_SHORT_CONTENT_MAX_PERCENT,
-    )
+    return normalizeShortContentCutConfig({})
   }
 
   return new Promise((resolve) => {
     storageLocal.get!(
-      [SHORT_CONTENT_MIN_PERCENT_STORAGE_KEY, SHORT_CONTENT_MAX_PERCENT_STORAGE_KEY],
+      [
+        SHORT_CONTENT_CUT_MODE_STORAGE_KEY,
+        SHORT_CONTENT_MIN_PERCENT_STORAGE_KEY,
+        SHORT_CONTENT_MAX_PERCENT_STORAGE_KEY,
+        SHORT_CONTENT_MIN_LINES_STORAGE_KEY,
+        SHORT_CONTENT_MAX_LINES_STORAGE_KEY,
+      ],
       (items) => {
-        const minRaw = items[SHORT_CONTENT_MIN_PERCENT_STORAGE_KEY]
-        const maxRaw = items[SHORT_CONTENT_MAX_PERCENT_STORAGE_KEY]
         resolve(
-          normalizeShortContentCutPercents(
-            typeof minRaw === 'number' ? minRaw : DEFAULT_SHORT_CONTENT_MIN_PERCENT,
-            typeof maxRaw === 'number' ? maxRaw : DEFAULT_SHORT_CONTENT_MAX_PERCENT,
-          ),
+          normalizeShortContentCutConfig({
+            mode: items[SHORT_CONTENT_CUT_MODE_STORAGE_KEY],
+            minPercent: items[SHORT_CONTENT_MIN_PERCENT_STORAGE_KEY],
+            maxPercent: items[SHORT_CONTENT_MAX_PERCENT_STORAGE_KEY],
+            minLines: items[SHORT_CONTENT_MIN_LINES_STORAGE_KEY],
+            maxLines: items[SHORT_CONTENT_MAX_LINES_STORAGE_KEY],
+          }),
         )
       },
     )
   })
 }
 
-export async function setShortContentCutPercentsInStorage(
-  percents: ShortContentCutPercents,
+export async function setShortContentCutConfigInStorage(
+  config: ShortContentCutConfig,
   storageLocal = getChromeStorageLocal(),
-): Promise<ShortContentCutPercents> {
-  const normalized = normalizeShortContentCutPercents(percents.minPercent, percents.maxPercent)
+): Promise<ShortContentCutConfig> {
+  const normalized = normalizeShortContentCutConfig(config)
   if (!storageLocal?.set) return normalized
 
   return new Promise((resolve, reject) => {
     storageLocal.set!(
       {
+        [SHORT_CONTENT_CUT_MODE_STORAGE_KEY]: normalized.mode,
         [SHORT_CONTENT_MIN_PERCENT_STORAGE_KEY]: normalized.minPercent,
         [SHORT_CONTENT_MAX_PERCENT_STORAGE_KEY]: normalized.maxPercent,
+        [SHORT_CONTENT_MIN_LINES_STORAGE_KEY]: normalized.minLines,
+        [SHORT_CONTENT_MAX_LINES_STORAGE_KEY]: normalized.maxLines,
       },
       () => {
         const err = (globalThis as { chrome?: { runtime?: { lastError?: { message?: string } } } }).chrome?.runtime
@@ -94,4 +140,21 @@ export async function setShortContentCutPercentsInStorage(
       },
     )
   })
+}
+
+/** @deprecated Dùng getShortContentCutConfigFromStorage */
+export async function getShortContentCutPercentsFromStorage(
+  storageLocal = getChromeStorageLocal(),
+): Promise<{ minPercent: number; maxPercent: number }> {
+  const c = await getShortContentCutConfigFromStorage(storageLocal)
+  return { minPercent: c.minPercent, maxPercent: c.maxPercent }
+}
+
+/** @deprecated Dùng setShortContentCutConfigInStorage */
+export async function setShortContentCutPercentsInStorage(
+  percents: { minPercent: number; maxPercent: number },
+  storageLocal = getChromeStorageLocal(),
+) {
+  const current = await getShortContentCutConfigFromStorage(storageLocal)
+  return setShortContentCutConfigInStorage({ ...current, ...percents }, storageLocal)
 }

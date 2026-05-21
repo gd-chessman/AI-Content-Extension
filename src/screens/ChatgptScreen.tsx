@@ -49,7 +49,7 @@ import { uploadStoryImagesFromDataUrls } from '@/services/CloudinaryUploadServic
 import { chatgptExtractContent } from '@/utils/chatgptExtractContent'
 import {
   appendShortCutInjectArgs,
-  getShortContentCutPercentsFromStorage,
+  getShortContentCutConfigFromStorage,
 } from '@/utils/shortContentCutConfig'
 import {
   chatgptExtractSingleVideoBlockPageScript,
@@ -2086,7 +2086,7 @@ export default function ChatgptScreen() {
     }
 
     const kindLabel = getChatgptStep4ContentKindLabel(kind)
-    const cutPercents = await getShortContentCutPercentsFromStorage(getChrome()?.storage?.local)
+    const cutConfig = await getShortContentCutConfigFromStorage(getChrome()?.storage?.local)
 
     if (copyToClipboard) {
       setStatus(`Đang lấy ${kindLabel} từ «${extractContentStepLabel}»...`)
@@ -2104,7 +2104,7 @@ export default function ChatgptScreen() {
     const readyResult = await extensionChrome.scripting.executeScript({
       target: { tabId: target.id },
       func: chatgptExtractContent as (...args: unknown[]) => unknown,
-      args: appendShortCutInjectArgs(['ready', promptHint], cutPercents),
+      args: appendShortCutInjectArgs(['ready', promptHint], cutConfig),
     })
     const isReady = readyResult?.[0]?.result === true
     setExtractContentReady(isReady)
@@ -2126,14 +2126,14 @@ export default function ChatgptScreen() {
     await extensionChrome.scripting.executeScript({
       target: { tabId: target.id },
       func: chatgptScrollHighlightStep4ContentPageScript as (...args: unknown[]) => unknown,
-      args: appendShortCutInjectArgs([kind, promptHint], cutPercents),
+      args: appendShortCutInjectArgs([kind, promptHint], cutConfig),
     })
     await sleep(copyToClipboard ? 380 : 140)
 
     const result = await extensionChrome.scripting.executeScript({
       target: { tabId: target.id },
       func: chatgptExtractContent as (...args: unknown[]) => unknown,
-      args: appendShortCutInjectArgs(['clipboard', kind, promptHint], cutPercents),
+      args: appendShortCutInjectArgs(['clipboard', kind, promptHint], cutConfig),
     })
 
     const extracted = ((result?.[0]?.result as string | undefined) || '').trim()

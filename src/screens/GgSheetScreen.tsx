@@ -30,11 +30,17 @@ import {
 import { normalizeStyledTextToPlain, stylizeTitleForDisplay } from '@/utils/textSearchNormalize'
 import {
   appendShortCutInjectArgs,
-  getShortContentCutPercentsFromStorage,
+  getShortContentCutConfigFromStorage,
 } from '@/utils/shortContentCutConfig'
 
 type BrowserTab = { id?: number; url?: string; active?: boolean }
 type ExtensionChrome = {
+  storage?: {
+    local?: {
+      get?: (keys: string | string[], callback: (items: Record<string, unknown>) => void) => void
+      set?: (items: Record<string, unknown>, callback?: () => void) => void
+    }
+  }
   tabs?: {
     query?: (
       queryInfo: { url?: string[]; currentWindow?: boolean; active?: boolean },
@@ -414,7 +420,7 @@ export default function GgSheetScreen() {
     }
 
     setStatus('Đang gom dữ liệu từ output bước trích nội dung trong ChatGPT...')
-    const cutPercents = await getShortContentCutPercentsFromStorage(extensionChrome?.storage?.local)
+    const cutConfig = await getShortContentCutConfigFromStorage(extensionChrome?.storage?.local)
     const target = await getOrOpenTab(CHATGPT_PATTERNS, CHATGPT_URL)
     if (!target?.id) {
       setStatus('Không mở được tab ChatGPT để gom dữ liệu.')
@@ -430,14 +436,14 @@ export default function GgSheetScreen() {
     await extensionChrome.scripting.executeScript({
       target: { tabId: target.id },
       func: chatgptScrollHighlightStep4ContentPageScript as (...args: unknown[]) => unknown,
-      args: appendShortCutInjectArgs(['collect', promptHint], cutPercents),
+      args: appendShortCutInjectArgs(['collect', promptHint], cutConfig),
     })
     await sleep(500)
 
     const result = await extensionChrome.scripting.executeScript({
       target: { tabId: target.id },
       func: chatgptExtractContent as (...args: unknown[]) => unknown,
-      args: appendShortCutInjectArgs(['collect', promptHint], cutPercents),
+      args: appendShortCutInjectArgs(['collect', promptHint], cutConfig),
     })
 
     const extracted = (result?.[0]?.result as CollectedData | null) || null

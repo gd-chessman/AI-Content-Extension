@@ -464,7 +464,7 @@ export function chatgptScrollToVideoBlockPageScript(videoPart: number): boolean 
   return true
 }
 
-/** Cuộn + khung sáng bước trích nội dung: args[0]=kind, args[1]=promptHint, args[2]=minPercent?, args[3]=maxPercent?. */
+/** Cuộn + khung sáng: args[0]=kind, args[1]=promptHint, args[2]=mode, args[3]=min, args[4]=max (% hoặc dòng). */
 export function chatgptScrollHighlightStep4ContentPageScript(...injectArgs: unknown[]): boolean {
   const kind = String(injectArgs[0] ?? '')
   const promptHint =
@@ -473,18 +473,21 @@ export function chatgptScrollHighlightStep4ContentPageScript(...injectArgs: unkn
       : typeof injectArgs[2] === 'string'
         ? injectArgs[2]
         : ''
-  const readShortCutRatiosFromInject = () => {
-    const dMin = 25
-    const dMax = 45
-    let minP = dMin
-    let maxP = dMax
+  const parseShortCutFromInject = (): { mode: 'percent' | 'lines'; min: number; max: number } => {
     const a = injectArgs[2]
     const b = injectArgs[3]
-    if (typeof a === 'number' && typeof b === 'number' && a >= 1 && b > a && b <= 100) {
-      minP = a
-      maxP = b
+    const c = injectArgs[4]
+    if (a === 'percent' || a === 'lines') {
+      return {
+        mode: a,
+        min: typeof b === 'number' ? b : a === 'lines' ? 45 : 25,
+        max: typeof c === 'number' ? c : a === 'lines' ? 100 : 45,
+      }
     }
-    return { minRatio: minP / 100, maxRatio: maxP / 100 }
+    if (typeof a === 'number' && typeof b === 'number') {
+      return { mode: 'percent', min: a, max: b }
+    }
+    return { mode: 'percent', min: 25, max: 45 }
   }
   const extractKind = kind as
     | 'title_plain'
@@ -689,10 +692,21 @@ export function chatgptScrollHighlightStep4ContentPageScript(...injectArgs: unkn
   const LONG_SECTION_HEADER =
     /(?:^|\n)\s*(?:#{1,6}\s*)?(?:\*\*)?(?:full[\s-]*length|long\s*content|nội dung dài|bản đầy đủ|full\s*version)(?:\*\*)?\s*[:\-]?\s*(?:\n|$)/i
 
-  const { minRatio: SHORT_MIN_RATIO, maxRatio: SHORT_MAX_SCAN_RATIO } = readShortCutRatiosFromInject()
-  const SHORT_TO_FULL_MAX_RATIO = SHORT_MAX_SCAN_RATIO
+  const capShortToMaxChars = (shortText: string, maxLen: number) => {
+    const short = (shortText || '').trim()
+    if (!short || short.length <= maxLen) return short
+    let cut = short.slice(0, maxLen)
+    const minKeep = Math.floor(maxLen * 0.45)
+    const lastPara = cut.lastIndexOf('\n\n')
+    if (lastPara >= minKeep) return cut.slice(0, lastPara).trim()
+    const lastLine = cut.lastIndexOf('\n')
+    if (lastLine >= minKeep) return cut.slice(0, lastLine).trim()
+    const lastSentence = Math.max(cut.lastIndexOf('.'), cut.lastIndexOf('!'), cut.lastIndexOf('?'))
+    if (lastSentence >= minKeep) return cut.slice(0, lastSentence + 1).trim()
+    return cut.trim()
+  }
 
-  const capShortToMaxRatioOfFull = (shortText: string, fullText: string, maxRatio = SHORT_TO_FULL_MAX_RATIO) => {
+  const capShortToMaxRatioOfFull = (shortText: string, fullText: string, maxRatio: number) => {
     const short = (shortText || '').trim()
     const full = (fullText || '').trim()
     if (!short || !full) return short
@@ -714,8 +728,42 @@ export function chatgptScrollHighlightStep4ContentPageScript(...injectArgs: unkn
     return cut.trim()
   }
 
-  const finalizeShortContent = (shortCandidate: string, sourceText: string) =>
-    capShortToMaxRatioOfFull(shortCandidate, pickFullBodyOnly(sourceText), SHORT_TO_FULL_MAX_RATIO)
+  const resolvePickShortBounds = (
+    normalized: string,
+    cfg: { mode: 'percent' | 'lines'; min: number; max: number },
+  ) => {
+    const fullLen = normalized.length
+    if (cfg.mode === 'lines') {
+      const lines = normalized.split('\n')
+      const total = Math.max(1, lines.length)
+      const minL = Math.max(1, Math.min(Math.round(cfg.min), total))
+      const maxL = Math.max(minL, Math.min(Math.round(cfg.max), total))
+      const charEndAtLine = (n: number) => {
+        if (n <= 0) return 0
+        if (n >= lines.length) return normalized.length
+        return lines.slice(0, n).join('\n').length
+      }
+      const MIN_LEN = Math.max(1, charEndAtLine(minL))
+      const MAX_SCAN = Math.max(MIN_LEN, charEndAtLine(maxL))
+      return { MIN_LEN, MAX_SCAN, capByChar: true as const, maxCapLen: MAX_SCAN }
+    }
+    const minP = Math.max(1, Math.min(99, Math.round(cfg.min)))
+    const maxP = Math.max(minP + 1, Math.min(100, Math.round(cfg.max)))
+    const MIN_LEN = Math.max(1, Math.floor(fullLen * (minP / 100)))
+    const MAX_SCAN = Math.max(MIN_LEN, Math.floor(fullLen * (maxP / 100)))
+    return { MIN_LEN, MAX_SCAN, capByChar: false as const, maxRatio: maxP / 100 }
+  }
+
+  const finalizeShortContent = (
+    shortCandidate: string,
+    sourceText: string,
+    bounds: { capByChar: boolean; maxCapLen?: number; maxRatio?: number },
+  ) => {
+    if (bounds.capByChar && bounds.maxCapLen) {
+      return capShortToMaxChars(shortCandidate, bounds.maxCapLen)
+    }
+    return capShortToMaxRatioOfFull(shortCandidate, pickFullBodyOnly(sourceText), bounds.maxRatio ?? 0.45)
+  }
 
   const cutAtLastQuestionInShortRange = (normalized: string, minLen: number, maxScan: number): string | null => {
     const end = Math.min(normalized.length, maxScan)
@@ -748,9 +796,9 @@ export function chatgptScrollHighlightStep4ContentPageScript(...injectArgs: unkn
     if (!full) return ''
 
     const normalized = normalize(full)
-    const fullLen = normalized.length
-    const MIN_LEN = Math.max(1, Math.floor(fullLen * SHORT_MIN_RATIO))
-    const MAX_SCAN = Math.max(MIN_LEN, Math.floor(fullLen * SHORT_MAX_SCAN_RATIO))
+    const cutCfg = parseShortCutFromInject()
+    const bounds = resolvePickShortBounds(normalized, cutCfg)
+    const { MIN_LEN, MAX_SCAN } = bounds
     const shortHm = normalized.match(SHORT_SECTION_HEADER)
     const longHm = normalized.match(LONG_SECTION_HEADER)
 
@@ -766,7 +814,7 @@ export function chatgptScrollHighlightStep4ContentPageScript(...injectArgs: unkn
       if (section.length >= MIN_LEN) {
         const byQuestion = cutAtLastQuestionInShortRange(normalized, MIN_LEN, MAX_SCAN)
         const body = ensureMinShortLength(byQuestion || section, normalized, MIN_LEN, MAX_SCAN)
-        return finalizeShortContent(body, text)
+        return finalizeShortContent(body, text, bounds)
       }
     }
 
@@ -775,7 +823,7 @@ export function chatgptScrollHighlightStep4ContentPageScript(...injectArgs: unkn
       if (beforeLong.length >= MIN_LEN) {
         const byQuestion = cutAtLastQuestionInShortRange(normalized, MIN_LEN, MAX_SCAN)
         const body = ensureMinShortLength(byQuestion || beforeLong, normalized, MIN_LEN, MAX_SCAN)
-        return finalizeShortContent(body, text)
+        return finalizeShortContent(body, text, bounds)
       }
     }
 
@@ -787,7 +835,7 @@ export function chatgptScrollHighlightStep4ContentPageScript(...injectArgs: unkn
 
     const byQuestion = cutAtLastQuestionInShortRange(normalized, MIN_LEN, MAX_SCAN)
     if (byQuestion) {
-      return finalizeShortContent(ensureMinShortLength(byQuestion, normalized, MIN_LEN, MAX_SCAN), text)
+      return finalizeShortContent(ensureMinShortLength(byQuestion, normalized, MIN_LEN, MAX_SCAN), text, bounds)
     }
 
     const lastLine = searchSpace.lastIndexOf('\n')
@@ -795,6 +843,7 @@ export function chatgptScrollHighlightStep4ContentPageScript(...injectArgs: unkn
       return finalizeShortContent(
         ensureMinShortLength(searchSpace.slice(0, lastLine).trim(), normalized, MIN_LEN, MAX_SCAN),
         text,
+        bounds,
       )
     }
     const lastSentence = Math.max(searchSpace.lastIndexOf('.'), searchSpace.lastIndexOf('!'))
@@ -802,11 +851,13 @@ export function chatgptScrollHighlightStep4ContentPageScript(...injectArgs: unkn
       return finalizeShortContent(
         ensureMinShortLength(searchSpace.slice(0, lastSentence + 1).trim(), normalized, MIN_LEN, MAX_SCAN),
         text,
+        bounds,
       )
     }
     return finalizeShortContent(
       ensureMinShortLength(searchSpace.trim(), normalized, MIN_LEN, MAX_SCAN),
       text,
+      bounds,
     )
   }
 

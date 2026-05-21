@@ -13,11 +13,15 @@ import {
   WORKSPACE_STORY_SUBDIRS,
 } from '@/utils/localWorkspacePersistence'
 import {
+  DEFAULT_SHORT_CONTENT_CUT_MODE,
+  DEFAULT_SHORT_CONTENT_MAX_LINES,
   DEFAULT_SHORT_CONTENT_MAX_PERCENT,
+  DEFAULT_SHORT_CONTENT_MIN_LINES,
   DEFAULT_SHORT_CONTENT_MIN_PERCENT,
-  getShortContentCutPercentsFromStorage,
-  normalizeShortContentCutPercents,
-  setShortContentCutPercentsInStorage,
+  getShortContentCutConfigFromStorage,
+  normalizeShortContentCutConfig,
+  setShortContentCutConfigInStorage,
+  type ShortContentCutMode,
 } from '@/utils/shortContentCutConfig'
 
 type ChromeStorageLocal = {
@@ -37,8 +41,11 @@ export default function ProfileScreen({ onLogout }: { onLogout: () => void }) {
   const [workspaceRootLabel, setWorkspaceRootLabel] = useState('')
   const [storiesFolderInput, setStoriesFolderInput] = useState(DEFAULT_STORIES_FOLDER_SEGMENT)
   const [isSavingWorkspaceStories, setIsSavingWorkspaceStories] = useState(false)
+  const [shortCutMode, setShortCutMode] = useState<ShortContentCutMode>(DEFAULT_SHORT_CONTENT_CUT_MODE)
   const [shortMinPercentInput, setShortMinPercentInput] = useState(String(DEFAULT_SHORT_CONTENT_MIN_PERCENT))
   const [shortMaxPercentInput, setShortMaxPercentInput] = useState(String(DEFAULT_SHORT_CONTENT_MAX_PERCENT))
+  const [shortMinLinesInput, setShortMinLinesInput] = useState(String(DEFAULT_SHORT_CONTENT_MIN_LINES))
+  const [shortMaxLinesInput, setShortMaxLinesInput] = useState(String(DEFAULT_SHORT_CONTENT_MAX_LINES))
   const [isSavingShortCutConfig, setIsSavingShortCutConfig] = useState(false)
   const [isLoggingOut, setIsLoggingOut] = useState(false)
   const [isLoadingProfile, setIsLoadingProfile] = useState(true)
@@ -200,12 +207,18 @@ export default function ProfileScreen({ onLogout }: { onLogout: () => void }) {
         setStoriesFolderInput(DEFAULT_STORIES_FOLDER_SEGMENT)
       }
       try {
-        const percents = await getShortContentCutPercentsFromStorage(getChrome()?.storage?.local)
-        setShortMinPercentInput(String(percents.minPercent))
-        setShortMaxPercentInput(String(percents.maxPercent))
+        const cfg = await getShortContentCutConfigFromStorage(getChrome()?.storage?.local)
+        setShortCutMode(cfg.mode)
+        setShortMinPercentInput(String(cfg.minPercent))
+        setShortMaxPercentInput(String(cfg.maxPercent))
+        setShortMinLinesInput(String(cfg.minLines))
+        setShortMaxLinesInput(String(cfg.maxLines))
       } catch {
+        setShortCutMode(DEFAULT_SHORT_CONTENT_CUT_MODE)
         setShortMinPercentInput(String(DEFAULT_SHORT_CONTENT_MIN_PERCENT))
         setShortMaxPercentInput(String(DEFAULT_SHORT_CONTENT_MAX_PERCENT))
+        setShortMinLinesInput(String(DEFAULT_SHORT_CONTENT_MIN_LINES))
+        setShortMaxLinesInput(String(DEFAULT_SHORT_CONTENT_MAX_LINES))
       }
     })()
   }, [activeTab])
@@ -244,16 +257,26 @@ export default function ProfileScreen({ onLogout }: { onLogout: () => void }) {
     if (isSavingShortCutConfig) return
     setIsSavingShortCutConfig(true)
     try {
-      const saved = await setShortContentCutPercentsInStorage(
-        normalizeShortContentCutPercents(
-          Number(shortMinPercentInput),
-          Number(shortMaxPercentInput),
-        ),
+      const saved = await setShortContentCutConfigInStorage(
+        normalizeShortContentCutConfig({
+          mode: shortCutMode,
+          minPercent: Number(shortMinPercentInput),
+          maxPercent: Number(shortMaxPercentInput),
+          minLines: Number(shortMinLinesInput),
+          maxLines: Number(shortMaxLinesInput),
+        }),
         getChrome()?.storage?.local,
       )
+      setShortCutMode(saved.mode)
       setShortMinPercentInput(String(saved.minPercent))
       setShortMaxPercentInput(String(saved.maxPercent))
-      setStatus(`Đã lưu cắt nội dung ngắn: ${saved.minPercent}% – ${saved.maxPercent}% (so với nội dung dài).`)
+      setShortMinLinesInput(String(saved.minLines))
+      setShortMaxLinesInput(String(saved.maxLines))
+      const rangeLabel =
+        saved.mode === 'lines'
+          ? `${saved.minLines} – ${saved.maxLines} dòng`
+          : `${saved.minPercent}% – ${saved.maxPercent}% thân bài dài`
+      setStatus(`Đã lưu cắt nội dung ngắn (${saved.mode === 'lines' ? 'theo dòng' : 'theo %'}): ${rangeLabel}.`)
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Lỗi không xác định'
       setStatus(`Không lưu được cấu hình cắt nội dung ngắn: ${msg}`)
@@ -327,9 +350,9 @@ export default function ProfileScreen({ onLogout }: { onLogout: () => void }) {
           </div>
         </aside>
 
-        <div className="min-h-0 rounded-xl border border-white/10 bg-black/25 p-3 text-xs text-slate-300">
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-white/10 bg-black/25 text-xs text-slate-300">
         {activeTab === 'overview' ? (
-          <div className="space-y-2">
+          <div className="min-h-0 flex-1 space-y-2 overflow-y-auto overscroll-contain p-3 pr-2">
             <p className="font-semibold text-slate-100">Tổng quan</p>
             <p>Hiển thị thông tin tài khoản và trạng thái sử dụng extension.</p>
             <div className="mt-3 rounded-xl border border-white/10 bg-slate-900/60 p-3">
@@ -472,7 +495,7 @@ export default function ProfileScreen({ onLogout }: { onLogout: () => void }) {
             </div>
           </div>
         ) : (
-          <div className="min-h-0 space-y-3 overflow-y-auto pr-0.5">
+          <div className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain p-3 pr-2">
             <div>
               <p className="font-semibold text-slate-100">Cấu hình lưu trữ cục bộ</p>
               <p className="mt-1 text-[11px] leading-relaxed text-slate-400">
@@ -515,47 +538,6 @@ export default function ProfileScreen({ onLogout }: { onLogout: () => void }) {
             </div>
 
             <div className="rounded-xl border border-white/10 bg-slate-900/50 p-3">
-              <p className="mb-1 text-[11px] font-semibold text-slate-100">Cắt nội dung ngắn (ChatGPT)</p>
-              <p className="mb-2 text-[10px] leading-relaxed text-slate-400">
-                Phần trăm độ dài so với thân bài dài khi trích / highlight bước 4. Mặc định{' '}
-                {DEFAULT_SHORT_CONTENT_MIN_PERCENT}% – {DEFAULT_SHORT_CONTENT_MAX_PERCENT}%.
-              </p>
-              <div className="flex flex-wrap items-center gap-2">
-                <label className="flex min-w-[88px] flex-1 items-center gap-1.5 text-[10px] text-slate-400">
-                  Min %
-                  <input
-                    type="number"
-                    min={1}
-                    max={98}
-                    value={shortMinPercentInput}
-                    onChange={(event) => setShortMinPercentInput(event.target.value)}
-                    className="w-full min-w-0 rounded-md border border-white/10 bg-slate-800/80 px-2 py-1.5 text-[11px] text-slate-100 outline-none"
-                  />
-                </label>
-                <label className="flex min-w-[88px] flex-1 items-center gap-1.5 text-[10px] text-slate-400">
-                  Max %
-                  <input
-                    type="number"
-                    min={2}
-                    max={100}
-                    value={shortMaxPercentInput}
-                    onChange={(event) => setShortMaxPercentInput(event.target.value)}
-                    className="w-full min-w-0 rounded-md border border-white/10 bg-slate-800/80 px-2 py-1.5 text-[11px] text-slate-100 outline-none"
-                  />
-                </label>
-                <button
-                  type="button"
-                  onClick={() => void saveShortContentCutConfig()}
-                  disabled={isSavingShortCutConfig}
-                  className="inline-flex shrink-0 cursor-pointer items-center gap-1 rounded-md bg-violet-500/25 px-2 py-1.5 text-[11px] text-violet-100 transition hover:bg-violet-500/35 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {isSavingShortCutConfig ? <span className="animate-pulse">…</span> : <FiSave className="h-3.5 w-3.5" />}
-                  Lưu
-                </button>
-              </div>
-            </div>
-
-            <div className="rounded-xl border border-white/10 bg-slate-900/50 p-3">
               <p className="mb-1 text-[11px] font-semibold text-slate-100">Thư mục chứa các story</p>
               <p className="mb-2 text-[10px] text-slate-400">
                 Tên thư mục con ngay dưới thư mục gốc (mặc định <code className="text-slate-200">stories</code>). Mỗi
@@ -577,6 +559,102 @@ export default function ProfileScreen({ onLogout }: { onLogout: () => void }) {
                   className="inline-flex shrink-0 cursor-pointer items-center gap-1 rounded-md bg-blue-500/25 px-2 py-1.5 text-[11px] text-blue-100 transition hover:bg-blue-500/35 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {isSavingWorkspaceStories ? <span className="animate-pulse">…</span> : <FiSave className="h-3.5 w-3.5" />}
+                  Lưu
+                </button>
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-white/10 bg-slate-900/50 p-3">
+              <p className="mb-1 text-[11px] font-semibold text-slate-100">Cắt nội dung ngắn (ChatGPT)</p>
+              <p className="mb-2 text-[10px] leading-relaxed text-slate-400">
+                Hai cơ chế: phần trăm thân bài dài (mặc định{' '}
+                {DEFAULT_SHORT_CONTENT_MIN_PERCENT}–{DEFAULT_SHORT_CONTENT_MAX_PERCENT}%) hoặc số dòng (
+                {DEFAULT_SHORT_CONTENT_MIN_LINES}–{DEFAULT_SHORT_CONTENT_MAX_LINES} dòng). Vẫn ưu tiên cắt tại dấu ? trong
+                khoảng min–max.
+              </p>
+              <div className="mb-2 flex flex-wrap gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setShortCutMode('percent')}
+                  className={`cursor-pointer rounded-md px-2 py-1 text-[10px] transition ${
+                    shortCutMode === 'percent'
+                      ? 'bg-violet-500/30 text-violet-100'
+                      : 'bg-white/5 text-slate-400 hover:bg-white/10'
+                  }`}
+                >
+                  Theo %
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShortCutMode('lines')}
+                  className={`cursor-pointer rounded-md px-2 py-1 text-[10px] transition ${
+                    shortCutMode === 'lines'
+                      ? 'bg-violet-500/30 text-violet-100'
+                      : 'bg-white/5 text-slate-400 hover:bg-white/10'
+                  }`}
+                >
+                  Theo dòng
+                </button>
+              </div>
+              {shortCutMode === 'percent' ? (
+                <div className="flex flex-wrap items-center gap-2">
+                  <label className="flex min-w-[88px] flex-1 items-center gap-1.5 text-[10px] text-slate-400">
+                    Min %
+                    <input
+                      type="number"
+                      min={1}
+                      max={98}
+                      value={shortMinPercentInput}
+                      onChange={(event) => setShortMinPercentInput(event.target.value)}
+                      className="w-full min-w-0 rounded-md border border-white/10 bg-slate-800/80 px-2 py-1.5 text-[11px] text-slate-100 outline-none"
+                    />
+                  </label>
+                  <label className="flex min-w-[88px] flex-1 items-center gap-1.5 text-[10px] text-slate-400">
+                    Max %
+                    <input
+                      type="number"
+                      min={2}
+                      max={100}
+                      value={shortMaxPercentInput}
+                      onChange={(event) => setShortMaxPercentInput(event.target.value)}
+                      className="w-full min-w-0 rounded-md border border-white/10 bg-slate-800/80 px-2 py-1.5 text-[11px] text-slate-100 outline-none"
+                    />
+                  </label>
+                </div>
+              ) : (
+                <div className="flex flex-wrap items-center gap-2">
+                  <label className="flex min-w-[88px] flex-1 items-center gap-1.5 text-[10px] text-slate-400">
+                    Min dòng
+                    <input
+                      type="number"
+                      min={1}
+                      max={9999}
+                      value={shortMinLinesInput}
+                      onChange={(event) => setShortMinLinesInput(event.target.value)}
+                      className="w-full min-w-0 rounded-md border border-white/10 bg-slate-800/80 px-2 py-1.5 text-[11px] text-slate-100 outline-none"
+                    />
+                  </label>
+                  <label className="flex min-w-[88px] flex-1 items-center gap-1.5 text-[10px] text-slate-400">
+                    Max dòng
+                    <input
+                      type="number"
+                      min={2}
+                      max={9999}
+                      value={shortMaxLinesInput}
+                      onChange={(event) => setShortMaxLinesInput(event.target.value)}
+                      className="w-full min-w-0 rounded-md border border-white/10 bg-slate-800/80 px-2 py-1.5 text-[11px] text-slate-100 outline-none"
+                    />
+                  </label>
+                </div>
+              )}
+              <div className="mt-2">
+                <button
+                  type="button"
+                  onClick={() => void saveShortContentCutConfig()}
+                  disabled={isSavingShortCutConfig}
+                  className="inline-flex shrink-0 cursor-pointer items-center gap-1 rounded-md bg-violet-500/25 px-2 py-1.5 text-[11px] text-violet-100 transition hover:bg-violet-500/35 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {isSavingShortCutConfig ? <span className="animate-pulse">…</span> : <FiSave className="h-3.5 w-3.5" />}
                   Lưu
                 </button>
               </div>
