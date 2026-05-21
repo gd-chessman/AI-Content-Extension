@@ -62,6 +62,29 @@ export function normalizeShortContentCutLines(
   return { minLines: min, maxLines: max }
 }
 
+/** Cùng quy tắc `resolvePickShortBounds` khi mode = lines: trim rồi `split('\\n')`. */
+export function splitTextLinesLikeShortContentCut(value: string): string[] {
+  const normalized = (value || '').replace(/\r/g, '').trim()
+  if (!normalized) return []
+  return normalized.split('\n')
+}
+
+export function countTextLinesLikeShortContentCut(value: string): number {
+  return splitTextLinesLikeShortContentCut(value).length
+}
+
+/** Nhãn dòng trên GG Sheet — khớp cấu hình cắt ChatGPT. */
+export function formatShortContentLineCountLabel(
+  lineCount: number,
+  config: ShortContentCutConfig,
+): string {
+  if (lineCount <= 0) return ''
+  if (config.mode === 'lines') {
+    return `${lineCount} dòng (cấu hình ${config.minLines}–${config.maxLines})`
+  }
+  return `${lineCount} dòng (${config.minPercent}–${config.maxPercent}% thân bài)`
+}
+
 export function normalizeShortContentCutConfig(
   partial: Partial<ShortContentCutConfig> & { mode?: unknown },
 ): ShortContentCutConfig {

@@ -30,7 +30,12 @@ import {
 import { normalizeStyledTextToPlain, stylizeTitleForDisplay } from '@/utils/textSearchNormalize'
 import {
   appendShortCutInjectArgs,
+  countTextLinesLikeShortContentCut,
+  formatShortContentLineCountLabel,
   getShortContentCutConfigFromStorage,
+  normalizeShortContentCutConfig,
+  splitTextLinesLikeShortContentCut,
+  type ShortContentCutConfig,
 } from '@/utils/shortContentCutConfig'
 
 type BrowserTab = { id?: number; url?: string; active?: boolean }
@@ -64,23 +69,9 @@ type CollectedData = {
   fullContent: string
 }
 
-const countContentLines = (value: string) => {
-  const trimmed = (value || '').trim()
-  if (!trimmed) return 0
-  return trimmed
-    .replace(/\r/g, '')
-    .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean).length
-}
-
-/** Rút gọn preview modal: đầu + ... + cuối khi quá nhiều dòng. */
+/** Rút gọn preview modal: đầu + ... + cuối khi quá nhiều dòng (cùng quy tắc đếm dòng ChatGPT). */
 const formatPreviewLines = (value: string, maxLines: number) => {
-  const lines = (value || '')
-    .replace(/\r/g, '')
-    .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean)
+  const lines = splitTextLinesLikeShortContentCut(value)
 
   if (lines.length <= maxLines) return lines.join('\n')
   if (maxLines <= 2) return `${lines[0] || ''}\n...`
@@ -188,12 +179,26 @@ export default function GgSheetScreen() {
   const [showPreviewModal, setShowPreviewModal] = useState(false)
   const [extractRowInput, setExtractRowInput] = useState('')
   const [isExtracting, setIsExtracting] = useState(false)
+  const [shortContentCutConfig, setShortContentCutConfig] = useState<ShortContentCutConfig>(() =>
+    normalizeShortContentCutConfig({}),
+  )
   const sheetId = extractSheetId(sheetUrl)
   const isSheetConfigured = Boolean(sheetId)
+
+  const shortContentLineCountLabel = data.shortContent.trim()
+    ? formatShortContentLineCountLabel(
+        countTextLinesLikeShortContentCut(data.shortContent),
+        shortContentCutConfig,
+      )
+    : ''
 
   useEffect(() => {
     const loadSettings = async () => {
       try {
+        const extensionChrome = getChrome()
+        const cutConfig = await getShortContentCutConfigFromStorage(extensionChrome?.storage?.local)
+        setShortContentCutConfig(cutConfig)
+
         const settings = await getMyGgSheetSetting()
         const configured = (settings?.ggSheetPath || '').trim()
         setSheetPathInput(configured)
@@ -421,6 +426,7 @@ export default function GgSheetScreen() {
 
     setStatus('Đang gom dữ liệu từ output bước trích nội dung trong ChatGPT...')
     const cutConfig = await getShortContentCutConfigFromStorage(extensionChrome?.storage?.local)
+    setShortContentCutConfig(cutConfig)
     const target = await getOrOpenTab(CHATGPT_PATTERNS, CHATGPT_URL)
     if (!target?.id) {
       setStatus('Không mở được tab ChatGPT để gom dữ liệu.')
@@ -788,9 +794,9 @@ export default function GgSheetScreen() {
           <div className="flex items-center justify-between gap-2">
             <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">
               Nội dung ngắn
-              {data.shortContent.trim() ? (
+              {shortContentLineCountLabel ? (
                 <span className="ml-1.5 font-normal normal-case text-slate-500">
-                  ({countContentLines(data.shortContent)} dòng)
+                  ({shortContentLineCountLabel})
                 </span>
               ) : null}
             </p>
@@ -804,7 +810,7 @@ export default function GgSheetScreen() {
               Nội dung dài (link bài báo)
               {data.fullContent.trim() ? (
                 <span className="ml-1.5 font-normal normal-case text-slate-500">
-                  ({countContentLines(data.fullContent)} dòng)
+                  ({countTextLinesLikeShortContentCut(data.fullContent)} dòng ChatGPT)
                 </span>
               ) : null}
             </p>
