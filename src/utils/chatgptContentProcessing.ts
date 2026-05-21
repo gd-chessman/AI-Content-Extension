@@ -1905,3 +1905,33 @@ export function chatgptExtractSingleVideoBlockPageScript(): string {
 
   return compactLines(stripVideoToolMentionSentences(stripThesePromptsOptimizedAppendix(block)))
 }
+
+export type ChatgptVideoProbeMode = 'dual_parts' | 'single_block'
+
+export type ChatgptVideoProbeResult = {
+  ready: boolean
+  assistantLen: number
+}
+
+/** Kiểm tra bubble assistant mới nhất đã có marker VIDEO (trước khi scroll/trích). */
+export function chatgptProbeLatestAssistantVideoReadyPageScript(
+  modeRaw: string,
+): ChatgptVideoProbeResult {
+  const mode: ChatgptVideoProbeMode = modeRaw === 'dual_parts' ? 'dual_parts' : 'single_block'
+  const assistants = Array.from(
+    document.querySelectorAll<HTMLElement>('[data-message-author-role="assistant"]'),
+  ).filter((el) => Boolean((el.innerText || '').trim()))
+  const text = (assistants[assistants.length - 1]?.innerText || '').replace(/\r/g, '')
+  if (!text.trim()) return { ready: false, assistantLen: 0 }
+
+  const hasVideo1 = /(?:🎬|🎥)?\s*VIDEO\s*1\b/i.test(text)
+  const hasVideo2 = /(?:🎬|🎥)?\s*VIDEO\s*2\b/i.test(text)
+  const hasDual = hasVideo1 && hasVideo2
+  const hasSinglePackage =
+    /VIDEO\s+PROMPT\s*:/i.test(text) ||
+    /EXACTLY\s+1\s+VIDEO\s+PROMPT/i.test(text) ||
+    (/(?:^|\n)\s*(?:🎬|🎥)?\s*VIDEO\b/i.test(text) && !/VIDEO\s*[12]\b/i.test(text))
+
+  const ready = mode === 'dual_parts' ? hasDual : hasSinglePackage || hasVideo1 || hasDual
+  return { ready, assistantLen: text.length }
+}

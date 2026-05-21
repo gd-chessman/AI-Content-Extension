@@ -141,7 +141,7 @@ export async function chatgptInjectPromptPageScript(message: string, shouldSend:
 export async function chatgptWaitAssistantResponseDonePageScript(maxWaitMs: number): Promise<ChatgptWaitAssistantResponsePageResult> {
   const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
   const pollMs = 650
-  const stableMs = 2200
+  const stableMs = 3000
   const startedAt = Date.now()
 
   const isVisible = (el: Element | null): el is HTMLElement => {

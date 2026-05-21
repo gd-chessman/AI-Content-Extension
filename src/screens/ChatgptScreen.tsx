@@ -54,6 +54,7 @@ import {
 import {
   chatgptExtractSingleVideoBlockPageScript,
   chatgptExtractVideoBlockPageScript,
+  chatgptProbeLatestAssistantVideoReadyPageScript,
   chatgptScrollToSingleVideoBlockPageScript,
   chatgptScrollToVideoBlockPageScript,
   chatgptWarmThreadScrollContainersPageScript,
@@ -1041,6 +1042,62 @@ export default function ChatgptScreen() {
     await sleep(100)
   }
 
+  const prepareChatgptTabForVideoRead = async (tabId: number, options?: { heavy?: boolean }) => {
+    const extensionChrome = getChrome()
+    const exec = extensionChrome?.scripting?.executeScript
+    if (!extensionChrome?.tabs?.update || typeof exec !== 'function') return
+    const heavy = Boolean(options?.heavy)
+    await updateTab(tabId)
+    await sleep(heavy ? 400 : 280)
+    await exec({
+      target: { tabId },
+      func: chatgptWarmThreadScrollContainersPageScript as (...args: unknown[]) => unknown,
+    })
+    await sleep(heavy ? 200 : 150)
+    await snapChatgptThreadToBottomBeforeRead(tabId)
+    await sleep(heavy ? 400 : 300)
+  }
+
+  const waitForLatestAssistantVideoReady = async (
+    tabId: number,
+    step: ProcessStep,
+    stepLabel: string,
+    timeoutMs = 50_000,
+  ): Promise<boolean> => {
+    const extensionChrome = getChrome()
+    if (!extensionChrome?.scripting?.executeScript) return false
+    const probeMode = isChatgptExtractContentVideosPluralStep(step) ? 'dual_parts' : 'single_block'
+    const startedAt = Date.now()
+    let lastLen = 0
+    let polls = 0
+
+    while (Date.now() - startedAt < timeoutMs) {
+      if (polls === 0 || polls % 4 === 0) {
+        await prepareChatgptTabForVideoRead(tabId, { heavy: polls > 0 })
+      }
+      polls += 1
+
+      const result = await extensionChrome.scripting.executeScript({
+        target: { tabId },
+        func: chatgptProbeLatestAssistantVideoReadyPageScript as (...args: unknown[]) => unknown,
+        args: [probeMode],
+      })
+      const payload = (result?.[0]?.result || null) as { ready?: boolean; assistantLen?: number } | null
+      if (payload?.ready) return true
+
+      const len = payload?.assistantLen || 0
+      if (len > lastLen) {
+        lastLen = len
+        setStatus(`${stepLabel}: Đang chờ ChatGPT ghi đủ khối VIDEO (${Math.round(len / 1000)}k ký tự)...`)
+      }
+
+      await sleep(850)
+    }
+
+    setStatus(`${stepLabel}: Hết thời gian chờ marker VIDEO trong thread.`)
+    return false
+  }
+
   const injectPrompt = async (tabId: number, prompt: string, autoSend: boolean) => {
     const extensionChrome = getChrome()
     if (!extensionChrome?.scripting?.executeScript) return false
@@ -1342,31 +1399,19 @@ export default function ChatgptScreen() {
       setStatus('Không tìm thấy tab ChatGPT để lấy nội dung VIDEO.')
       return ''
     }
-    await sleep(240)
 
-    await extensionChrome.scripting.executeScript({
-      target: { tabId: target.id },
-      func: chatgptWarmThreadScrollContainersPageScript as (...args: unknown[]) => unknown,
-    })
-    await sleep(140)
-
-    const maxVideoExtractAttempts = 3
+    const maxVideoExtractAttempts = workflowCapture ? 5 : 3
     let extracted = ''
 
     for (let attempt = 1; attempt <= maxVideoExtractAttempts; attempt += 1) {
-      if (attempt > 1) {
-        await updateTab(target.id)
-        await sleep(420)
-        await snapChatgptThreadToBottomBeforeRead(target.id)
-        await sleep(200)
-      }
+      await prepareChatgptTabForVideoRead(target.id, { heavy: attempt > 1 })
 
       await extensionChrome.scripting.executeScript({
         target: { tabId: target.id },
         func: chatgptScrollToVideoBlockPageScript as (...args: unknown[]) => unknown,
         args: [part],
       })
-      await sleep(copyToClipboard ? 380 : 420)
+      await sleep(workflowCapture ? 480 : copyToClipboard ? 380 : 420)
 
       const result = await extensionChrome.scripting.executeScript({
         target: { tabId: target.id },
@@ -1436,30 +1481,18 @@ export default function ChatgptScreen() {
       setStatus('Không tìm thấy tab ChatGPT để lấy nội dung VIDEO.')
       return ''
     }
-    await sleep(240)
 
-    await extensionChrome.scripting.executeScript({
-      target: { tabId: target.id },
-      func: chatgptWarmThreadScrollContainersPageScript as (...args: unknown[]) => unknown,
-    })
-    await sleep(140)
-
-    const maxAttempts = 3
+    const maxAttempts = workflowCapture ? 5 : 3
     let extracted = ''
 
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-      if (attempt > 1) {
-        await updateTab(target.id)
-        await sleep(420)
-        await snapChatgptThreadToBottomBeforeRead(target.id)
-        await sleep(200)
-      }
+      await prepareChatgptTabForVideoRead(target.id, { heavy: attempt > 1 })
 
       await extensionChrome.scripting.executeScript({
         target: { tabId: target.id },
         func: chatgptScrollToSingleVideoBlockPageScript as (...args: unknown[]) => unknown,
       })
-      await sleep(copyToClipboard ? 380 : 420)
+      await sleep(workflowCapture ? 480 : copyToClipboard ? 380 : 420)
 
       const result = await extensionChrome.scripting.executeScript({
         target: { tabId: target.id },
@@ -1584,9 +1617,23 @@ export default function ChatgptScreen() {
     const ownerStep = resolveProcessStepForVideo(videoStep)
     if (!ownerStep) return []
 
-    const fromTools = await runWorkflowStepTools(ownerStep, 'after_step')
-    if (fromTools.length) return fromTools
-    return fallbackExtractVideoPrompts(ownerStep)
+    const tryCollect = async () => {
+      const fromTools = await runWorkflowStepTools(ownerStep, 'after_step')
+      if (fromTools.length) return fromTools
+      return fallbackExtractVideoPrompts(ownerStep)
+    }
+
+    let prompts = await tryCollect()
+    if (prompts.length) return prompts
+
+    const tabId = lockedWorkflowTabIdRef.current
+    if (!tabId) return []
+
+    setStatus(`${ownerStep.label}: Chờ khối VIDEO hiển thị đầy đủ, thử lấy lại...`)
+    await waitForLatestAssistantVideoReady(tabId, ownerStep, ownerStep.label, 40_000)
+    await prepareChatgptTabForVideoRead(tabId, { heavy: true })
+    prompts = await tryCollect()
+    return prompts
   }
 
   const executeWorkflowStep = async (step: ProcessStep) => {
@@ -1659,9 +1706,17 @@ export default function ChatgptScreen() {
       setCopiedPart(null)
     }
 
-    const afterToolPrompts = await runWorkflowStepTools(step, 'after_step')
     if (isChatgptExtractVideosStep(step)) {
-      const prompts = afterToolPrompts.length ? afterToolPrompts : await fallbackExtractVideoPrompts(step)
+      const tabId = lockedWorkflowTabIdRef.current
+      if (tabId) {
+        setStatus(`${step.label}: Đang chờ khối VIDEO xuất hiện trong thread...`)
+        await waitForLatestAssistantVideoReady(tabId, step, step.label, 55_000)
+        await prepareChatgptTabForVideoRead(tabId)
+      }
+    }
+
+    if (isChatgptExtractVideosStep(step)) {
+      const prompts = await collectVideoPromptsForWorkflow(step)
       chatgptDraftVideoPromptsRef.current = prompts
       if (!prompts.length) {
         throw new Error(
@@ -1673,6 +1728,8 @@ export default function ChatgptScreen() {
       } else {
         setStatus(`${step.label}: Đã lấy ${prompts.length} prompt VIDEO.`)
       }
+    } else {
+      await runWorkflowStepTools(step, 'after_step')
     }
 
     return {
