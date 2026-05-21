@@ -48,6 +48,10 @@ import {
 import { uploadStoryImagesFromDataUrls } from '@/services/CloudinaryUploadService'
 import { chatgptExtractContent } from '@/utils/chatgptExtractContent'
 import {
+  appendShortCutInjectArgs,
+  getShortContentCutPercentsFromStorage,
+} from '@/utils/shortContentCutConfig'
+import {
   chatgptExtractSingleVideoBlockPageScript,
   chatgptExtractVideoBlockPageScript,
   chatgptScrollToSingleVideoBlockPageScript,
@@ -2082,6 +2086,7 @@ export default function ChatgptScreen() {
     }
 
     const kindLabel = getChatgptStep4ContentKindLabel(kind)
+    const cutPercents = await getShortContentCutPercentsFromStorage(getChrome()?.storage?.local)
 
     if (copyToClipboard) {
       setStatus(`Đang lấy ${kindLabel} từ «${extractContentStepLabel}»...`)
@@ -2099,7 +2104,7 @@ export default function ChatgptScreen() {
     const readyResult = await extensionChrome.scripting.executeScript({
       target: { tabId: target.id },
       func: chatgptExtractContent as (...args: unknown[]) => unknown,
-      args: ['ready', promptHint],
+      args: appendShortCutInjectArgs(['ready', promptHint], cutPercents),
     })
     const isReady = readyResult?.[0]?.result === true
     setExtractContentReady(isReady)
@@ -2121,14 +2126,14 @@ export default function ChatgptScreen() {
     await extensionChrome.scripting.executeScript({
       target: { tabId: target.id },
       func: chatgptScrollHighlightStep4ContentPageScript as (...args: unknown[]) => unknown,
-      args: [kind, promptHint],
+      args: appendShortCutInjectArgs([kind, promptHint], cutPercents),
     })
     await sleep(copyToClipboard ? 380 : 140)
 
     const result = await extensionChrome.scripting.executeScript({
       target: { tabId: target.id },
       func: chatgptExtractContent as (...args: unknown[]) => unknown,
-      args: ['clipboard', kind, promptHint],
+      args: appendShortCutInjectArgs(['clipboard', kind, promptHint], cutPercents),
     })
 
     const extracted = ((result?.[0]?.result as string | undefined) || '').trim()

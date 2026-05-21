@@ -464,7 +464,7 @@ export function chatgptScrollToVideoBlockPageScript(videoPart: number): boolean 
   return true
 }
 
-/** Cuộn + khung sáng bước trích nội dung: args[0]=kind, args[1]=promptHint. */
+/** Cuộn + khung sáng bước trích nội dung: args[0]=kind, args[1]=promptHint, args[2]=minPercent?, args[3]=maxPercent?. */
 export function chatgptScrollHighlightStep4ContentPageScript(...injectArgs: unknown[]): boolean {
   const kind = String(injectArgs[0] ?? '')
   const promptHint =
@@ -473,6 +473,19 @@ export function chatgptScrollHighlightStep4ContentPageScript(...injectArgs: unkn
       : typeof injectArgs[2] === 'string'
         ? injectArgs[2]
         : ''
+  const readShortCutRatiosFromInject = () => {
+    const dMin = 25
+    const dMax = 45
+    let minP = dMin
+    let maxP = dMax
+    const a = injectArgs[2]
+    const b = injectArgs[3]
+    if (typeof a === 'number' && typeof b === 'number' && a >= 1 && b > a && b <= 100) {
+      minP = a
+      maxP = b
+    }
+    return { minRatio: minP / 100, maxRatio: maxP / 100 }
+  }
   const extractKind = kind as
     | 'title_plain'
     | 'title_styled'
@@ -676,8 +689,7 @@ export function chatgptScrollHighlightStep4ContentPageScript(...injectArgs: unkn
   const LONG_SECTION_HEADER =
     /(?:^|\n)\s*(?:#{1,6}\s*)?(?:\*\*)?(?:full[\s-]*length|long\s*content|nội dung dài|bản đầy đủ|full\s*version)(?:\*\*)?\s*[:\-]?\s*(?:\n|$)/i
 
-  const SHORT_MIN_RATIO = 0.3
-  const SHORT_MAX_SCAN_RATIO = 0.5
+  const { minRatio: SHORT_MIN_RATIO, maxRatio: SHORT_MAX_SCAN_RATIO } = readShortCutRatiosFromInject()
   const SHORT_TO_FULL_MAX_RATIO = SHORT_MAX_SCAN_RATIO
 
   const capShortToMaxRatioOfFull = (shortText: string, fullText: string, maxRatio = SHORT_TO_FULL_MAX_RATIO) => {

@@ -12,6 +12,13 @@ import {
   WORKSPACE_ROOT_PICKER_ID,
   WORKSPACE_STORY_SUBDIRS,
 } from '@/utils/localWorkspacePersistence'
+import {
+  DEFAULT_SHORT_CONTENT_MAX_PERCENT,
+  DEFAULT_SHORT_CONTENT_MIN_PERCENT,
+  getShortContentCutPercentsFromStorage,
+  normalizeShortContentCutPercents,
+  setShortContentCutPercentsInStorage,
+} from '@/utils/shortContentCutConfig'
 
 type ChromeStorageLocal = {
   get?: (keys: string | string[], callback: (items: Record<string, unknown>) => void) => void
@@ -30,6 +37,9 @@ export default function ProfileScreen({ onLogout }: { onLogout: () => void }) {
   const [workspaceRootLabel, setWorkspaceRootLabel] = useState('')
   const [storiesFolderInput, setStoriesFolderInput] = useState(DEFAULT_STORIES_FOLDER_SEGMENT)
   const [isSavingWorkspaceStories, setIsSavingWorkspaceStories] = useState(false)
+  const [shortMinPercentInput, setShortMinPercentInput] = useState(String(DEFAULT_SHORT_CONTENT_MIN_PERCENT))
+  const [shortMaxPercentInput, setShortMaxPercentInput] = useState(String(DEFAULT_SHORT_CONTENT_MAX_PERCENT))
+  const [isSavingShortCutConfig, setIsSavingShortCutConfig] = useState(false)
   const [isLoggingOut, setIsLoggingOut] = useState(false)
   const [isLoadingProfile, setIsLoadingProfile] = useState(true)
   const [isSavingProfile, setIsSavingProfile] = useState(false)
@@ -189,6 +199,14 @@ export default function ProfileScreen({ onLogout }: { onLogout: () => void }) {
       } catch {
         setStoriesFolderInput(DEFAULT_STORIES_FOLDER_SEGMENT)
       }
+      try {
+        const percents = await getShortContentCutPercentsFromStorage(getChrome()?.storage?.local)
+        setShortMinPercentInput(String(percents.minPercent))
+        setShortMaxPercentInput(String(percents.maxPercent))
+      } catch {
+        setShortMinPercentInput(String(DEFAULT_SHORT_CONTENT_MIN_PERCENT))
+        setShortMaxPercentInput(String(DEFAULT_SHORT_CONTENT_MAX_PERCENT))
+      }
     })()
   }, [activeTab])
 
@@ -220,6 +238,28 @@ export default function ProfileScreen({ onLogout }: { onLogout: () => void }) {
     }
     setWorkspaceRootLabel('')
     setStatus('Đã xóa thư mục gốc. Ảnh cắt đôi sẽ chỉ lưu qua Tải xuống của Chrome nếu không cấu hình lại.')
+  }
+
+  const saveShortContentCutConfig = async () => {
+    if (isSavingShortCutConfig) return
+    setIsSavingShortCutConfig(true)
+    try {
+      const saved = await setShortContentCutPercentsInStorage(
+        normalizeShortContentCutPercents(
+          Number(shortMinPercentInput),
+          Number(shortMaxPercentInput),
+        ),
+        getChrome()?.storage?.local,
+      )
+      setShortMinPercentInput(String(saved.minPercent))
+      setShortMaxPercentInput(String(saved.maxPercent))
+      setStatus(`Đã lưu cắt nội dung ngắn: ${saved.minPercent}% – ${saved.maxPercent}% (so với nội dung dài).`)
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Lỗi không xác định'
+      setStatus(`Không lưu được cấu hình cắt nội dung ngắn: ${msg}`)
+    } finally {
+      setIsSavingShortCutConfig(false)
+    }
   }
 
   const saveWorkspaceStoriesFolderName = async () => {
@@ -471,6 +511,47 @@ export default function ProfileScreen({ onLogout }: { onLogout: () => void }) {
                     Xóa
                   </button>
                 ) : null}
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-white/10 bg-slate-900/50 p-3">
+              <p className="mb-1 text-[11px] font-semibold text-slate-100">Cắt nội dung ngắn (ChatGPT)</p>
+              <p className="mb-2 text-[10px] leading-relaxed text-slate-400">
+                Phần trăm độ dài so với thân bài dài khi trích / highlight bước 4. Mặc định{' '}
+                {DEFAULT_SHORT_CONTENT_MIN_PERCENT}% – {DEFAULT_SHORT_CONTENT_MAX_PERCENT}%.
+              </p>
+              <div className="flex flex-wrap items-center gap-2">
+                <label className="flex min-w-[88px] flex-1 items-center gap-1.5 text-[10px] text-slate-400">
+                  Min %
+                  <input
+                    type="number"
+                    min={1}
+                    max={98}
+                    value={shortMinPercentInput}
+                    onChange={(event) => setShortMinPercentInput(event.target.value)}
+                    className="w-full min-w-0 rounded-md border border-white/10 bg-slate-800/80 px-2 py-1.5 text-[11px] text-slate-100 outline-none"
+                  />
+                </label>
+                <label className="flex min-w-[88px] flex-1 items-center gap-1.5 text-[10px] text-slate-400">
+                  Max %
+                  <input
+                    type="number"
+                    min={2}
+                    max={100}
+                    value={shortMaxPercentInput}
+                    onChange={(event) => setShortMaxPercentInput(event.target.value)}
+                    className="w-full min-w-0 rounded-md border border-white/10 bg-slate-800/80 px-2 py-1.5 text-[11px] text-slate-100 outline-none"
+                  />
+                </label>
+                <button
+                  type="button"
+                  onClick={() => void saveShortContentCutConfig()}
+                  disabled={isSavingShortCutConfig}
+                  className="inline-flex shrink-0 cursor-pointer items-center gap-1 rounded-md bg-violet-500/25 px-2 py-1.5 text-[11px] text-violet-100 transition hover:bg-violet-500/35 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {isSavingShortCutConfig ? <span className="animate-pulse">…</span> : <FiSave className="h-3.5 w-3.5" />}
+                  Lưu
+                </button>
               </div>
             </div>
 

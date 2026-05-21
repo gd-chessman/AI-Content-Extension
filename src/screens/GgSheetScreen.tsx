@@ -28,6 +28,10 @@ import {
   chatgptWarmThreadScrollContainersPageScript,
 } from '@/utils/chatgptContentProcessing'
 import { normalizeStyledTextToPlain, stylizeTitleForDisplay } from '@/utils/textSearchNormalize'
+import {
+  appendShortCutInjectArgs,
+  getShortContentCutPercentsFromStorage,
+} from '@/utils/shortContentCutConfig'
 
 type BrowserTab = { id?: number; url?: string; active?: boolean }
 type ExtensionChrome = {
@@ -410,6 +414,7 @@ export default function GgSheetScreen() {
     }
 
     setStatus('Đang gom dữ liệu từ output bước trích nội dung trong ChatGPT...')
+    const cutPercents = await getShortContentCutPercentsFromStorage(extensionChrome?.storage?.local)
     const target = await getOrOpenTab(CHATGPT_PATTERNS, CHATGPT_URL)
     if (!target?.id) {
       setStatus('Không mở được tab ChatGPT để gom dữ liệu.')
@@ -425,14 +430,14 @@ export default function GgSheetScreen() {
     await extensionChrome.scripting.executeScript({
       target: { tabId: target.id },
       func: chatgptScrollHighlightStep4ContentPageScript as (...args: unknown[]) => unknown,
-      args: ['collect', promptHint],
+      args: appendShortCutInjectArgs(['collect', promptHint], cutPercents),
     })
     await sleep(500)
 
     const result = await extensionChrome.scripting.executeScript({
       target: { tabId: target.id },
       func: chatgptExtractContent as (...args: unknown[]) => unknown,
-      args: ['collect', promptHint],
+      args: appendShortCutInjectArgs(['collect', promptHint], cutPercents),
     })
 
     const extracted = (result?.[0]?.result as CollectedData | null) || null

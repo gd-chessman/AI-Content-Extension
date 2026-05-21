@@ -12,9 +12,9 @@ export type ChatgptExtractContentCollectedForSheet = {
 }
 
 /**
- * ready: ['ready', promptHint] → boolean
- * collect: ['collect', promptHint]
- * clipboard: ['clipboard', kind, promptHint]
+ * ready: ['ready', promptHint, minPercent?, maxPercent?] → boolean
+ * collect: ['collect', promptHint, minPercent?, maxPercent?]
+ * clipboard: ['clipboard', kind, promptHint, minPercent?, maxPercent?]
  */
 export function chatgptExtractContent(...args: unknown[]): ChatgptExtractContentCollectedForSheet | string | boolean | null {
   const mode = args[0] as string
@@ -184,11 +184,25 @@ export function chatgptExtractContent(...args: unknown[]): ChatgptExtractContent
   /** Nội dung dài: chỉ thân bài (đoạn đầu ngắn coi là tiêu đề thì bỏ, không ghép lại). */
   const pickFull = (text: string) => pickFullBodyOnly(text).body
 
-  const SHORT_MIN_RATIO = 0.3
-  const SHORT_MAX_SCAN_RATIO = 0.5
+  const readShortCutRatios = () => {
+    const dMin = 25
+    const dMax = 45
+    let minP = dMin
+    let maxP = dMax
+    const apply = (a: unknown, b: unknown) => {
+      if (typeof a === 'number' && typeof b === 'number' && a >= 1 && b > a && b <= 100) {
+        minP = a
+        maxP = b
+      }
+    }
+    if (mode === 'clipboard') apply(args[3], args[4])
+    else apply(args[2], args[3])
+    return { minRatio: minP / 100, maxRatio: maxP / 100 }
+  }
+  const { minRatio: SHORT_MIN_RATIO, maxRatio: SHORT_MAX_SCAN_RATIO } = readShortCutRatios()
   const SHORT_TO_FULL_MAX_RATIO = SHORT_MAX_SCAN_RATIO
 
-  /** Nếu ngắn > 50% dài thì chỉ giữ tối đa 50% độ dài nội dung dài (cắt từ cuối, ưu tiên xuống dòng / câu). */
+  /** Nếu ngắn > 45% dài thì chỉ giữ tối đa 45% độ dài nội dung dài (cắt từ cuối, ưu tiên xuống dòng / câu). */
   const capShortToMaxRatioOfFull = (shortText: string, fullText: string, maxRatio = SHORT_TO_FULL_MAX_RATIO) => {
     const short = (shortText || '').trim()
     const full = (fullText || '').trim()
@@ -227,7 +241,7 @@ export function chatgptExtractContent(...args: unknown[]): ChatgptExtractContent
     return slice.slice(0, minLen + lastQ + 1).trim()
   }
 
-  /** Đảm bảo nội dung ngắn ≥ minLen (30%), tối đa maxScan. */
+  /** Đảm bảo nội dung ngắn ≥ minLen (25%), tối đa maxScan (45%). */
   const ensureMinShortLength = (
     candidate: string,
     normalized: string,
