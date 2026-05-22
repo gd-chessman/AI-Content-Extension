@@ -67,14 +67,15 @@ import {
   chatgptInjectPromptPageScript,
   chatgptOpenNewChatPageScript,
   chatgptVerifyLastStepReadyPageScript,
-  chatgptWaitAssistantResponseDonePageScript,
-  type ChatgptWaitAssistantResponsePageResult,
+  chatgptSnapshotAssistantResponsePageScript,
+  type ChatgptAssistantResponseSnapshot,
 } from '@/utils/chatgptPageScripts'
 import {
   chatgptAssistantImageCountPageScript,
   chatgptCloseImageLightboxPageScript,
   chatgptLocateLatestChatImageForCapturePageScript,
-  chatgptWaitGeneratedImageDonePageScript,
+  chatgptSnapshotGeneratedImagePageScript,
+  type ChatgptGeneratedImageSnapshot,
   cropCapturedImage,
   splitCapturedImage,
   type SplitCaptureRect,
@@ -574,12 +575,19 @@ export default function ChatgptScreen() {
   /** Đã có đủ lượt user + phản hồi assistant cho bước trích nội dung trên tab ChatGPT. */
   const [extractContentReady, setExtractContentReady] = useState(false)
   const [isWorkflowRunning, setIsWorkflowRunning] = useState(false)
-  const [isWorkflowStopping, setIsWorkflowStopping] = useState(false)
   /** Tiến trình đang chạy trong workflow — highlight tím trên sidebar. */
   const [workflowActiveStepId, setWorkflowActiveStepId] = useState('')
   const workflowStepsScrollRef = useRef<HTMLDivElement>(null)
   const workflowStepItemRefs = useRef(new Map<string, HTMLDivElement>())
   const workflowStopRef = useRef(false)
+  const WORKFLOW_STOPPED_MESSAGE = 'WORKFLOW_STOPPED'
+
+  const throwIfWorkflowStopped = () => {
+    if (workflowStopRef.current) {
+      throw new Error(WORKFLOW_STOPPED_MESSAGE)
+    }
+  }
+
   const lockedWorkflowTabIdRef = useRef<number>(0)
   const runningWorkflowRunIdRef = useRef('')
   /** Story đang chạy pipeline ChatGPT (tiến trình 1 — cùng story để lưu videoPrompts sau cùng). */
@@ -1072,6 +1080,7 @@ export default function ChatgptScreen() {
     let polls = 0
 
     while (Date.now() - startedAt < timeoutMs) {
+      throwIfWorkflowStopped()
       if (polls === 0 || polls % 4 === 0) {
         await prepareChatgptTabForVideoRead(tabId, { heavy: polls > 0 })
       }
@@ -1295,28 +1304,68 @@ export default function ChatgptScreen() {
     }
     await sleep(220)
 
+    const tabId = target.id
+    const readSnapshot = async () => {
+      if (!extensionChrome.scripting?.executeScript) return null
+      const result = await extensionChrome.scripting.executeScript({
+        target: { tabId },
+        func: chatgptSnapshotAssistantResponsePageScript as (...args: unknown[]) => unknown,
+      })
+      return (result?.[0]?.result || null) as ChatgptAssistantResponseSnapshot | null
+    }
+
+    const initial = await readSnapshot()
+    if (!initial) {
+      setStatus(`${stepLabel}: Không thể xác nhận trạng thái phản hồi ChatGPT.`)
+      return false
+    }
+
     setStatus(`${stepLabel}: Đang đợi ChatGPT phản hồi xong...`)
-    const result = await extensionChrome.scripting.executeScript({
-      target: { tabId: target.id },
-      func: chatgptWaitAssistantResponseDonePageScript as (...args: unknown[]) => unknown,
-      args: [timeoutMs],
-    })
+    const pollMs = 700
+    const stableMs = 3000
+    const startedAt = Date.now()
+    let prev = initial
+    let stableSince = Date.now()
+    let observedProgress = false
 
-    const payload = (result?.[0]?.result || null) as ChatgptWaitAssistantResponsePageResult | null
-    if (payload?.ok) {
-      setStatus(`${stepLabel}: ChatGPT đã phản hồi xong, tiếp tục bước kế tiếp.`)
-      return true
+    while (Date.now() - startedAt < timeoutMs) {
+      throwIfWorkflowStopped()
+
+      const current = await readSnapshot()
+      if (!current) {
+        await sleep(pollMs)
+        continue
+      }
+
+      const generatingNow = current.generating
+      const changed =
+        current.count !== initial.count ||
+        current.textLen !== initial.textLen ||
+        current.text !== initial.text
+      if (changed || generatingNow) observedProgress = true
+      if (
+        current.count !== prev.count ||
+        current.textLen !== prev.textLen ||
+        current.text !== prev.text ||
+        generatingNow
+      ) {
+        stableSince = Date.now()
+      }
+
+      if (!generatingNow && observedProgress && Date.now() - stableSince >= stableMs) {
+        setStatus(`${stepLabel}: ChatGPT đã phản hồi xong, tiếp tục bước kế tiếp.`)
+        return true
+      }
+
+      prev = current
+      await sleep(pollMs)
     }
 
-    if (payload?.reason === 'timeout') {
+    if (observedProgress) {
       setStatus(`${stepLabel}: Hết thời gian chờ phản hồi ChatGPT.`)
-      return false
-    }
-    if (payload?.reason === 'no_response') {
+    } else {
       setStatus(`${stepLabel}: Chưa thấy phản hồi mới từ ChatGPT.`)
-      return false
     }
-    setStatus(`${stepLabel}: Không thể xác nhận trạng thái phản hồi ChatGPT.`)
     return false
   }
 
@@ -1345,27 +1394,77 @@ export default function ChatgptScreen() {
       return false
     }
 
-    setStatus(`${stepLabel}: Đang đợi ChatGPT tạo ảnh xong...`)
-    const result = await extensionChrome.scripting.executeScript({
-      target: { tabId: target.id },
-      func: chatgptWaitGeneratedImageDonePageScript as (...args: unknown[]) => unknown,
-      args: [baselineCount, timeoutMs],
-    })
+    const tabId = target.id
+    const readSnapshot = async () => {
+      if (!extensionChrome.scripting?.executeScript) return null
+      const result = await extensionChrome.scripting.executeScript({
+        target: { tabId },
+        func: chatgptSnapshotGeneratedImagePageScript as (...args: unknown[]) => unknown,
+      })
+      return (result?.[0]?.result || null) as ChatgptGeneratedImageSnapshot | null
+    }
 
-    const payload = (result?.[0]?.result || null) as { ok?: boolean; reason?: string } | null
-    if (payload?.ok) {
-      setStatus(`${stepLabel}: Ảnh đã tạo xong, tiếp tục bước kế tiếp.`)
-      return true
+    setStatus(`${stepLabel}: Đang đợi ChatGPT tạo ảnh xong...`)
+    const pollMs = 700
+    const stableMs = 1800
+    const settleAfterDetectMs = 3200
+    const startedAt = Date.now()
+    let stableSince = Date.now()
+    let imageDetected = false
+    let firstDetectAt = 0
+    let lastCount = baselineCount
+    let prevSig = await readSnapshot()
+
+    while (Date.now() - startedAt < timeoutMs) {
+      throwIfWorkflowStopped()
+
+      const snap = await readSnapshot()
+      if (!snap) {
+        await sleep(pollMs)
+        continue
+      }
+
+      const currentCount = snap.imageCount
+      const generatingNow = snap.generating
+      if (currentCount > baselineCount) {
+        imageDetected = true
+        if (!firstDetectAt) firstDetectAt = Date.now()
+      }
+
+      if (
+        currentCount !== lastCount ||
+        generatingNow ||
+        snap.assistantCount !== (prevSig?.assistantCount ?? 0) ||
+        snap.assistantTextLen !== (prevSig?.assistantTextLen ?? 0)
+      ) {
+        stableSince = Date.now()
+      }
+
+      if (imageDetected && currentCount > baselineCount && !generatingNow && Date.now() - stableSince >= stableMs) {
+        setStatus(`${stepLabel}: Ảnh đã tạo xong, tiếp tục bước kế tiếp.`)
+        return true
+      }
+      if (
+        imageDetected &&
+        currentCount > baselineCount &&
+        firstDetectAt &&
+        Date.now() - firstDetectAt >= settleAfterDetectMs &&
+        !generatingNow
+      ) {
+        setStatus(`${stepLabel}: Ảnh đã tạo xong, tiếp tục bước kế tiếp.`)
+        return true
+      }
+
+      lastCount = currentCount
+      prevSig = snap
+      await sleep(pollMs)
     }
-    if (payload?.reason === 'no_new_image') {
-      setStatus(`${stepLabel}: Không thấy ảnh mới được tạo.`)
-      return false
-    }
-    if (payload?.reason === 'timeout_after_image') {
+
+    if (imageDetected) {
       setStatus(`${stepLabel}: Đã có ảnh mới nhưng hết thời gian chờ hoàn tất.`)
-      return false
+    } else {
+      setStatus(`${stepLabel}: Không thấy ảnh mới được tạo.`)
     }
-    setStatus(`${stepLabel}: Không thể xác nhận trạng thái tạo ảnh.`)
     return false
   }
 
@@ -1588,6 +1687,7 @@ export default function ChatgptScreen() {
 
     try {
       for (const tool of toolsToRun) {
+        throwIfWorkflowStopped()
         if (isStepPanelToolDisabled(tool, step)) continue
         const payload = await fetchToolHandler(tool.toolId)
         const config = {
@@ -1637,6 +1737,7 @@ export default function ChatgptScreen() {
   }
 
   const executeWorkflowStep = async (step: ProcessStep) => {
+    throwIfWorkflowStopped()
     if (isChatgptSaveStoryStep(step)) {
       if (chatgptWorkflowSourceRef.current !== 'stories') {
         return { skipped: true, reason: 'not_stories_source' }
@@ -1693,6 +1794,7 @@ export default function ChatgptScreen() {
     const done = isGenerateImageStep
       ? await waitForGeneratedImageDone(step.label, baselineImageCount, 360_000, lockedWorkflowTabIdRef.current || undefined)
       : await waitForChatgptResponseDone(step.label, 240_000, lockedWorkflowTabIdRef.current || undefined)
+    throwIfWorkflowStopped()
     if (!done) {
       throw new Error(
         isGenerateImageStep
@@ -1742,9 +1844,16 @@ export default function ChatgptScreen() {
   }
 
   const stopWorkflowRun = () => {
+    if (!isWorkflowRunning || workflowStopRef.current) return
     workflowStopRef.current = true
-    setIsWorkflowStopping(true)
-    setStatus('Đang dừng workflow sau khi hoàn tất bước hiện tại...')
+    setStatus('Workflow đã dừng.')
+    const runId = runningWorkflowRunIdRef.current
+    if (runId) {
+      void updateWorkflowRun(runId, {
+        status: 'cancelled',
+        finishedAt: new Date().toISOString(),
+      }).catch(() => undefined)
+    }
   }
 
   const runWorkflow = async (options?: {
@@ -1775,7 +1884,6 @@ export default function ChatgptScreen() {
     }
 
     setIsWorkflowRunning(true)
-    setIsWorkflowStopping(false)
     workflowStopRef.current = false
 
     let workflowRunId = options?.runId || ''
@@ -1817,6 +1925,11 @@ export default function ChatgptScreen() {
       })
 
       for (let index = 0; index < workflowSteps.length; index += 1) {
+        if (workflowStopRef.current) {
+          setStatus('Workflow đã dừng.')
+          return
+        }
+
         const step = workflowSteps[index]
         const stepNo = step.stepNo || index + 1
         const progress = Math.round((index / workflowSteps.length) * 100)
@@ -1860,6 +1973,17 @@ export default function ChatgptScreen() {
             finishedAt: new Date().toISOString(),
           })
         } catch (error) {
+          const stopped =
+            workflowStopRef.current ||
+            (error instanceof Error && error.message === WORKFLOW_STOPPED_MESSAGE)
+          if (stopped) {
+            await updateStepRun(stepRun._id, {
+              status: 'skipped',
+              finishedAt: new Date().toISOString(),
+            }).catch(() => undefined)
+            setStatus('Workflow đã dừng.')
+            return
+          }
           const errorMessage = error instanceof Error ? error.message : 'Step execution failed.'
           await updateStepRun(stepRun._id, {
             status: 'failed',
@@ -1874,17 +1998,6 @@ export default function ChatgptScreen() {
             finishedAt: new Date().toISOString(),
           })
           throw error
-        }
-
-        if (workflowStopRef.current) {
-          await updateWorkflowRun(workflowRunId, {
-            status: 'cancelled',
-            progress: Math.round(((index + 1) / workflowSteps.length) * 100),
-            currentStepNo: stepNo,
-            finishedAt: new Date().toISOString(),
-          })
-          setStatus(`Workflow đã dừng ở ${step.label}.`)
-          return
         }
       }
 
@@ -1919,7 +2032,6 @@ export default function ChatgptScreen() {
       chatgptDraftVideoPromptsRef.current = null
       chatgptWorkflowSourceRef.current = 'stories'
       setIsWorkflowRunning(false)
-      setIsWorkflowStopping(false)
     }
   }
 
@@ -2928,16 +3040,11 @@ export default function ChatgptScreen() {
                 <button
                   type="button"
                   onClick={stopWorkflowRun}
-                  disabled={isWorkflowStopping}
-                  className="inline-flex h-8 w-full cursor-pointer items-center justify-center rounded-lg bg-rose-500/20 text-rose-100 transition hover:bg-rose-500/30 disabled:cursor-not-allowed disabled:opacity-50"
-                  title={isWorkflowStopping ? 'Đang dừng…' : 'Dừng workflow'}
-                  aria-label={isWorkflowStopping ? 'Đang dừng workflow' : 'Dừng workflow'}
+                  className="inline-flex h-8 w-full cursor-pointer items-center justify-center rounded-lg bg-rose-500/20 text-rose-100 transition hover:bg-rose-500/30"
+                  title="Dừng workflow"
+                  aria-label="Dừng workflow"
                 >
-                  {isWorkflowStopping ? (
-                    <FiRefreshCw className="h-4 w-4 animate-spin" aria-hidden />
-                  ) : (
-                    <FiSquare className="h-4 w-4" aria-hidden />
-                  )}
+                  <FiSquare className="h-4 w-4" aria-hidden />
                 </button>
               ) : (
                 <button

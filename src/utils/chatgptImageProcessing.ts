@@ -125,6 +125,69 @@ export type WaitGeneratedImagePageResult = {
   imageCount?: number
 }
 
+export type ChatgptGeneratedImageSnapshot = {
+  generating: boolean
+  imageCount: number
+  assistantCount: number
+  assistantTextLen: number
+}
+
+/** Một lần đọc trạng thái tạo ảnh — extension poll và có thể dừng giữa chừng. */
+export function chatgptSnapshotGeneratedImagePageScript(): ChatgptGeneratedImageSnapshot {
+  const isVisible = (el: Element | null): el is HTMLElement => {
+    if (!(el instanceof HTMLElement)) return false
+    const rect = el.getBoundingClientRect()
+    const style = window.getComputedStyle(el)
+    return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden'
+  }
+  const loadingEl = document.querySelector(
+    '[data-testid="image-gen-loading-state-dots"], [data-testid="loading-halftone-dots-animation"]',
+  ) as HTMLElement | null
+  let imageGenLoading = false
+  if (loadingEl) {
+    const st = window.getComputedStyle(loadingEl)
+    const r = loadingEl.getBoundingClientRect()
+    imageGenLoading =
+      st.display !== 'none' &&
+      st.visibility !== 'hidden' &&
+      Number(st.opacity) >= 0.05 &&
+      r.width > 4 &&
+      r.height > 4
+  }
+  const stopBtn =
+    (document.querySelector('button[data-testid="stop-button"]') as HTMLButtonElement | null) ||
+    (document.querySelector('button[aria-label*="Stop"]') as HTMLButtonElement | null) ||
+    (document.querySelector('button[aria-label*="Dừng"]') as HTMLButtonElement | null)
+  const generating =
+    imageGenLoading ||
+    Boolean(stopBtn && !stopBtn.disabled && isVisible(stopBtn)) ||
+    Boolean(document.querySelector('[data-testid="conversation-turn-loading"]'))
+  const imageCount = Array.from(
+    document.querySelectorAll<HTMLImageElement>(
+      '[data-message-author-role="assistant"] img, article img, main img',
+    ),
+  ).filter((img) => {
+    const src = (img.getAttribute('src') || '').trim()
+    if (!src || src.startsWith('data:')) return false
+    const alt = (img.getAttribute('alt') || '').toLowerCase()
+    if (alt.includes('avatar') || alt.includes('profile')) return false
+    const w = img.naturalWidth || img.width || 0
+    const h = img.naturalHeight || img.height || 0
+    if (w > 0 && h > 0 && (w < 96 || h < 96)) return false
+    return true
+  }).length
+  const turns = Array.from(document.querySelectorAll<HTMLElement>('[data-message-author-role="assistant"]')).filter(
+    (el) => (el.innerText || '').trim().length > 0,
+  )
+  const lastText = (turns[turns.length - 1]?.innerText || '').replace(/\s+/g, ' ').trim()
+  return {
+    generating,
+    imageCount,
+    assistantCount: turns.length,
+    assistantTextLen: lastText.length,
+  }
+}
+
 /** Inject: chờ ChatGPT tạo ảnh xong (workflow bước chatgpt_generate_images). */
 export async function chatgptWaitGeneratedImageDonePageScript(
   baseCount: number,

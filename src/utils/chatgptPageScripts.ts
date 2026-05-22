@@ -137,6 +137,40 @@ export async function chatgptInjectPromptPageScript(message: string, shouldSend:
   return false
 }
 
+export type ChatgptAssistantResponseSnapshot = {
+  generating: boolean
+  count: number
+  text: string
+  textLen: number
+}
+
+/** Một lần đọc trạng thái phản hồi — extension poll và có thể dừng giữa chừng. */
+export function chatgptSnapshotAssistantResponsePageScript(): ChatgptAssistantResponseSnapshot {
+  const isVisible = (el: Element | null): el is HTMLElement => {
+    if (!(el instanceof HTMLElement)) return false
+    const rect = el.getBoundingClientRect()
+    const style = window.getComputedStyle(el)
+    return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden'
+  }
+  const stopBtn =
+    (document.querySelector('button[data-testid="stop-button"]') as HTMLButtonElement | null) ||
+    (document.querySelector('button[aria-label*="Stop"]') as HTMLButtonElement | null) ||
+    (document.querySelector('button[aria-label*="Dừng"]') as HTMLButtonElement | null)
+  const generating =
+    Boolean(stopBtn && !stopBtn.disabled && isVisible(stopBtn)) ||
+    Boolean(document.querySelector('[data-testid="conversation-turn-loading"]'))
+  const turns = Array.from(document.querySelectorAll<HTMLElement>('[data-message-author-role="assistant"]')).filter(
+    (el) => (el.innerText || '').trim().length > 0,
+  )
+  const lastText = (turns[turns.length - 1]?.innerText || '').replace(/\s+/g, ' ').trim()
+  return {
+    generating,
+    count: turns.length,
+    text: lastText.slice(0, 180),
+    textLen: lastText.length,
+  }
+}
+
 /** Chờ phản hồi assistant ổn định (không generating) sau khi có tiến triển. */
 export async function chatgptWaitAssistantResponseDonePageScript(maxWaitMs: number): Promise<ChatgptWaitAssistantResponsePageResult> {
   const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
