@@ -2073,9 +2073,6 @@ export default function FacebookScreen() {
           <div className="flex items-center justify-between gap-2">
             <div>
               <h2 className="text-sm font-semibold text-white">Fanpage nguồn</h2>
-              <p className="mt-0.5 text-[10px] leading-snug text-slate-500">
-                Từ trên xuống: STT 1 = pickIndex 0, STT 2 = pickIndex 1… (mới thêm nằm trên cùng).
-              </p>
             </div>
             <div className="flex items-center gap-1.5">
               <button

@@ -5,6 +5,7 @@ import {
   FiCheck,
   FiCopy,
   FiDatabase,
+  FiDownload,
   FiFolder,
   FiGlobe,
   FiInfo,
@@ -168,6 +169,7 @@ export default function WebBlogScreen() {
   const [image2, setImage2] = useState('')
   const [status, setStatus] = useState('Đợi dữ liệu từ ChatGPT để điền WebBlog.')
   const [copiedField, setCopiedField] = useState<'title' | 'content' | null>(null)
+  const [copiedImage, setCopiedImage] = useState<'image1' | 'image2' | null>(null)
   const [isTranslatingTitle, setIsTranslatingTitle] = useState(false)
   const [isTranslatingContent, setIsTranslatingContent] = useState(false)
   const [isTitleTranslated, setIsTitleTranslated] = useState(false)
@@ -459,6 +461,72 @@ export default function WebBlogScreen() {
     } catch {
       setStatus('Không thể sao chép. Hãy thử lại.')
     }
+  }
+
+  const resolveImageBlob = async (src: string) => {
+    const response = await fetch(src)
+    if (!response.ok) throw new Error('fetch failed')
+    return response.blob()
+  }
+
+  const copyImage = async (part: 'image1' | 'image2') => {
+    const src = (part === 'image1' ? image1 : image2).trim()
+    if (!src) return
+    try {
+      const blob = await resolveImageBlob(src)
+      const type = blob.type || 'image/png'
+      await navigator.clipboard.write([new ClipboardItem({ [type]: blob })])
+      setCopiedImage(part)
+      window.setTimeout(() => setCopiedImage((prev) => (prev === part ? null : prev)), 1200)
+      setStatus(`Đã sao chép ${part === 'image1' ? 'ảnh 1' : 'ảnh 2'}.`)
+    } catch {
+      setStatus(`Không thể sao chép ${part === 'image1' ? 'ảnh 1' : 'ảnh 2'}.`)
+    }
+  }
+
+  const downloadImage = async (part: 'image1' | 'image2') => {
+    const src = (part === 'image1' ? image1 : image2).trim()
+    if (!src) return
+    try {
+      const blob = await resolveImageBlob(src)
+      const ext = blob.type.includes('jpeg') ? 'jpg' : blob.type.includes('webp') ? 'webp' : 'png'
+      const objectUrl = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = objectUrl
+      anchor.download = `webblog-${part === 'image1' ? '1' : '2'}.${ext}`
+      anchor.click()
+      URL.revokeObjectURL(objectUrl)
+      setStatus(`Đã tải ${part === 'image1' ? 'ảnh 1' : 'ảnh 2'}.`)
+    } catch {
+      setStatus(`Không thể tải ${part === 'image1' ? 'ảnh 1' : 'ảnh 2'}.`)
+    }
+  }
+
+  const renderImageActions = (part: 'image1' | 'image2', src: string) => {
+    if (!src.trim()) return null
+    const label = part === 'image1' ? 'ảnh 1' : 'ảnh 2'
+    return (
+      <div className="inline-flex items-center gap-1">
+        <button
+          type="button"
+          onClick={() => void copyImage(part)}
+          title={`Sao chép ${label}`}
+          aria-label={`Sao chép ${label}`}
+          className="inline-flex h-6 w-6 cursor-pointer items-center justify-center rounded-md bg-blue-500/20 text-blue-100 transition hover:bg-blue-500/30"
+        >
+          {copiedImage === part ? <FiCheck className="h-3 w-3" /> : <FiCopy className="h-3 w-3" />}
+        </button>
+        <button
+          type="button"
+          onClick={() => void downloadImage(part)}
+          title={`Tải ${label}`}
+          aria-label={`Tải ${label}`}
+          className="inline-flex h-6 w-6 cursor-pointer items-center justify-center rounded-md bg-teal-500/20 text-teal-100 transition hover:bg-teal-500/30"
+        >
+          <FiDownload className="h-3 w-3" />
+        </button>
+      </div>
+    )
   }
 
   const saveWebPath = async () => {
@@ -860,11 +928,17 @@ export default function WebBlogScreen() {
 
           <div className="grid grid-cols-2 gap-2">
             <div className="rounded-2xl border border-white/10 bg-black/25 p-1.5">
-              <p className="mb-1 text-[10px] text-slate-500">Ảnh 1</p>
+              <div className="mb-1 flex items-center justify-between gap-1">
+                <p className="text-[10px] text-slate-500">Ảnh 1</p>
+                {renderImageActions('image1', image1)}
+              </div>
               {image1 ? <img src={image1} alt="Ảnh 1" className="h-20 w-full rounded-md object-contain" /> : <p className="text-[10px] text-slate-500">Chưa có</p>}
             </div>
             <div className="rounded-2xl border border-white/10 bg-black/25 p-1.5">
-              <p className="mb-1 text-[10px] text-slate-500">Ảnh 2</p>
+              <div className="mb-1 flex items-center justify-between gap-1">
+                <p className="text-[10px] text-slate-500">Ảnh 2</p>
+                {renderImageActions('image2', image2)}
+              </div>
               {image2 ? <img src={image2} alt="Ảnh 2" className="h-20 w-full rounded-md object-contain" /> : <p className="text-[10px] text-slate-500">Chưa có</p>}
             </div>
           </div>
