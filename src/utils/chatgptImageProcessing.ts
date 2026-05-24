@@ -38,6 +38,10 @@ export type SplitCaptureRect = {
   viewportWidth?: number
   viewportHeight?: number
   openedModal?: boolean
+  /** URL ảnh gốc trên trang ChatGPT (nếu đọc được). */
+  imageSrc?: string
+  /** Ảnh đã tải trong ngữ cảnh trang — tránh phải chụp màn hình. */
+  dataUrl?: string
 }
 
 export async function splitCapturedImage(
@@ -91,6 +95,24 @@ export async function splitCapturedImage(
   const left = makePart(leftSx, leftSy, leftW, leftH)
   const right = makePart(rightSx, rightSy, rightW, rightH)
   return { left, right }
+}
+
+/** Chia đôi toàn bộ file ảnh (không cần rect viewport từ screenshot). */
+export async function splitFullImageDataUrl(dataUrl: string): Promise<{ left: string; right: string }> {
+  const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+    const img = new Image()
+    img.onload = () => resolve(img)
+    img.onerror = () => reject(new Error('Không thể đọc ảnh.'))
+    img.src = dataUrl
+  })
+  return splitCapturedImage(dataUrl, {
+    x: 0,
+    y: 0,
+    width: image.width,
+    height: image.height,
+    viewportWidth: image.width,
+    viewportHeight: image.height,
+  })
 }
 
 /** Cắt vùng ảnh từ screenshot tab — không chia đôi (sao chép 1 ảnh). */
@@ -430,6 +452,27 @@ export async function chatgptLocateLatestChatImageForCapturePageScript(): Promis
   }
 
   const rect = selected.rect
+  const imageSrc = (selected.img.currentSrc || selected.img.src || '').trim()
+  let dataUrl = ''
+  if (imageSrc.startsWith('data:image/')) {
+    dataUrl = imageSrc
+  } else if (imageSrc) {
+    try {
+      const response = await fetch(imageSrc)
+      if (response.ok) {
+        const blob = await response.blob()
+        dataUrl = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader()
+          reader.onload = () => resolve(String(reader.result || ''))
+          reader.onerror = () => reject(new Error('Không thể đọc ảnh.'))
+          reader.readAsDataURL(blob)
+        })
+      }
+    } catch {
+      dataUrl = ''
+    }
+  }
+
   return {
     x: Math.max(0, rect.left),
     y: Math.max(0, rect.top),
@@ -438,6 +481,8 @@ export async function chatgptLocateLatestChatImageForCapturePageScript(): Promis
     viewportWidth: window.innerWidth,
     viewportHeight: window.innerHeight,
     openedModal,
+    imageSrc,
+    dataUrl: dataUrl.startsWith('data:image/') ? dataUrl : undefined,
   }
 }
 

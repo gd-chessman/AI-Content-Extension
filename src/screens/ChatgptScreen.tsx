@@ -78,6 +78,7 @@ import {
   type ChatgptGeneratedImageSnapshot,
   cropCapturedImage,
   splitCapturedImage,
+  splitFullImageDataUrl,
   type SplitCaptureRect,
 } from '@/utils/chatgptImageProcessing'
 import {
@@ -165,6 +166,13 @@ type ExtensionChrome = {
       windowId?: number,
       options?: { format?: 'jpeg' | 'png'; quality?: number },
       callback?: (dataUrl: string) => void,
+    ) => void
+  }
+  windows?: {
+    update?: (
+      windowId: number,
+      updateProperties: { focused?: boolean },
+      callback?: () => void,
     ) => void
   }
   scripting?: {
@@ -890,6 +898,44 @@ export default function ChatgptScreen() {
       })
     })
 
+  const focusChatgptTabForCapture = async (tabId: number, windowId?: number) => {
+    const extensionChrome = getChrome()
+    if (windowId && extensionChrome?.windows?.update) {
+      await new Promise<void>((resolve) => {
+        extensionChrome.windows?.update?.(windowId, { focused: true }, () => resolve())
+      })
+    }
+    await updateTab(tabId)
+    await sleep(650)
+  }
+
+  /** Fallback khi không đọc được ảnh từ DOM — focus tab rồi chụp màn hình. */
+  const captureVisibleTabWithRetry = async (tabId: number, windowId?: number) => {
+    const tryWindowIds = Array.from(new Set<number | undefined>([windowId, undefined]))
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      await focusChatgptTabForCapture(tabId, windowId)
+      if (attempt > 0) {
+        await sleep(200 + attempt * 150)
+      }
+      for (const wid of tryWindowIds) {
+        const shot = await captureVisibleTab(wid)
+        if (shot) return shot
+      }
+    }
+    return null
+  }
+
+  const resolveChatgptImageDataUrl = async (
+    tabId: number,
+    windowId: number | undefined,
+    rect: SplitCaptureRect,
+  ) => {
+    if (rect.dataUrl?.startsWith('data:image/')) {
+      return rect.dataUrl
+    }
+    return captureVisibleTabWithRetry(tabId, windowId)
+  }
+
   const sleep = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms))
 
   type CaptureSplitPairResult =
@@ -918,32 +964,15 @@ export default function ChatgptScreen() {
       return { ok: false, reason: 'no_rect' }
     }
 
-    const tryWindowIds = Array.from(new Set<number | undefined>([windowId, undefined]))
-    let screenshotDataUrl: string | null = null
-    for (let attempt = 0; attempt < 4 && !screenshotDataUrl; attempt += 1) {
-      if (tabId) {
-        // eslint-disable-next-line no-await-in-loop
-        await updateTab(tabId)
-      }
-      if (attempt > 0) {
-        // eslint-disable-next-line no-await-in-loop
-        await sleep(120 + attempt * 120)
-      }
-      for (const wid of tryWindowIds) {
-        // eslint-disable-next-line no-await-in-loop
-        const shot = await captureVisibleTab(wid)
-        if (shot) {
-          screenshotDataUrl = shot
-          break
-        }
-      }
-    }
+    const screenshotDataUrl = await resolveChatgptImageDataUrl(tabId, windowId, rect)
     if (!screenshotDataUrl) {
       return { ok: false, reason: 'no_screenshot' }
     }
 
     try {
-      const parts = await splitCapturedImage(screenshotDataUrl, rect)
+      const parts = rect.dataUrl
+        ? await splitFullImageDataUrl(screenshotDataUrl)
+        : await splitCapturedImage(screenshotDataUrl, rect)
       if (!parts.left || !parts.right) {
         return { ok: false, reason: 'split_failed' }
       }
@@ -977,32 +1006,15 @@ export default function ChatgptScreen() {
       return { ok: false, reason: 'no_rect' }
     }
 
-    const tryWindowIds = Array.from(new Set<number | undefined>([windowId, undefined]))
-    let screenshotDataUrl: string | null = null
-    for (let attempt = 0; attempt < 4 && !screenshotDataUrl; attempt += 1) {
-      if (tabId) {
-        // eslint-disable-next-line no-await-in-loop
-        await updateTab(tabId)
-      }
-      if (attempt > 0) {
-        // eslint-disable-next-line no-await-in-loop
-        await sleep(120 + attempt * 120)
-      }
-      for (const wid of tryWindowIds) {
-        // eslint-disable-next-line no-await-in-loop
-        const shot = await captureVisibleTab(wid)
-        if (shot) {
-          screenshotDataUrl = shot
-          break
-        }
-      }
-    }
+    const screenshotDataUrl = await resolveChatgptImageDataUrl(tabId, windowId, rect)
     if (!screenshotDataUrl) {
       return { ok: false, reason: 'no_screenshot' }
     }
 
     try {
-      const image = await cropCapturedImage(screenshotDataUrl, rect)
+      const image = rect.dataUrl
+        ? screenshotDataUrl
+        : await cropCapturedImage(screenshotDataUrl, rect)
       if (!image) {
         return { ok: false, reason: 'crop_failed' }
       }
