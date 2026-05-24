@@ -13,8 +13,8 @@ export const SHORT_CONTENT_MAX_LINES_STORAGE_KEY = 'shortContentMaxLines'
 export const DEFAULT_SHORT_CONTENT_CUT_MODE: ShortContentCutMode = 'percent'
 export const DEFAULT_SHORT_CONTENT_MIN_PERCENT = 25
 export const DEFAULT_SHORT_CONTENT_MAX_PERCENT = 45
-export const DEFAULT_SHORT_CONTENT_MIN_LINES = 45
-export const DEFAULT_SHORT_CONTENT_MAX_LINES = 100
+export const DEFAULT_SHORT_CONTENT_MIN_LINES = 75
+export const DEFAULT_SHORT_CONTENT_MAX_LINES = 175
 
 export type ShortContentCutConfig = {
   mode: ShortContentCutMode
@@ -124,7 +124,7 @@ export async function getShortContentCutConfigFromStorage(
         SHORT_CONTENT_MIN_LINES_STORAGE_KEY,
         SHORT_CONTENT_MAX_LINES_STORAGE_KEY,
       ],
-      (items) => {
+      (items: any) => {
         resolve(
           normalizeShortContentCutConfig({
             mode: items[SHORT_CONTENT_CUT_MODE_STORAGE_KEY],

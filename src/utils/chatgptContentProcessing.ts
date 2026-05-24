@@ -480,8 +480,8 @@ export function chatgptScrollHighlightStep4ContentPageScript(...injectArgs: unkn
     if (a === 'percent' || a === 'lines') {
       return {
         mode: a,
-        min: typeof b === 'number' ? b : a === 'lines' ? 45 : 25,
-        max: typeof c === 'number' ? c : a === 'lines' ? 100 : 45,
+        min: typeof b === 'number' ? b : a === 'lines' ? 75 : 25,
+        max: typeof c === 'number' ? c : a === 'lines' ? 175 : 45,
       }
     }
     if (typeof a === 'number' && typeof b === 'number') {
