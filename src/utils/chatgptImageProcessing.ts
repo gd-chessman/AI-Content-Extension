@@ -14,8 +14,12 @@ export const SPLIT_IMAGE_DOWNLOAD_FOLDER = 'chatgpt-images'
 export const SAVED_SPLIT_IMAGE_HASHES_KEY = 'savedSplitImageCopyHashes'
 export const SAVED_SPLIT_IMAGE_HASHES_MAX = 150
 
-/** Bỏ mép trong khi chia đôi: ảnh 1 hẹp bên phải, ảnh 2 hẹp bên trái (% chiều rộng mỗi nửa). */
-export const SPLIT_INNER_TRIM_RATIO = 0.005
+/** Bỏ mép khi chia đôi: mỗi nửa cắt 4 cạnh (% theo chiều rộng/chiều cao vùng cắt). */
+export const SPLIT_EDGE_TRIM_RATIO = 0.0075
+
+function computeEdgeTrim(size: number, ratio = SPLIT_EDGE_TRIM_RATIO): number {
+  return Math.max(2, Math.round(size * ratio))
+}
 
 export function hashDataUrl(dataUrl: string): string {
   let h = 5381
@@ -57,23 +61,35 @@ export async function splitCapturedImage(
   const sourceW = Math.max(2, Math.round(rect.width * scaleX))
   const sourceH = Math.max(2, Math.round(rect.height * scaleY))
   const halfW = Math.max(1, Math.floor(sourceW / 2))
-  const innerTrim = Math.max(2, Math.round(halfW * SPLIT_INNER_TRIM_RATIO))
-  const leftW = Math.max(1, halfW - innerTrim)
-  const rightX = sourceX + halfW + innerTrim
-  const rightW = Math.max(1, sourceW - halfW - innerTrim)
+  const rightHalfW = Math.max(1, sourceW - halfW)
 
-  const makePart = (sx: number, sw: number) => {
+  const leftTrimX = computeEdgeTrim(halfW)
+  const leftTrimY = computeEdgeTrim(sourceH)
+  const rightTrimX = computeEdgeTrim(rightHalfW)
+  const rightTrimY = computeEdgeTrim(sourceH)
+
+  const leftSx = sourceX + leftTrimX
+  const leftSy = sourceY + leftTrimY
+  const leftW = Math.max(1, halfW - leftTrimX * 2)
+  const leftH = Math.max(1, sourceH - leftTrimY * 2)
+
+  const rightSx = sourceX + halfW + rightTrimX
+  const rightSy = sourceY + rightTrimY
+  const rightW = Math.max(1, rightHalfW - rightTrimX * 2)
+  const rightH = Math.max(1, sourceH - rightTrimY * 2)
+
+  const makePart = (sx: number, sy: number, sw: number, sh: number) => {
     const canvas = document.createElement('canvas')
     canvas.width = sw
-    canvas.height = sourceH
+    canvas.height = sh
     const ctx = canvas.getContext('2d')
     if (!ctx) return ''
-    ctx.drawImage(image, sx, sourceY, sw, sourceH, 0, 0, sw, sourceH)
+    ctx.drawImage(image, sx, sy, sw, sh, 0, 0, sw, sh)
     return canvas.toDataURL('image/png')
   }
 
-  const left = makePart(sourceX, leftW)
-  const right = makePart(rightX, rightW)
+  const left = makePart(leftSx, leftSy, leftW, leftH)
+  const right = makePart(rightSx, rightSy, rightW, rightH)
   return { left, right }
 }
 
@@ -98,13 +114,19 @@ export async function cropCapturedImage(
   const sourceY = Math.max(0, Math.round(rect.y * scaleY))
   const sourceW = Math.max(2, Math.round(rect.width * scaleX))
   const sourceH = Math.max(2, Math.round(rect.height * scaleY))
+  const trimX = computeEdgeTrim(sourceW)
+  const trimY = computeEdgeTrim(sourceH)
+  const cropX = sourceX + trimX
+  const cropY = sourceY + trimY
+  const cropW = Math.max(1, sourceW - trimX * 2)
+  const cropH = Math.max(1, sourceH - trimY * 2)
 
   const canvas = document.createElement('canvas')
-  canvas.width = sourceW
-  canvas.height = sourceH
+  canvas.width = cropW
+  canvas.height = cropH
   const ctx = canvas.getContext('2d')
   if (!ctx) return ''
-  ctx.drawImage(image, sourceX, sourceY, sourceW, sourceH, 0, 0, sourceW, sourceH)
+  ctx.drawImage(image, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH)
   return canvas.toDataURL('image/png')
 }
 
