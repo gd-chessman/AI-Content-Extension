@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { FiAlertTriangle, FiCheck, FiGlobe, FiImage, FiInfo, FiRotateCcw } from 'react-icons/fi'
+import { FiAlertTriangle, FiCheck, FiGlobe, FiImage, FiInfo, FiRefreshCw, FiRotateCcw } from 'react-icons/fi'
 import translate from 'translate'
 type BrowserTab = { id?: number; url?: string; active?: boolean }
 type ExtensionChrome = {
@@ -334,6 +334,7 @@ export default function GrokScreen() {
   const [isContentTranslated, setIsContentTranslated] = useState(false)
   const [isTranslating, setIsTranslating] = useState(false)
   const [lastImageDataUrl, setLastImageDataUrl] = useState('')
+  const [isPushingToGrok, setIsPushingToGrok] = useState(false)
   const statusLower = status.toLowerCase()
   const statusTone = statusLower.includes('không thể') || statusLower.includes('không tìm thấy') || statusLower.includes('thất bại') || statusLower.includes('lỗi')
     ? 'error'
@@ -342,6 +343,90 @@ export default function GrokScreen() {
       : statusLower.includes('đã ')
         ? 'success'
         : 'info'
+
+  const pushToGrokTab = async (
+    prompt: string,
+    imageDataUrl: string,
+    options?: { part?: 1 | 2; single?: boolean; fromRetry?: boolean },
+  ) => {
+    const trimmedPrompt = prompt.trim()
+    if (!trimmedPrompt && !imageDataUrl) {
+      setStatus('Không có nội dung để điền vào Grok.')
+      return false
+    }
+
+    const isSingle = options?.single === true
+    const part = options?.part === 2 ? 2 : 1
+    const assetLabel = isSingle ? 'ảnh + VIDEO đơn' : `ảnh ${part} + VIDEO ${part}`
+
+    setStatus(options?.fromRetry ? 'Đang đẩy lại nội dung lên Grok...' : 'Đang mở Grok và điền nội dung...')
+
+    const extensionChrome = getChrome()
+    if (!extensionChrome?.tabs?.query || !extensionChrome.tabs.update || !extensionChrome.tabs.create) {
+      setStatus('Môi trường hiện tại không hỗ trợ tự động điền Grok.')
+      return false
+    }
+
+    const grokTabsRaw = await queryTabs(GROK_PATTERNS, true)
+    const grokTabs = grokTabsRaw.filter((t) => isSupportedGrokUrl(t.url))
+
+    const pickBest = (tabs: BrowserTab[]) => {
+      const saved = tabs.find((t) => isSavedGrokUrl(t.url))
+      if (saved) return saved
+      const imagineRoot = tabs.find((t) => isImagineRootUrl(t.url))
+      if (imagineRoot) return imagineRoot
+      const post = tabs.find((t) => isImaginePostUrl(t.url))
+      if (post) return post
+      return tabs[0] || null
+    }
+
+    let target: BrowserTab | null | undefined = pickBest(grokTabs)
+
+    if (target?.id && target.url && isImaginePostUrl(target.url) && shouldRedirectPostToImagine(target.url)) {
+      target = await updateTab(target.id, GROK_URL)
+    } else if (target?.id && target.url && isPreferredGrokUrl(target.url)) {
+      target = await updateTab(target.id)
+    } else if (target?.id) {
+      target = await updateTab(target.id)
+    }
+
+    if (!target?.id) {
+      target = await createTab(GROK_URL)
+    } else if (!isSupportedGrokUrl(target.url || '')) {
+      target = await updateTab(target.id, GROK_URL)
+    } else {
+      target = await updateTab(target.id)
+    }
+
+    if (!target?.id) {
+      setStatus('Không thể mở tab Grok.')
+      return false
+    }
+
+    const ready = await waitForGrokComposer(target.id, { allowPost: true })
+    if (!ready) {
+      setStatus('Đã mở Grok nhưng chưa thấy ô nhập sẵn sàng để dán.')
+      return false
+    }
+
+    const r = await injectPromptToGrok(target.id, trimmedPrompt, imageDataUrl)
+    setStatus(
+      typeof r === 'object' && r?.foundInput
+        ? r.wroteText
+          ? imageDataUrl
+            ? options?.fromRetry
+              ? `Đã đẩy lại ${assetLabel} vào Grok (không Enter).`
+              : `Đã paste ${assetLabel} vào Grok (không Enter).`
+            : options?.fromRetry
+              ? 'Đã đẩy lại prompt vào Grok (không Enter).'
+              : 'Đã điền nội dung vào Grok (không Enter).'
+          : imageDataUrl
+            ? 'Đã paste ảnh. Text có thể đã vào nhưng xác nhận chưa chắc (Grok hay re-render).'
+            : 'Text có thể đã vào nhưng xác nhận chưa chắc (Grok hay re-render).'
+        : 'Không tìm thấy ô nhập của Grok.',
+    )
+    return Boolean(typeof r === 'object' && r?.foundInput)
+  }
 
   useEffect(() => {
     const onFillFromChatgpt = async (event: Event) => {
@@ -364,78 +449,30 @@ export default function GrokScreen() {
       setOriginalLastPrompt('')
       setIsContentTranslated(false)
       setLastImageDataUrl(imageDataUrl)
-      setStatus('Đang mở Grok và điền nội dung...')
 
-      const extensionChrome = getChrome()
-      if (!extensionChrome?.tabs?.query || !extensionChrome.tabs.update || !extensionChrome.tabs.create) {
-        setStatus('Môi trường hiện tại không hỗ trợ tự động điền Grok.')
-        return
-      }
-
-      // Luôn ưu tiên dùng tab Grok đã tồn tại trong cửa sổ hiện tại (kể cả /imagine/post),
-      // tránh mở tab mới khi user đang ở ChatGPT.
-      const grokTabsRaw = await queryTabs(GROK_PATTERNS, true)
-      const grokTabs = grokTabsRaw.filter((t) => isSupportedGrokUrl(t.url))
-
-      const pickBest = (tabs: BrowserTab[]) => {
-        const saved = tabs.find((t) => isSavedGrokUrl(t.url))
-        if (saved) return saved
-        const imagineRoot = tabs.find((t) => isImagineRootUrl(t.url))
-        if (imagineRoot) return imagineRoot
-        const post = tabs.find((t) => isImaginePostUrl(t.url))
-        if (post) return post
-        return tabs[0] || null
-      }
-
-      let target: BrowserTab | null | undefined = pickBest(grokTabs)
-
-      if (target?.id && target.url && isImaginePostUrl(target.url) && shouldRedirectPostToImagine(target.url)) {
-        target = await updateTab(target.id, GROK_URL)
-      } else if (target?.id && target.url && isPreferredGrokUrl(target.url)) {
-        target = await updateTab(target.id)
-      } else if (target?.id) {
-        // Nếu là /imagine/post (root) thì chạy trên tab đó luôn.
-        target = await updateTab(target.id)
-      }
-
-      if (!target?.id) {
-        target = await createTab(GROK_URL)
-      } else if (!isSupportedGrokUrl(target.url || '')) {
-        target = await updateTab(target.id, GROK_URL)
-      } else {
-        target = await updateTab(target.id)
-      }
-
-      if (!target?.id) {
-        setStatus('Không thể mở tab Grok.')
-        return
-      }
-
-      // Nếu vừa redirect (đặc biệt từ /imagine/post/... về /imagine) cần đợi Grok hydrate xong rồi mới inject.
-      const ready = await waitForGrokComposer(target.id, { allowPost: true })
-      if (!ready) {
-        setStatus('Đã mở Grok nhưng chưa thấy ô nhập sẵn sàng để dán.')
-        return
-      }
-
-      const r = await injectPromptToGrok(target.id, prompt, imageDataUrl)
-      const assetLabel = isSingle ? 'ảnh + VIDEO đơn' : `ảnh ${part} + VIDEO ${part}`
-      setStatus(
-        typeof r === 'object' && r?.foundInput
-          ? r.wroteText
-            ? imageDataUrl
-              ? `Đã paste ${assetLabel} vào Grok (không Enter).`
-              : 'Đã điền nội dung vào Grok (không Enter).'
-            : imageDataUrl
-              ? `Đã paste ảnh. Text có thể đã vào nhưng xác nhận chưa chắc (Grok hay re-render).`
-              : 'Text có thể đã vào nhưng xác nhận chưa chắc (Grok hay re-render).'
-          : 'Không tìm thấy ô nhập của Grok.',
-      )
+      await pushToGrokTab(prompt, imageDataUrl, { part, single: isSingle })
     }
 
     window.addEventListener('fill-grok-from-chatgpt-video1-image', onFillFromChatgpt as EventListener)
     return () => window.removeEventListener('fill-grok-from-chatgpt-video1-image', onFillFromChatgpt as EventListener)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- pushToGrokTab ổn định theo closure màn hình
   }, [])
+
+  const retryPushToGrok = async () => {
+    if (isPushingToGrok) return
+    const prompt = lastPrompt.trim()
+    const imageDataUrl = lastImageDataUrl || ''
+    if (!prompt && !imageDataUrl) {
+      setStatus('Chưa có prompt hoặc ảnh để đẩy lại.')
+      return
+    }
+    setIsPushingToGrok(true)
+    try {
+      await pushToGrokTab(prompt, imageDataUrl, { fromRetry: true })
+    } finally {
+      setIsPushingToGrok(false)
+    }
+  }
 
   const translateLastPrompt = async () => {
     if (isContentTranslated) {
@@ -505,11 +542,22 @@ export default function GrokScreen() {
         ) : null}
         <div className="flex shrink-0 items-center justify-between gap-2">
           <p className="text-[10px] text-slate-500">Nội dung gần nhất</p>
-          <button
-            type="button"
-            onClick={() => void translateLastPrompt()}
-            disabled={!lastPrompt.trim() || isTranslating}
-            title={
+          <div className="inline-flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => void retryPushToGrok()}
+              disabled={(!lastPrompt.trim() && !lastImageDataUrl) || isPushingToGrok || isTranslating}
+              title={isPushingToGrok ? 'Đang đẩy lại…' : 'Đẩy lại prompt + ảnh lên Grok'}
+              aria-label="Đẩy lại lên Grok"
+              className="inline-flex h-7 w-7 cursor-pointer items-center justify-center rounded-md bg-emerald-500/20 text-emerald-100 transition hover:bg-emerald-500/30 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <FiRefreshCw className={`h-3.5 w-3.5 ${isPushingToGrok ? 'animate-spin' : ''}`} />
+            </button>
+            <button
+              type="button"
+              onClick={() => void translateLastPrompt()}
+              disabled={!lastPrompt.trim() || isTranslating || isPushingToGrok}
+              title={
               isTranslating
                 ? 'Đang dịch...'
                 : isContentTranslated
@@ -532,6 +580,7 @@ export default function GrokScreen() {
               </span>
             ) : null}
           </button>
+        </div>
         </div>
         <div className="mt-1 min-h-0 flex-1 overflow-y-auto whitespace-pre-wrap text-[11px] text-slate-200">
           {lastPrompt || 'Chưa có dữ liệu.'}
