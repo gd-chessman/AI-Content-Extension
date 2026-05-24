@@ -19,6 +19,24 @@ export const WORKSPACE_ROOT_PICKER_ID = 'aicontent-workspace-root'
 
 export const WORKSPACE_STORY_SUBDIRS = ['images', 'content', 'info'] as const
 
+/** Giữ handle trong phiên — tránh load IndexedDB lặp và giữ quyền ổn định hơn. */
+let cachedContentRootHandle: FileSystemDirectoryHandle | null = null
+
+export function peekCachedContentRootDirectoryHandle(): FileSystemDirectoryHandle | null {
+  return cachedContentRootHandle
+}
+
+export function isFilesystemPermissionError(error: unknown): boolean {
+  const msg = error instanceof Error ? error.message : String(error)
+  const name = error instanceof DOMException ? error.name : ''
+  return (
+    name === 'NotAllowedError' ||
+    name === 'SecurityError' ||
+    /User activation is required/i.test(msg) ||
+    /request permissions?/i.test(msg)
+  )
+}
+
 function openDb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, 1)
@@ -67,37 +85,99 @@ async function idbDeleteKey(key: string): Promise<void> {
 }
 
 export async function loadContentRootDirectoryHandle(): Promise<FileSystemDirectoryHandle | null> {
+  if (cachedContentRootHandle) return cachedContentRootHandle
   const primary = await idbGetHandle(CONTENT_ROOT_HANDLE_KEY)
-  if (primary) return primary
+  if (primary) {
+    cachedContentRootHandle = primary
+    return primary
+  }
   const legacy = await idbGetHandle(LEGACY_SPLIT_IMAGE_HANDLE_KEY)
   if (legacy) {
     await idbPutHandle(CONTENT_ROOT_HANDLE_KEY, legacy)
     await idbDeleteKey(LEGACY_SPLIT_IMAGE_HANDLE_KEY)
+    cachedContentRootHandle = legacy
     return legacy
   }
   return null
 }
 
 export async function persistContentRootDirectoryHandle(handle: FileSystemDirectoryHandle): Promise<void> {
+  cachedContentRootHandle = handle
   await idbPutHandle(CONTENT_ROOT_HANDLE_KEY, handle)
   await idbDeleteKey(LEGACY_SPLIT_IMAGE_HANDLE_KEY)
 }
 
 export async function clearContentRootDirectoryHandle(): Promise<void> {
+  cachedContentRootHandle = null
   await idbDeleteKey(CONTENT_ROOT_HANDLE_KEY)
   await idbDeleteKey(LEGACY_SPLIT_IMAGE_HANDLE_KEY)
 }
 
-export async function ensureDirectoryWritable(handle: FileSystemDirectoryHandle): Promise<boolean> {
+export async function queryDirectoryWritable(handle: FileSystemDirectoryHandle): Promise<boolean> {
   const h = handle as FileSystemDirectoryHandle & {
     queryPermission?: (options: { mode: 'readwrite' }) => Promise<PermissionState>
+  }
+  if (!h.queryPermission) return true
+  const state = await h.queryPermission({ mode: 'readwrite' })
+  return state === 'granted'
+}
+
+export async function ensureDirectoryWritable(
+  handle: FileSystemDirectoryHandle,
+  options?: { allowRequest?: boolean },
+): Promise<boolean> {
+  if (await queryDirectoryWritable(handle)) return true
+  if (!options?.allowRequest) return false
+  const h = handle as FileSystemDirectoryHandle & {
     requestPermission?: (options: { mode: 'readwrite' }) => Promise<PermissionState>
   }
-  if (!h.queryPermission || !h.requestPermission) return true
-  let state = await h.queryPermission({ mode: 'readwrite' })
-  if (state === 'granted') return true
-  state = await h.requestPermission({ mode: 'readwrite' })
-  return state === 'granted'
+  if (!h.requestPermission) return false
+  try {
+    const state = await h.requestPermission({ mode: 'readwrite' })
+    return state === 'granted'
+  } catch {
+    return false
+  }
+}
+
+/** Mở picker chọn thư mục gốc — gọi trong user gesture (vd. bấm Lưu local). */
+export async function pickContentRootDirectory(): Promise<FileSystemDirectoryHandle | null> {
+  if (!('showDirectoryPicker' in window) || typeof window.showDirectoryPicker !== 'function') {
+    throw new Error('Trình duyệt không hỗ trợ chọn thư mục (File System Access API).')
+  }
+  try {
+    const handle = await window.showDirectoryPicker({
+      id: WORKSPACE_ROOT_PICKER_ID,
+      mode: 'readwrite',
+    })
+    await persistContentRootDirectoryHandle(handle)
+    return handle
+  } catch (e) {
+    if (e instanceof DOMException && e.name === 'AbortError') return null
+    throw e
+  }
+}
+
+/**
+ * Lấy thư mục gốc có quyền ghi. Nếu hết quyền / chưa chọn — tự mở picker (Chrome nhớ thư mục cũ).
+ * Trả null khi user hủy picker.
+ */
+export async function resolveWritableContentRootDirectory(options?: {
+  allowPicker?: boolean
+}): Promise<FileSystemDirectoryHandle | null> {
+  const allowPicker = options?.allowPicker !== false
+  let handle = await loadContentRootDirectoryHandle()
+
+  if (handle && (await queryDirectoryWritable(handle))) {
+    return handle
+  }
+
+  if (handle && (await ensureDirectoryWritable(handle, { allowRequest: true }))) {
+    return handle
+  }
+
+  if (!allowPicker) return null
+  return pickContentRootDirectory()
 }
 
 /** Tạo images / content / info trong thư mục một story. */
@@ -162,8 +242,10 @@ export async function ensureStoryWorkspaceLayout(
   storiesSeg: string,
   storyFolderSeg: string,
 ): Promise<StoryWorkspaceDirs> {
-  const rootOk = await ensureDirectoryWritable(root)
-  if (!rootOk) throw new Error('Không có quyền ghi thư mục gốc (Hồ sơ → Cấu hình).')
+  const rootOk = await queryDirectoryWritable(root)
+  if (!rootOk) {
+    throw new Error('PERMISSION_REQUIRED')
+  }
   const stories = sanitizeWorkspaceFolderSegment(storiesSeg, DEFAULT_STORIES_FOLDER_SEGMENT)
   const storyName = sanitizeWorkspaceFolderSegment(storyFolderSeg, 'unnamed-story')
   const storiesDir = await root.getDirectoryHandle(stories, { create: true })
@@ -195,16 +277,94 @@ export async function writeBlobToFile(parent: FileSystemDirectoryHandle, filenam
   }
 }
 
-export async function ensureDirectoryReadable(handle: FileSystemDirectoryHandle): Promise<boolean> {
+export async function ensureDirectoryReadable(
+  handle: FileSystemDirectoryHandle,
+  options?: { allowRequest?: boolean },
+): Promise<boolean> {
   const h = handle as FileSystemDirectoryHandle & {
     queryPermission?: (options: { mode: 'read' }) => Promise<PermissionState>
     requestPermission?: (options: { mode: 'read' }) => Promise<PermissionState>
   }
-  if (!h.queryPermission || !h.requestPermission) return true
+  if (!h.queryPermission) return true
   let state = await h.queryPermission({ mode: 'read' })
   if (state === 'granted') return true
-  state = await h.requestPermission({ mode: 'read' })
+  if (!options?.allowRequest || !h.requestPermission) return false
+  try {
+    state = await h.requestPermission({ mode: 'read' })
+  } catch {
+    return false
+  }
   return state === 'granted'
+}
+
+export type LocalStoryBundleWritePayload = {
+  storiesSeg: string
+  folderSegment: string
+  storyId: string
+  titleDisplay: string
+  sourceReelUrl: string
+  workflowId: string
+  shortText: string
+  longText: string
+  titlePlain: string
+  splitGeneratedImages: boolean
+  left: string
+  right: string
+  usedStaleSplitFallback: boolean
+}
+
+function buildLocalSaveImageNote(payload: LocalStoryBundleWritePayload): string {
+  const { splitGeneratedImages, left, right, usedStaleSplitFallback } = payload
+  if (splitGeneratedImages) {
+    if (left && right) {
+      return usedStaleSplitFallback
+        ? ', images/anh-1.png & anh-2.png (dùng ảnh cắt cũ — không chụp lại được từ ChatGPT)'
+        : ', images/anh-1.png & anh-2.png'
+    }
+    return ' (chưa có ảnh cắt đôi — bỏ qua images)'
+  }
+  if (left) {
+    return usedStaleSplitFallback
+      ? ', images/anh-1.png (dùng ảnh cũ — không chụp lại được từ ChatGPT)'
+      : ', images/anh-1.png'
+  }
+  return ' (chưa có ảnh — bỏ qua images)'
+}
+
+export async function writeStoryBundleToWorkspace(
+  root: FileSystemDirectoryHandle,
+  payload: LocalStoryBundleWritePayload,
+): Promise<{ storiesSeg: string; folderSegment: string; imageNote: string }> {
+  const dirs = await ensureStoryWorkspaceLayout(root, payload.storiesSeg, payload.folderSegment)
+
+  await writeUtf8File(dirs.contentDir, 'noi-dung-ngan.txt', payload.shortText)
+  await writeUtf8File(dirs.contentDir, 'noi-dung-dai.txt', payload.longText)
+
+  const infoPayload = {
+    storyId: payload.storyId,
+    title: payload.titlePlain,
+    storyDisplayName: payload.titleDisplay,
+    sourceReelUrl: payload.sourceReelUrl || '',
+    workflowId: payload.workflowId,
+    savedAt: new Date().toISOString(),
+    hasSplitImages: payload.splitGeneratedImages ? Boolean(payload.left && payload.right) : Boolean(payload.left),
+  }
+  await writeUtf8File(dirs.infoDir, 'meta.json', JSON.stringify(infoPayload, null, 2))
+
+  if (payload.left) {
+    const blobL = await (await fetch(payload.left)).blob()
+    await writeBlobToFile(dirs.imagesDir, 'anh-1.png', blobL)
+  }
+  if (payload.right) {
+    const blobR = await (await fetch(payload.right)).blob()
+    await writeBlobToFile(dirs.imagesDir, 'anh-2.png', blobR)
+  }
+
+  return {
+    storiesSeg: payload.storiesSeg,
+    folderSegment: payload.folderSegment,
+    imageNote: buildLocalSaveImageNote(payload),
+  }
 }
 
 async function readUtf8FileIfExists(parent: FileSystemDirectoryHandle, filename: string): Promise<string | null> {

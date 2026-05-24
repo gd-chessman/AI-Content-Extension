@@ -82,12 +82,12 @@ import {
   type SplitCaptureRect,
 } from '@/utils/chatgptImageProcessing'
 import {
-  ensureStoryWorkspaceLayout,
   getStoriesFolderSegmentFromStorage,
-  loadContentRootDirectoryHandle,
+  isFilesystemPermissionError,
+  type LocalStoryBundleWritePayload,
+  resolveWritableContentRootDirectory,
   sanitizeWorkspaceFolderSegment,
-  writeBlobToFile,
-  writeUtf8File,
+  writeStoryBundleToWorkspace,
 } from '@/utils/localWorkspacePersistence'
 import type { StepToolLink } from '@/services/StepToolService'
 import { fetchToolHandler } from '@/services/ToolHandlerService'
@@ -580,6 +580,8 @@ export default function ChatgptScreen() {
   const [copiedPart, setCopiedPart] = useState<'left' | 'right' | null>(null)
   const [copiedTool, setCopiedTool] = useState<string | null>(null)
   const [isSavingStoryLocal, setIsSavingStoryLocal] = useState(false)
+  const pendingLocalSaveRef = useRef<LocalStoryBundleWritePayload | null>(null)
+  const [hasPendingLocalSave, setHasPendingLocalSave] = useState(false)
   /** Đã có đủ lượt user + phản hồi assistant cho bước trích nội dung trên tab ChatGPT. */
   const [extractContentReady, setExtractContentReady] = useState(false)
   const [isWorkflowRunning, setIsWorkflowRunning] = useState(false)
@@ -2458,7 +2460,68 @@ export default function ChatgptScreen() {
     }
   }
 
+  const flushPendingLocalSave = async (): Promise<boolean> => {
+    const payload = pendingLocalSaveRef.current
+    if (!payload) return false
+
+    setIsSavingStoryLocal(true)
+    try {
+      setStatus('Đang chọn thư mục và ghi file story đã chuẩn bị...')
+      const root = await resolveWritableContentRootDirectory({ allowPicker: true })
+      if (!root) {
+        setStatus('Đã hủy chọn thư mục — bấm Lưu local lại để hoàn tất ghi file.')
+        return false
+      }
+      const result = await writeStoryBundleToWorkspace(root, payload)
+      pendingLocalSaveRef.current = null
+      setHasPendingLocalSave(false)
+      setStatus(
+        `Đã lưu cục bộ: …/${result.storiesSeg}/${result.folderSegment}/ — content (noi-dung-ngan, noi-dung-dai), info/meta.json${result.imageNote}.`,
+      )
+      return true
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      setStatus(`Lưu vào local thất bại: ${msg}`)
+      return false
+    } finally {
+      setIsSavingStoryLocal(false)
+    }
+  }
+
+  const writeLocalBundleWithPermissionRecovery = async (
+    root: FileSystemDirectoryHandle,
+    payload: LocalStoryBundleWritePayload,
+  ): Promise<boolean> => {
+    try {
+      const result = await writeStoryBundleToWorkspace(root, payload)
+      pendingLocalSaveRef.current = null
+      setHasPendingLocalSave(false)
+      setStatus(
+        `Đã lưu cục bộ: …/${result.storiesSeg}/${result.folderSegment}/ — content (noi-dung-ngan, noi-dung-dai), info/meta.json${result.imageNote}.`,
+      )
+      return true
+    } catch (e) {
+      if (!isFilesystemPermissionError(e) && !(e instanceof Error && e.message === 'PERMISSION_REQUIRED')) {
+        throw e
+      }
+      pendingLocalSaveRef.current = payload
+      setHasPendingLocalSave(true)
+      const recovered = await flushPendingLocalSave()
+      if (recovered) return true
+      if (!pendingLocalSaveRef.current) return false
+      setStatus(
+        'Story đã sẵn sàng — bấm Lưu local một lần nữa (hoặc «Xác nhận lưu») để chọn thư mục và ghi file.',
+      )
+      return false
+    }
+  }
+
   const saveStoryBundleToLocal = async () => {
+    if (pendingLocalSaveRef.current) {
+      await flushPendingLocalSave()
+      return
+    }
+
     const sorted = [...processSteps].sort((a, b) => (a.stepNo || 0) - (b.stepNo || 0))
     const lastStep = sorted[sorted.length - 1]
     if (!lastStep?.prompt?.trim()) {
@@ -2468,6 +2531,13 @@ export default function ChatgptScreen() {
 
     setIsSavingStoryLocal(true)
     try {
+      setStatus('Đang xác nhận quyền thư mục lưu...')
+      const root = await resolveWritableContentRootDirectory({ allowPicker: true })
+      if (!root) {
+        setStatus('Cần chọn thư mục lưu story trên máy để tiếp tục.')
+        return
+      }
+
       const extensionChrome = getChrome()
       if (!extensionChrome?.tabs?.query || !extensionChrome.scripting?.executeScript) {
         setStatus('Môi trường không hỗ trợ kiểm tra / lưu qua tab ChatGPT.')
@@ -2520,12 +2590,6 @@ export default function ChatgptScreen() {
         return
       }
 
-      const root = await loadContentRootDirectoryHandle()
-      if (!root) {
-        setStatus('Chưa chọn thư mục gốc workspace. Vào Hồ sơ → Cấu hình → Chọn thư mục gốc.')
-        return
-      }
-
       let storyCtx = await resolveStoryContextForLocalSave()
       let titlePlain = ''
       if (!storyCtx) {
@@ -2546,8 +2610,6 @@ export default function ChatgptScreen() {
       const storiesSeg = await getStoriesFolderSegmentFromStorage(ext?.storage?.local)
 
       setStatus(`Đang lưu bundle story «${storyCtx.folderSegment}» vào máy...`)
-
-      const dirs = await ensureStoryWorkspaceLayout(root, storiesSeg, storyCtx.folderSegment)
 
       const shortText = await extractThreadContent('content_short', { copyToClipboard: false })
       const longText = await extractThreadContent('content_full', { copyToClipboard: false })
@@ -2600,43 +2662,23 @@ export default function ChatgptScreen() {
         }
       }
 
-      await writeUtf8File(dirs.contentDir, 'noi-dung-ngan.txt', shortText)
-      await writeUtf8File(dirs.contentDir, 'noi-dung-dai.txt', longText)
-
-      const infoPayload = {
+      const bundlePayload: LocalStoryBundleWritePayload = {
+        storiesSeg,
+        folderSegment: storyCtx.folderSegment,
         storyId: storyCtx.storyId,
-        title: titlePlain,
-        storyDisplayName: storyCtx.titleDisplay,
+        titleDisplay: storyCtx.titleDisplay,
         sourceReelUrl: storyCtx.sourceReelUrl || '',
         workflowId: selectedWorkflowId,
-        savedAt: new Date().toISOString(),
-        hasSplitImages: splitGeneratedImages ? Boolean(left && right) : Boolean(left),
-      }
-      await writeUtf8File(dirs.infoDir, 'meta.json', JSON.stringify(infoPayload, null, 2))
-
-      if (left) {
-        const blobL = await (await fetch(left)).blob()
-        await writeBlobToFile(dirs.imagesDir, 'anh-1.png', blobL)
-      }
-      if (right) {
-        const blobR = await (await fetch(right)).blob()
-        await writeBlobToFile(dirs.imagesDir, 'anh-2.png', blobR)
+        shortText,
+        longText,
+        titlePlain,
+        splitGeneratedImages,
+        left,
+        right,
+        usedStaleSplitFallback,
       }
 
-      const imageNote = splitGeneratedImages
-        ? left && right
-          ? usedStaleSplitFallback
-            ? ', images/anh-1.png & anh-2.png (dùng ảnh cắt cũ — không chụp lại được từ ChatGPT)'
-            : ', images/anh-1.png & anh-2.png'
-          : ' (chưa có ảnh cắt đôi — bỏ qua images)'
-        : left
-          ? usedStaleSplitFallback
-            ? ', images/anh-1.png (dùng ảnh cũ — không chụp lại được từ ChatGPT)'
-            : ', images/anh-1.png'
-          : ' (chưa có ảnh — bỏ qua images)'
-      setStatus(
-        `Đã lưu cục bộ: …/${storiesSeg}/${storyCtx.folderSegment}/ — content (noi-dung-ngan, noi-dung-dai), info/meta.json${imageNote}.`,
-      )
+      await writeLocalBundleWithPermissionRecovery(root, bundlePayload)
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       setStatus(`Lưu vào local thất bại: ${msg}`)
@@ -3045,6 +3087,16 @@ export default function ChatgptScreen() {
               {status}
             </span>
           </p>
+          {hasPendingLocalSave ? (
+            <button
+              type="button"
+              onClick={() => void flushPendingLocalSave()}
+              disabled={isSavingStoryLocal}
+              className="mt-2 inline-flex w-full cursor-pointer items-center justify-center gap-1.5 rounded-xl border border-amber-400/35 bg-amber-500/15 px-3 py-2 text-[11px] font-medium text-amber-100 transition hover:bg-amber-500/25 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Xác nhận lưu vào thư mục
+            </button>
+          ) : null}
         </div>
 
         <aside className="flex min-h-0 flex-col rounded-2xl border border-white/10 bg-black/30 p-2">
