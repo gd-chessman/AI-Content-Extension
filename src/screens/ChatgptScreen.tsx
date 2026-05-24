@@ -19,7 +19,7 @@ import {
   FiRefreshCw,
   FiSave,
   FiScissors,
-  FiSettings,
+  // FiSettings,
   FiSquare,
   FiType,
 } from 'react-icons/fi'
@@ -2990,6 +2990,7 @@ export default function ChatgptScreen() {
           ) : null}
           </div>
         </div>
+        {/* Tạm ẩn nút cài đặt workflow
         <button
           type="button"
           className="inline-flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-lg border border-white/10 bg-black/30 text-slate-300 transition hover:bg-blue-500/20 hover:text-blue-100"
@@ -2998,6 +2999,7 @@ export default function ChatgptScreen() {
         >
           <FiSettings className="h-3.5 w-3.5" />
         </button>
+        */}
       </div>
       <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_92px] gap-3">
         <div className="flex min-h-0 flex-col rounded-2xl border border-white/10 bg-black/30 p-3">
