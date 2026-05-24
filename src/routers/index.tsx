@@ -61,7 +61,7 @@ function AppRouter() {
     const targetByRoute: Partial<Record<Exclude<RouteId, 'login'>, { url: string; patterns: string[] }>> = {
       facebook: { url: 'https://www.facebook.com', patterns: ['*://*.facebook.com/*'] },
       chatgpt: { url: 'https://chatgpt.com', patterns: ['*://chatgpt.com/*', '*://chat.openai.com/*'] },
-      grok: { url: 'https://grok.com', patterns: ['*://grok.com/*'] },
+      grok: { url: 'https://grok.com/imagine/saved', patterns: ['*://grok.com/*'] },
       ...(webblogUrl
         ? {
             webblog: {
