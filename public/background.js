@@ -1,3 +1,11 @@
+function configureSidePanelOnActionClick() {
+  if (!chrome.sidePanel?.setPanelBehavior) return
+  chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {})
+}
+
+configureSidePanelOnActionClick()
+chrome.runtime.onInstalled.addListener(configureSidePanelOnActionClick)
+
 // Tải file qua chrome.downloads (luôn chạy trong service worker khi có quyền "downloads").
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type === 'DOWNLOAD_ARRAY_BUFFER') {
