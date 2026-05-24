@@ -205,6 +205,58 @@ const formatViewInput = (value: string) => {
 const FB_REELS_SCAN_MIN_LS_KEY = 'facebookReelsScanMinViews'
 const FB_REELS_SCAN_MAX_LS_KEY = 'facebookReelsScanMaxViews'
 const FB_SELECTED_FANPAGE_LS_KEY = 'facebookSelectedFanpageId'
+const FB_REELS_SCAN_HISTORY_PREFIX = 'facebookReelsScanHistory:'
+
+function scanHistoryStorageKey(fanpageId: string) {
+  return `${FB_REELS_SCAN_HISTORY_PREFIX}${fanpageId}`
+}
+
+function isScannedReelLike(value: unknown): value is ScannedReel {
+  if (!value || typeof value !== 'object') return false
+  const row = value as Record<string, unknown>
+  return typeof row.id === 'string' && typeof row.url === 'string'
+}
+
+function readScanHistoryForFanpage(fanpageId: string): ScannedReel[] {
+  try {
+    const raw = localStorage.getItem(scanHistoryStorageKey(fanpageId))
+    if (!raw) return []
+    const parsed = JSON.parse(raw) as unknown
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter(isScannedReelLike)
+  } catch {
+    return []
+  }
+}
+
+function writeScanHistoryForFanpage(fanpageId: string, reels: ScannedReel[]) {
+  try {
+    localStorage.setItem(scanHistoryStorageKey(fanpageId), JSON.stringify(reels))
+  } catch {
+    /* ignore quota */
+  }
+}
+
+function clearScanHistoryForFanpage(fanpageId: string) {
+  try {
+    localStorage.removeItem(scanHistoryStorageKey(fanpageId))
+  } catch {
+    /* ignore */
+  }
+}
+
+function clearAllScanHistories() {
+  try {
+    const keys: string[] = []
+    for (let i = 0; i < localStorage.length; i += 1) {
+      const key = localStorage.key(i)
+      if (key?.startsWith(FB_REELS_SCAN_HISTORY_PREFIX)) keys.push(key)
+    }
+    keys.forEach((key) => localStorage.removeItem(key))
+  } catch {
+    /* ignore */
+  }
+}
 
 function readStoredScanViewInput(key: string, fallback: string): string {
   try {
@@ -288,6 +340,7 @@ export default function FacebookScreen() {
       /* ignore */
     }
   }, [selectedFanpageId])
+
   const checkReelQueryKey = useMemo(() => {
     const u = selectedReel?.url?.trim()
     return u ? canonicalSourceReelUrl(u) : ''
@@ -367,6 +420,7 @@ export default function FacebookScreen() {
   const scanAllStopRef = useRef(false)
   const isScanningRef = useRef(false)
   const scanResultRef = useRef<ScannedReel[]>([])
+  const prevSelectedFanpageIdRef = useRef<string | null | undefined>(undefined)
   const contentTextRef = useRef('')
   const selectedReelRef = useRef<ScannedReel | null>(null)
   /** Fanpage URL vừa mở trong workflow — dùng để chọn đúng tab Facebook khi side panel không active tab fanpage */
@@ -426,6 +480,26 @@ export default function FacebookScreen() {
   useEffect(() => {
     scanResultRef.current = scannedReels
   }, [scannedReels])
+
+  useEffect(() => {
+    if (prevSelectedFanpageIdRef.current === selectedFanpageId) return
+    prevSelectedFanpageIdRef.current = selectedFanpageId
+
+    if (!selectedFanpageId) {
+      setScannedReels([])
+      scanResultRef.current = []
+      setSelectedReel(null)
+      return
+    }
+
+    const stored = readScanHistoryForFanpage(selectedFanpageId)
+    setScannedReels(stored)
+    scanResultRef.current = stored
+    setSelectedReel(null)
+    setContentText('')
+    setOriginalContentText('')
+    setIsContentDirty(false)
+  }, [selectedFanpageId])
 
   useEffect(() => {
     contentTextRef.current = contentText
@@ -641,6 +715,10 @@ export default function FacebookScreen() {
 
   const handleDeleteFanpage = async (id: string) => {
     await deleteFanpageMutation.mutateAsync(id)
+    clearScanHistoryForFanpage(id)
+    if (selectedFanpageId === id) {
+      setSelectedFanpageId(null)
+    }
     await queryClient.invalidateQueries({ queryKey: ['fanpages'] })
     setEditingFanpages((prev) => prev.filter((item) => item._id !== id))
     setFanpageStatus('Đã xóa fanpage.')
@@ -648,6 +726,8 @@ export default function FacebookScreen() {
 
   const handleDeleteAllFanpages = async () => {
     await deleteAllFanpagesMutation.mutateAsync()
+    clearAllScanHistories()
+    setSelectedFanpageId(null)
     await queryClient.invalidateQueries({ queryKey: ['fanpages'] })
     setEditingFanpages([])
     setFanpageStatus('Đã xóa toàn bộ fanpage.')
@@ -1444,20 +1524,22 @@ export default function FacebookScreen() {
         const reels = payload.rows || []
         const foundCount = Number(payload.foundCount) || reels.length
         const prevCount = append ? scanResultRef.current.length : 0
-        setHasMoreReels(Boolean(payload.hasMore))
-        setScannedReels((prev) => {
-          if (!append) {
-            scanResultRef.current = reels
-            return reels
-          }
+        const historyFanpageId =
+          fanpages.find((page) => tabMatchesFanpageUrl(targetUrl, page.url))?._id || selectedFanpageId
+        const mergedList = (() => {
+          if (!append) return reels
           const map = new Map<string, ScannedReel>()
-          prev.forEach((item) => map.set(item.url, item))
+          scanResultRef.current.forEach((item) => map.set(item.url, item))
           reels.forEach((item) => map.set(item.url, item))
-          const merged = Array.from(map.values())
-          scanResultRef.current = merged
-          return merged
-        })
-        const mergedCount = append ? scanResultRef.current.length : reels.length
+          return Array.from(map.values())
+        })()
+        setHasMoreReels(Boolean(payload.hasMore))
+        setScannedReels(mergedList)
+        scanResultRef.current = mergedList
+        if (historyFanpageId) {
+          writeScanHistoryForFanpage(historyFanpageId, mergedList)
+        }
+        const mergedCount = mergedList.length
         const addedCount = Math.max(0, mergedCount - prevCount)
         const rangeLabel =
           Number.isFinite(maxViewCount) && maxViewCount !== Number.POSITIVE_INFINITY
