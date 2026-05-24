@@ -73,7 +73,7 @@ function AppRouter() {
       ...(ggSheetUrl
         ? {
             ggsheet: {
-              url: toOrigin(ggSheetUrl),
+              url: ggSheetUrl,
               patterns: [toPattern(ggSheetUrl)],
             },
           }

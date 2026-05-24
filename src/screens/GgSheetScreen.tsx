@@ -88,6 +88,14 @@ const CHATGPT_PATTERNS = ['*://chatgpt.com/*', '*://chat.openai.com/*']
 const extractSheetId = (url: string) => url.match(/\/spreadsheets\/d\/([^/]+)/)?.[1] || ''
 
 type DataField = keyof CollectedData
+type GgSheetTab = 'collect' | 'extract'
+
+const EMPTY_COLLECTED_DATA: CollectedData = { title: '', shortContent: '', fullContent: '' }
+const EMPTY_TRANSLATED_FIELDS: Record<DataField, boolean> = {
+  title: false,
+  shortContent: false,
+  fullContent: false,
+}
 
 const translateInChunks = async (source: string) => {
   const value = (source || '').trim()
@@ -162,28 +170,28 @@ export default function GgSheetScreen() {
       : statusLower.includes('đã ')
         ? 'success'
         : 'info'
-  const [data, setData] = useState<CollectedData>({ title: '', shortContent: '', fullContent: '' })
-  const [originalData, setOriginalData] = useState<CollectedData>({
-    title: '',
-    shortContent: '',
-    fullContent: '',
-  })
-  const [translatedFields, setTranslatedFields] = useState<Record<DataField, boolean>>({
-    title: false,
-    shortContent: false,
-    fullContent: false,
-  })
-  const [translatingField, setTranslatingField] = useState<DataField | null>(null)
+  const [collectData, setCollectData] = useState<CollectedData>(EMPTY_COLLECTED_DATA)
+  const [extractData, setExtractData] = useState<CollectedData>(EMPTY_COLLECTED_DATA)
+  const [collectOriginalData, setCollectOriginalData] = useState<CollectedData>(EMPTY_COLLECTED_DATA)
+  const [extractOriginalData, setExtractOriginalData] = useState<CollectedData>(EMPTY_COLLECTED_DATA)
+  const [collectTranslatedFields, setCollectTranslatedFields] = useState<Record<DataField, boolean>>(EMPTY_TRANSLATED_FIELDS)
+  const [extractTranslatedFields, setExtractTranslatedFields] = useState<Record<DataField, boolean>>(EMPTY_TRANSLATED_FIELDS)
+  const [collectTranslatingField, setCollectTranslatingField] = useState<DataField | null>(null)
+  const [extractTranslatingField, setExtractTranslatingField] = useState<DataField | null>(null)
   const [isSaving, setIsSaving] = useState(false)
   const [previewData, setPreviewData] = useState<GgSheetPushPreview | null>(null)
   const [showPreviewModal, setShowPreviewModal] = useState(false)
   const [extractRowInput, setExtractRowInput] = useState('')
   const [isExtracting, setIsExtracting] = useState(false)
+  const [copiedReelContent, setCopiedReelContent] = useState(false)
   const [shortContentCutConfig, setShortContentCutConfig] = useState<ShortContentCutConfig>(() =>
     normalizeShortContentCutConfig({}),
   )
   const sheetId = extractSheetId(sheetUrl)
   const isSheetConfigured = Boolean(sheetId)
+  const data = activeTab === 'collect' ? collectData : extractData
+  const translatedFields = activeTab === 'collect' ? collectTranslatedFields : extractTranslatedFields
+  const translatingField = activeTab === 'collect' ? collectTranslatingField : extractTranslatingField
 
   const shortContentLineCountLabel = data.shortContent.trim()
     ? formatShortContentLineCountLabel(
@@ -281,36 +289,56 @@ export default function GgSheetScreen() {
   const getChrome = () => (globalThis as { chrome?: ExtensionChrome }).chrome
   const sleep = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms))
 
-  const resetTranslationState = () => {
-    setOriginalData({ title: '', shortContent: '', fullContent: '' })
-    setTranslatedFields({ title: false, shortContent: false, fullContent: false })
-    setTranslatingField(null)
+  const resetTranslationState = (tab: GgSheetTab) => {
+    if (tab === 'collect') {
+      setCollectOriginalData(EMPTY_COLLECTED_DATA)
+      setCollectTranslatedFields(EMPTY_TRANSLATED_FIELDS)
+      setCollectTranslatingField(null)
+      return
+    }
+    setExtractOriginalData(EMPTY_COLLECTED_DATA)
+    setExtractTranslatedFields(EMPTY_TRANSLATED_FIELDS)
+    setExtractTranslatingField(null)
   }
 
-  const applyCollectedData = (next: CollectedData) => {
-    resetTranslationState()
-    setData(next)
+  const applyTabData = (tab: GgSheetTab, next: CollectedData) => {
+    resetTranslationState(tab)
+    if (tab === 'collect') {
+      setCollectData(next)
+      return
+    }
+    setExtractData(next)
   }
 
   const translateDataField = async (field: DataField) => {
-    if (translatedFields[field]) {
-      setData((prev) => ({ ...prev, [field]: originalData[field] }))
-      setTranslatedFields((prev) => ({ ...prev, [field]: false }))
+    const tab = activeTab
+    const tabData = tab === 'collect' ? collectData : extractData
+    const tabOriginalData = tab === 'collect' ? collectOriginalData : extractOriginalData
+    const tabTranslatedFields = tab === 'collect' ? collectTranslatedFields : extractTranslatedFields
+    const tabTranslatingField = tab === 'collect' ? collectTranslatingField : extractTranslatingField
+    const setTabData = tab === 'collect' ? setCollectData : setExtractData
+    const setTabOriginalData = tab === 'collect' ? setCollectOriginalData : setExtractOriginalData
+    const setTabTranslatedFields = tab === 'collect' ? setCollectTranslatedFields : setExtractTranslatedFields
+    const setTabTranslatingField = tab === 'collect' ? setCollectTranslatingField : setExtractTranslatingField
+
+    if (tabTranslatedFields[field]) {
+      setTabData((prev) => ({ ...prev, [field]: tabOriginalData[field] }))
+      setTabTranslatedFields((prev) => ({ ...prev, [field]: false }))
       setStatus('Đã khôi phục nội dung gốc.')
       return
     }
 
-    const source = (data[field] || '').trim()
-    if (!source || translatingField) return
+    const source = (tabData[field] || '').trim()
+    if (!source || tabTranslatingField) return
 
-    if (!(originalData[field] || '').trim()) {
-      setOriginalData((prev) => ({ ...prev, [field]: source }))
+    if (!(tabOriginalData[field] || '').trim()) {
+      setTabOriginalData((prev) => ({ ...prev, [field]: source }))
     }
 
     const fieldLabel =
       field === 'title' ? 'tiêu đề' : field === 'shortContent' ? 'nội dung ngắn' : 'nội dung dài'
 
-    setTranslatingField(field)
+    setTabTranslatingField(field)
     setStatus(`Đang dịch ${fieldLabel}...`)
     try {
       const plainSource = normalizeStyledTextToPlain(source).trim()
@@ -324,13 +352,13 @@ export default function GgSheetScreen() {
         return
       }
       const nextValue = field === 'title' ? stylizeTitleForDisplay(translated) : translated
-      setData((prev) => ({ ...prev, [field]: nextValue }))
-      setTranslatedFields((prev) => ({ ...prev, [field]: true }))
+      setTabData((prev) => ({ ...prev, [field]: nextValue }))
+      setTabTranslatedFields((prev) => ({ ...prev, [field]: true }))
       setStatus(`Đã dịch ${fieldLabel} sang tiếng Việt.`)
     } catch {
       setStatus(`Dịch ${fieldLabel} thất bại. Hãy thử lại.`)
     } finally {
-      setTranslatingField(null)
+      setTabTranslatingField(null)
     }
   }
 
@@ -412,6 +440,7 @@ export default function GgSheetScreen() {
   }
 
   const collectFromChatgpt = async () => {
+    setActiveTab('collect')
     const extensionChrome = getChrome()
     if (!extensionChrome?.scripting?.executeScript || !extensionChrome?.tabs?.query) {
       setStatus('Môi trường hiện tại không hỗ trợ gom dữ liệu từ ChatGPT.')
@@ -458,7 +487,7 @@ export default function GgSheetScreen() {
       return null
     }
 
-    applyCollectedData({
+    applyTabData('collect', {
       title: extracted.title || '',
       shortContent: extracted.shortContent || '',
       fullContent: extracted.fullContent || '',
@@ -542,13 +571,13 @@ export default function GgSheetScreen() {
       setStatus('Chưa cấu hình đường dẫn GG Sheet. Hãy vào cài đặt và lưu ggSheetPath trước.')
       return
     }
-    if (!data.title && !data.shortContent && !data.fullContent) {
+    if (!collectData.title && !collectData.shortContent && !collectData.fullContent) {
       setStatus('Chưa có dữ liệu. Hãy bấm nút gom dữ liệu trước.')
       return
     }
 
     focusBrowserTabOnConfiguredSheet()
-    await openPushPreview(data)
+    await openPushPreview(collectData)
   }
 
   const extractFromSheetRow = async () => {
@@ -561,7 +590,7 @@ export default function GgSheetScreen() {
     setStatus(`Đang trích xuất dữ liệu từ hàng ${row}...`)
     try {
       const extracted = await extractGgSheetRow(row)
-      applyCollectedData({
+      applyTabData('extract', {
         title: extracted?.data?.title || '',
         shortContent: extracted?.data?.shortContent || '',
         fullContent: extracted?.data?.fullContent || '',
@@ -584,8 +613,8 @@ export default function GgSheetScreen() {
   }
 
   const copyExtractedContentForFacebookReel = async () => {
-    const title = (data.title || '').trim()
-    const shortContent = (data.shortContent || '').trim()
+    const title = (extractData.title || '').trim()
+    const shortContent = (extractData.shortContent || '').trim()
     const cta = 'SAY YES IF YOU WANT TO READ THE FULL STORY 👇👇👇'
     if (!title && !shortContent) {
       setStatus('Chưa có nội dung để sao chép cho Facebook Reel.')
@@ -594,6 +623,8 @@ export default function GgSheetScreen() {
     const value = [title, shortContent, cta].filter(Boolean).join('\n\n')
     try {
       await navigator.clipboard.writeText(value)
+      setCopiedReelContent(true)
+      window.setTimeout(() => setCopiedReelContent(false), 1200)
       setStatus('Đã sao chép nội dung cho Facebook Reel.')
     } catch {
       setStatus('Không thể sao chép nội dung cho Facebook Reel.')
@@ -772,9 +803,13 @@ export default function GgSheetScreen() {
           <button
             type="button"
             onClick={() => void copyExtractedContentForFacebookReel()}
-            className="mt-2 inline-flex h-7 cursor-pointer items-center justify-center gap-1 rounded-lg bg-blue-500/20 px-2 text-[11px] text-blue-100 transition hover:bg-blue-500/30"
+            className={`mt-2 inline-flex h-7 cursor-pointer items-center justify-center gap-1 rounded-lg px-2 text-[11px] transition ${
+              copiedReelContent
+                ? 'bg-emerald-500/25 text-emerald-100'
+                : 'bg-blue-500/20 text-blue-100 hover:bg-blue-500/30'
+            }`}
           >
-            <FiCopy className="h-3.5 w-3.5" />
+            {copiedReelContent ? <FiCheck className="h-3.5 w-3.5" /> : <FiCopy className="h-3.5 w-3.5" />}
             Sao chép nội dung cho Facebook Reel
           </button>
         </div>
