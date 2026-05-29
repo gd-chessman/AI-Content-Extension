@@ -20,6 +20,7 @@ import { WorkflowRunsModule } from './modules/workflow-runs/workflow-runs.module
 import { WorkflowsModule } from './modules/workflows/workflows.module';
 import { TelegramBotModule } from './modules/telegram-bot/telegram-bot.module';
 import { StoriesModule } from './modules/stories/stories.module';
+import { DataCleanupModule } from './modules/data-cleanup/data-cleanup.module';
 
 @Module({
   imports: [
@@ -43,6 +44,7 @@ import { StoriesModule } from './modules/stories/stories.module';
     WorkflowsModule,
     TelegramBotModule,
     StoriesModule,
+    DataCleanupModule,
   ],
   controllers: [AppController],
   providers: [AppService]

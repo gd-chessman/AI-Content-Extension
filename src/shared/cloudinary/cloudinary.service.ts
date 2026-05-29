@@ -83,6 +83,83 @@ export class CloudinaryService {
     return this.createSignedUploadParams(userId, { subfolder: 'stories', resourceType: 'image' });
   }
 
+  /** Parse URL delivery Cloudinary → public_id + loại resource (image/video). */
+  parseDeliveryUrl(url: string): { publicId: string; resourceType: 'image' | 'video' } | null {
+    const trimmed = (url || '').trim();
+    if (!trimmed) return null;
+    try {
+      const parsed = new URL(trimmed);
+      if (parsed.protocol !== 'https:') return null;
+      if (!parsed.hostname.toLowerCase().includes('cloudinary.com')) return null;
+
+      const pathMatch = parsed.pathname.match(/\/(image|video)\/upload\/(.+)$/i);
+      if (!pathMatch) return null;
+
+      const resourceType = pathMatch[1].toLowerCase() as 'image' | 'video';
+      const segments = pathMatch[2].split('/').filter(Boolean);
+      const publicSegments: string[] = [];
+
+      for (const segment of segments) {
+        if (/^v\d+$/i.test(segment)) continue;
+        if (this.isCloudinaryTransformSegment(segment)) continue;
+        publicSegments.push(segment);
+      }
+
+      const joined = decodeURIComponent(publicSegments.join('/')).trim();
+      if (!joined) return null;
+
+      const publicId = joined.replace(/\.[a-z0-9]+$/i, '');
+      return publicId ? { publicId, resourceType } : null;
+    } catch {
+      return null;
+    }
+  }
+
+  async destroyByDeliveryUrl(url: string): Promise<boolean> {
+    if (!this.isConfigured()) return false;
+    const asset = this.parseDeliveryUrl(url);
+    if (!asset) return false;
+
+    try {
+      const result = await this.cloudinary.uploader.destroy(asset.publicId, {
+        resource_type: asset.resourceType,
+        invalidate: true,
+      });
+      return result.result === 'ok' || result.result === 'not found';
+    } catch {
+      return false;
+    }
+  }
+
+  async destroyManyByDeliveryUrls(urls: string[]): Promise<{
+    attempted: number;
+    deleted: number;
+    failed: number;
+    skipped: number;
+  }> {
+    const unique = [...new Set(urls.map((u) => u.trim()).filter(Boolean))];
+    let deleted = 0;
+    let failed = 0;
+    let skipped = 0;
+
+    if (!this.isConfigured()) {
+      return { attempted: unique.length, deleted: 0, failed: 0, skipped: unique.length };
+    }
+
+    for (const url of unique) {
+      const asset = this.parseDeliveryUrl(url);
+      if (!asset) {
+        skipped += 1;
+        continue;
+      }
+      const ok = await this.destroyByDeliveryUrl(url);
+      if (ok) deleted += 1;
+      else failed += 1;
+    }
+
+    return { attempted: unique.length, deleted, failed, skipped };
+  }
+
   async uploadImage(file: Express.Multer.File, folder = 'my_images'): Promise<UploadApiResponse> {
     if (!this.isConfigured()) {
       throw new ServiceUnavailableException('Cloudinary chưa cấu hình.');
@@ -126,5 +203,13 @@ export class CloudinaryService {
   private resolveUploadFolder(userId: string, subfolder: CloudinaryUploadSubfolder): string {
     const safeUser = this.sanitizeUserId(userId) || 'anonymous';
     return `ai-content/${subfolder}/${safeUser}`;
+  }
+
+  /** Bỏ qua segment biến đổi ảnh (w_400,h_300,c_fill …). */
+  private isCloudinaryTransformSegment(segment: string): boolean {
+    if (segment.includes(',')) return true;
+    if (!segment.includes('_')) return false;
+    if (/\.[a-z0-9]+$/i.test(segment)) return false;
+    return /^(w_|h_|c_|q_|f_|g_|b_|dpr_|ar_)/i.test(segment) || segment.split('_').length >= 2;
   }
 }
