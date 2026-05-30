@@ -105,7 +105,6 @@ const MIN_VIEW_COUNT = 500_000
 const MAX_SCAN_RESULTS = 5
 /** «Quét hết»: cuộn hết feed một lần, lấy tối đa bấy nhiêu reel mới (chưa có trong danh sách). */
 const MAX_SCAN_FULL_PASS_RESULTS = 300
-const FACEBOOK_REEL_MEMORY_KEY = 'facebookReelCopiedContent'
 
 /** URL tab đang mở là trang reel (facebook.com/reel/, reel_id=, fb.watch). */
 function isFacebookReelPageUrl(urlString: string): boolean {
@@ -930,7 +929,6 @@ export default function FacebookScreen() {
   const copyContent = async () => {
     try {
       await navigator.clipboard.writeText(contentText)
-      localStorage.setItem(FACEBOOK_REEL_MEMORY_KEY, contentText.trim())
       setCopyStatus('ok')
       window.setTimeout(() => setCopyStatus('idle'), 1200)
     } catch {
@@ -1862,7 +1860,6 @@ export default function FacebookScreen() {
             sourceReelUrl: sr.url.trim(),
             name: (sr.title || '').trim().slice(0, 200),
           })
-          localStorage.setItem(FACEBOOK_REEL_MEMORY_KEY, text)
           void queryClient.invalidateQueries({ queryKey: ['stories', 'sources', 'check-reel'] })
           void queryClient.invalidateQueries({ queryKey: ['stories', 'my'] })
           void queryClient.invalidateQueries({ queryKey: ['stories', 'sources', 'my'] })

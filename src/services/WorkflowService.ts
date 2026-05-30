@@ -96,10 +96,6 @@ export const getWorkflowRunById = async (id: string) => {
   return response.data as WorkflowRunItem & {
     payload?: {
       facebookCriteria?: Record<string, unknown>
-      /** Nguồn caption ChatGPT: stories (DB) | localstorage */
-      chatgptWorkflowSource?: 'localstorage' | 'stories' | string
-      /** @deprecated Dùng chatgptWorkflowSource */
-      chatgptStep1Source?: 'localstorage' | 'stories' | string
       source?: string
     }
   }
