@@ -41,6 +41,13 @@ import {
   updateWorkflowRun,
 } from '@/services/WorkflowService'
 import {
+  finalizeMultiWorkflowJobAfterWorkflowRun,
+  getCancelledWorkflowRunFromStream,
+  getMultiWorkflowPayload,
+  shouldAcceptWorkflowRunFromStream,
+  shouldStopLocalWorkflowForCancelledRun,
+} from '@/utils/multiWorkflowRun'
+import {
   createStoryFromReel,
   getMyStories,
   getMyStorySources,
@@ -66,6 +73,7 @@ import {
 import {
   chatgptInjectPromptPageScript,
   chatgptOpenNewChatPageScript,
+  chatgptProbeComposerReadyPageScript,
   chatgptVerifyLastStepReadyPageScript,
   chatgptSnapshotAssistantResponsePageScript,
   type ChatgptAssistantResponseSnapshot,
@@ -128,7 +136,18 @@ import {
   type StepDisplayMode,
 } from '@/utils/stepDisplayMode'
 
-type BrowserTab = { id?: number; url?: string; active?: boolean; windowId?: number }
+type BrowserTab = { id?: number; url?: string; active?: boolean; windowId?: number; lastAccessed?: number }
+
+function isChatgptTabUrl(url: string | undefined): boolean {
+  return Boolean(url && /chatgpt\.com|chat\.openai\.com/i.test(url))
+}
+
+function pickBestChatgptTab(tabs: BrowserTab[]): BrowserTab | null {
+  const valid = tabs.filter((t) => t.id && isChatgptTabUrl(t.url))
+  if (!valid.length) return null
+  valid.sort((a, b) => (b.lastAccessed || 0) - (a.lastAccessed || 0))
+  return valid[0]
+}
 type ExtensionChrome = {
   runtime?: {
     id?: string
@@ -160,6 +179,7 @@ type ExtensionChrome = {
       queryInfo: { url?: string[]; currentWindow?: boolean; active?: boolean },
       callback: (tabs: BrowserTab[]) => void,
     ) => void
+    get?: (tabId: number, callback: (tab: BrowserTab) => void) => void
     create?: (createProperties: { url: string; active?: boolean }, callback?: (tab: BrowserTab) => void) => void
     update?: (tabId: number, updateProperties: { url?: string; active?: boolean }, callback?: (tab: BrowserTab) => void) => void
     captureVisibleTab?: (
@@ -189,6 +209,7 @@ const CHATGPT_PATTERNS = ['*://chatgpt.com/*', '*://chat.openai.com/*']
 
 const FACEBOOK_REEL_MEMORY_KEY = 'facebookReelCopiedContent'
 const CHATGPT_SELECTED_WORKFLOW_STORAGE_KEY = 'chatgptSelectedWorkflowId'
+const CHATGPT_WORKFLOW_TAB_STORAGE_KEY = 'chatgptWorkflowTabId'
 
 /** Story mới nhất cùng StorySource (để gắn lưu videoPrompts cuối workflow). */
 async function resolveLatestStoryIdForSource(storySourceId: string): Promise<string> {
@@ -219,9 +240,13 @@ export type ChatgptStorySaveBundle = {
 async function createStoryForPipelineRun(
   videoPrompts: string[],
   bundle: ChatgptStorySaveBundle,
+  preferredStorySourceId?: string,
 ): Promise<{ storyId: string; error?: string }> {
   const sources = await getMyStorySources()
-  const top = sources[0]
+  const preferredId = (preferredStorySourceId || '').trim()
+  const top = preferredId
+    ? sources.find((s) => s._id === preferredId) || sources[0]
+    : sources[0]
   if (!top?._id) {
     return {
       storyId: '',
@@ -590,6 +615,7 @@ export default function ChatgptScreen() {
   const workflowStepsScrollRef = useRef<HTMLDivElement>(null)
   const workflowStepItemRefs = useRef(new Map<string, HTMLDivElement>())
   const workflowStopRef = useRef(false)
+  const workflowCancelledRemotelyRef = useRef(false)
   const WORKFLOW_STOPPED_MESSAGE = 'WORKFLOW_STOPPED'
 
   const throwIfWorkflowStopped = () => {
@@ -602,6 +628,8 @@ export default function ChatgptScreen() {
   const runningWorkflowRunIdRef = useRef('')
   /** Story đang chạy pipeline ChatGPT (tiến trình 1 — cùng story để lưu videoPrompts sau cùng). */
   const chatgptPipelineStoryIdRef = useRef('')
+  /** StorySource từ multi-workflow (bước Facebook vừa lưu). */
+  const chatgptPipelineStorySourceIdRef = useRef('')
   /** Prompt VIDEO (1 hoặc nhiều) sau bước tách — commit DB ở bước save story. */
   const chatgptDraftVideoPromptsRef = useRef<string[] | null>(null)
   /** Workflow: gọi công cụ step_panel — gom text VIDEO, không copy clipboard. */
@@ -799,6 +827,45 @@ export default function ChatgptScreen() {
       }
       query({ url: pattern, currentWindow, active }, (tabs) => resolve(tabs || []))
     })
+
+  const getTabById = (tabId: number) =>
+    new Promise<BrowserTab | null>((resolve) => {
+      const get = getChrome()?.tabs?.get as
+        | ((id: number, callback: (tab: BrowserTab) => void) => void)
+        | undefined
+      if (!get) {
+        resolve(null)
+        return
+      }
+      get(tabId, (tab: BrowserTab) => resolve(tab || null))
+    })
+
+  const findAllChatgptTabs = async () => {
+    const tabs = await queryTabs(CHATGPT_PATTERNS)
+    return tabs.filter((t) => t.id && isChatgptTabUrl(t.url))
+  }
+
+  const readStoredChatgptTabId = async (): Promise<number | undefined> => {
+    try {
+      const raw = localStorage.getItem(CHATGPT_WORKFLOW_TAB_STORAGE_KEY)
+      const id = Number(raw)
+      if (!Number.isFinite(id) || id <= 0) return undefined
+      const tab = await getTabById(id)
+      if (tab?.id && isChatgptTabUrl(tab.url)) return tab.id
+    } catch {
+      /* ignore */
+    }
+    return undefined
+  }
+
+  const persistChatgptWorkflowTabId = (tabId: number) => {
+    if (!tabId) return
+    try {
+      localStorage.setItem(CHATGPT_WORKFLOW_TAB_STORAGE_KEY, String(tabId))
+    } catch {
+      /* ignore */
+    }
+  }
 
   useEffect(() => {
     if (extractContentPromptHint.length >= 30) {
@@ -1134,34 +1201,72 @@ export default function ChatgptScreen() {
     return Boolean(result?.[0]?.result)
   }
 
+  const waitForChatgptComposerReady = async (tabId: number, timeoutMs = 30_000) => {
+    const extensionChrome = getChrome()
+    if (!extensionChrome?.scripting?.executeScript) return false
+
+    const startedAt = Date.now()
+    while (Date.now() - startedAt < timeoutMs) {
+      const result = await extensionChrome.scripting.executeScript({
+        target: { tabId },
+        func: chatgptProbeComposerReadyPageScript as (...args: unknown[]) => unknown,
+      })
+      if (Boolean(result?.[0]?.result)) return true
+      await sleep(350)
+    }
+    return false
+  }
+
   const pickChatgptTab = async (preferredTabId?: number) => {
+    const resolveAndFocus = async (tab: BrowserTab | null | undefined) => {
+      if (!tab?.id) return null
+      let loadWait = false
+      let finalTab = tab
+      if (!isChatgptTabUrl(tab.url)) {
+        loadWait = true
+        finalTab = (await updateTab(tab.id, CHATGPT_URL)) || tab
+      } else {
+        finalTab = (await updateTab(tab.id)) || tab
+      }
+      if (finalTab?.id) {
+        persistChatgptWorkflowTabId(finalTab.id)
+        await waitForChatgptComposerReady(finalTab.id, loadWait ? 45_000 : 12_000)
+      }
+      return finalTab || null
+    }
+
     if (preferredTabId) {
-      const tab = await updateTab(preferredTabId)
-      if (tab?.id) {
-        if (!tab.url?.includes('chatgpt.com')) {
-          return await updateTab(tab.id, CHATGPT_URL)
-        }
-        return tab
+      const tab = await getTabById(preferredTabId)
+      if (tab?.id && isChatgptTabUrl(tab.url)) {
+        return resolveAndFocus(tab)
+      }
+      const updated = await updateTab(preferredTabId)
+      if (updated?.id) {
+        return resolveAndFocus(updated)
       }
     }
 
-    const currentActive = await queryTabs(undefined, true, true)
-    const activeTab = currentActive[0]
-    const isActiveChatgpt = Boolean(activeTab?.url && /chatgpt\.com|chat\.openai\.com/i.test(activeTab.url))
-
-    const activeTabs = isActiveChatgpt ? [activeTab] : await queryTabs(CHATGPT_PATTERNS, true, true)
-    const allTabs = activeTabs.length > 0 ? activeTabs : await queryTabs(CHATGPT_PATTERNS)
-    let target: BrowserTab | null | undefined = allTabs[0]
-
-    if (!target?.id) {
-      target = await createTab(CHATGPT_URL)
-    } else if (!target.url?.includes('chatgpt.com')) {
-      target = await updateTab(target.id, CHATGPT_URL)
-    } else {
-      target = await updateTab(target.id)
+    const storedTabId = await readStoredChatgptTabId()
+    if (storedTabId) {
+      const storedTab = await getTabById(storedTabId)
+      if (storedTab?.id) {
+        return resolveAndFocus(storedTab)
+      }
     }
 
-    return target || null
+    const allChatgptTabs = await findAllChatgptTabs()
+    const existing = pickBestChatgptTab(allChatgptTabs)
+    if (existing?.id) {
+      return resolveAndFocus(existing)
+    }
+
+    const target = await createTab(CHATGPT_URL)
+    if (!target?.id) return null
+
+    persistChatgptWorkflowTabId(target.id)
+    const ready = await waitForChatgptComposerReady(target.id, 45_000)
+    if (!ready) await sleep(1200)
+    return target
   }
 
   const runProcess = async (
@@ -1193,20 +1298,19 @@ export default function ChatgptScreen() {
         func: chatgptOpenNewChatPageScript as (...args: unknown[]) => unknown,
       })
       const ok = Boolean(switched?.[0]?.result)
-      if (!ok) {
-        await sleep(800)
-      } else {
-        await sleep(320)
-      }
+      await waitForChatgptComposerReady(target.id, ok ? 20_000 : 35_000)
     }
 
     setStatus(`${step.label}: Đã mở ChatGPT, đang điền prompt...`)
 
     let filled = false
-    const attempts = fastMode ? 3 : 5
+    const attempts = fastMode ? 5 : 8
     for (let attempt = 0; attempt < attempts; attempt += 1) {
       if (attempt > 0) {
-        await sleep(fastMode ? 120 : 220)
+        await sleep(fastMode ? 280 : 450)
+      }
+      if (attempt > 0 && attempt % 2 === 0) {
+        await waitForChatgptComposerReady(target.id, 8_000)
       }
       filled = await injectPrompt(target.id, step.prompt, autoSend)
       if (filled) break
@@ -1247,16 +1351,10 @@ export default function ChatgptScreen() {
       let mergedPrompt = step.prompt
       const fromStorage = localStorage.getItem(FACEBOOK_REEL_MEMORY_KEY)?.trim() || ''
       if (fromStorage) mergedPrompt = `${step.prompt}\n\n${fromStorage}`
+      else throw new Error('Không có nội dung reel trong bộ nhớ tạm Facebook.')
       mergedStep = { ...step, prompt: mergedPrompt }
     } else {
-      const sources = await getMyStorySources()
-      const picked = sources[0]
-      if (!picked || !(picked.sourceContent || '').trim()) {
-        throw new Error(
-          'Không có StorySource caption (ưu tiên nguồn mới, ít dùng — hãy đồng bộ reel hoặc lưu nguồn trên Facebook).',
-        )
-      }
-      const extra = picked.sourceContent.trim()
+      const extra = await resolveRewriteStoryCaption()
       mergedStep = { ...step, prompt: extra ? `${step.prompt}\n\n${extra}` : step.prompt }
     }
 
@@ -1266,6 +1364,28 @@ export default function ChatgptScreen() {
       preferredTabId: lockedWorkflowTabIdRef.current || undefined,
       forceNewChat: true,
     })
+  }
+
+  const resolveRewriteStoryCaption = async (): Promise<string> => {
+    const pipelineSourceId = chatgptPipelineStorySourceIdRef.current.trim()
+    if (pipelineSourceId) {
+      const sources = await getMyStorySources()
+      const picked = sources.find((s) => s._id === pipelineSourceId)
+      const content = (picked?.sourceContent || '').trim()
+      if (content) return content
+    }
+
+    const fromStorage = localStorage.getItem(FACEBOOK_REEL_MEMORY_KEY)?.trim() || ''
+    if (fromStorage) return fromStorage
+
+    const sources = await getMyStorySources()
+    const picked = sources[0]
+    if (!picked || !(picked.sourceContent || '').trim()) {
+      throw new Error(
+        'Không có StorySource caption — hãy đồng bộ reel hoặc lưu nguồn trên Facebook.',
+      )
+    }
+    return picked.sourceContent.trim()
   }
 
   const runFillProcess = async (step: ProcessStep) => {
@@ -1290,14 +1410,7 @@ export default function ChatgptScreen() {
       if (fromStorage) mergedPrompt = `${step.prompt}\n\n${fromStorage}`
       mergedStep = { ...step, prompt: mergedPrompt }
     } else {
-      const sources = await getMyStorySources()
-      const picked = sources[0]
-      if (!picked || !(picked.sourceContent || '').trim()) {
-        throw new Error(
-          'Không có StorySource caption (ưu tiên nguồn mới, ít dùng — hãy đồng bộ reel hoặc lưu nguồn trên Facebook).',
-        )
-      }
-      const extra = picked.sourceContent.trim()
+      const extra = await resolveRewriteStoryCaption()
       mergedStep = { ...step, prompt: extra ? `${step.prompt}\n\n${extra}` : step.prompt }
     }
 
@@ -1769,7 +1882,11 @@ export default function ChatgptScreen() {
       }
       setStatus(`${step.label}: Đang lấy nội dung ChatGPT và upload ảnh lên Cloudinary...`)
       const bundle = await collectStoryBundleForApiSave()
-      const created = await createStoryForPipelineRun(videoPrompts, bundle)
+      const created = await createStoryForPipelineRun(
+        videoPrompts,
+        bundle,
+        chatgptPipelineStorySourceIdRef.current.trim() || undefined,
+      )
       if (!created.storyId) {
         throw new Error(created.error || `${step.label}: Không tạo được story trên máy chủ.`)
       }
@@ -1870,6 +1987,14 @@ export default function ChatgptScreen() {
     }
   }
 
+  const stopWorkflowRunFromWeb = () => {
+    if (workflowStopRef.current) return
+    if (!runningWorkflowRunIdRef.current) return
+    workflowCancelledRemotelyRef.current = true
+    workflowStopRef.current = true
+    setStatus('Đã hủy từ web — dừng workflow…')
+  }
+
   const runWorkflow = async (options?: {
     runId?: string
     workflowId?: string
@@ -1899,15 +2024,22 @@ export default function ChatgptScreen() {
 
     setIsWorkflowRunning(true)
     workflowStopRef.current = false
+    workflowCancelledRemotelyRef.current = false
 
     let workflowRunId = options?.runId || ''
     runningWorkflowRunIdRef.current = workflowRunId
+    let mwOutcome: 'completed' | 'failed' | 'cancelled' | null = null
+    let mwErrorMessage = ''
     try {
       chatgptPipelineStoryIdRef.current = ''
+      chatgptPipelineStorySourceIdRef.current = ''
       chatgptDraftVideoPromptsRef.current = null
 
-      const lockedTab = await pickChatgptTab()
+      const lockedTab = await pickChatgptTab(await readStoredChatgptTabId())
       lockedWorkflowTabIdRef.current = lockedTab?.id || 0
+      if (lockedWorkflowTabIdRef.current) {
+        persistChatgptWorkflowTabId(lockedWorkflowTabIdRef.current)
+      }
       if (!lockedWorkflowTabIdRef.current) {
         setStatus('Không thể khóa tab ChatGPT cho workflow.')
         return
@@ -1922,6 +2054,15 @@ export default function ChatgptScreen() {
         workflowRunId = run._id
         runningWorkflowRunIdRef.current = workflowRunId
       } else {
+        try {
+          const existingRun = await getWorkflowRunById(workflowRunId)
+          const mw = getMultiWorkflowPayload((existingRun.payload || {}) as Record<string, unknown>)
+          if (mw?.storySourceId) {
+            chatgptPipelineStorySourceIdRef.current = mw.storySourceId.trim()
+          }
+        } catch {
+          /* ignore */
+        }
         await updateWorkflowRun(workflowRunId, {
           status: 'running',
           progress: 0,
@@ -1941,6 +2082,7 @@ export default function ChatgptScreen() {
       for (let index = 0; index < workflowSteps.length; index += 1) {
         if (workflowStopRef.current) {
           setStatus('Workflow đã dừng.')
+          mwOutcome = 'cancelled'
           return
         }
 
@@ -1996,6 +2138,7 @@ export default function ChatgptScreen() {
               finishedAt: new Date().toISOString(),
             }).catch(() => undefined)
             setStatus('Workflow đã dừng.')
+            mwOutcome = 'cancelled'
             return
           }
           const errorMessage = error instanceof Error ? error.message : 'Step execution failed.'
@@ -2030,19 +2173,33 @@ export default function ChatgptScreen() {
       } else {
         setStatus(`Workflow chạy xong ${stepCountLabel} bước.`)
       }
+      mwOutcome = 'completed'
     } catch (error) {
+      if (workflowStopRef.current) {
+        mwOutcome = 'cancelled'
+      } else {
+        mwOutcome = 'failed'
+        mwErrorMessage = error instanceof Error ? error.message : 'Workflow execution failed.'
+      }
       if (!workflowRunId) {
         setStatus('Không thể tạo workflow run trên backend.')
       } else if (!workflowStopRef.current) {
-        const errorMessage = error instanceof Error ? error.message : 'Workflow execution failed.'
-        setStatus(`Workflow thất bại: ${errorMessage}`)
+        setStatus(`Workflow thất bại: ${mwErrorMessage}`)
       }
     } finally {
+      if (workflowRunId && mwOutcome && !workflowCancelledRemotelyRef.current) {
+        void finalizeMultiWorkflowJobAfterWorkflowRun(workflowRunId, mwOutcome, {
+          storyId: chatgptPipelineStoryIdRef.current.trim() || undefined,
+          errorMessage: mwErrorMessage,
+        }).catch(() => undefined)
+      }
+      workflowCancelledRemotelyRef.current = false
       workflowStopRef.current = false
       setWorkflowActiveStepId('')
       lockedWorkflowTabIdRef.current = 0
       runningWorkflowRunIdRef.current = ''
       chatgptPipelineStoryIdRef.current = ''
+      chatgptPipelineStorySourceIdRef.current = ''
       chatgptDraftVideoPromptsRef.current = null
       chatgptWorkflowSourceRef.current = 'stories'
       setIsWorkflowRunning(false)
@@ -2078,11 +2235,18 @@ export default function ChatgptScreen() {
     eventSource.onmessage = (event) => {
       try {
         const payload = JSON.parse(String(event.data || '{}')) as WorkflowRunStreamEvent
+        const cancelledRun = getCancelledWorkflowRunFromStream(payload)
+        if (
+          cancelledRun &&
+          shouldStopLocalWorkflowForCancelledRun(cancelledRun._id, runningWorkflowRunIdRef.current)
+        ) {
+          stopWorkflowRunFromWeb()
+          return
+        }
         if (payload?.type !== 'workflow_run_created') return
         const run = payload.run
         if (!run?._id || !run?.workflowId) return
-        if ((run.status || '').toLowerCase() !== 'queued') return
-        if (run.workflowId !== workflowSteps[0]?.workflowId) return
+        if (!shouldAcceptWorkflowRunFromStream(run, workflowSteps[0]?.workflowId || '')) return
         if (isWorkflowRunning) return
         if (runningWorkflowRunIdRef.current === run._id) return
         setStatus(`SSE: nhận lệnh chạy workflow từ backend (${run._id}).`)

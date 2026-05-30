@@ -47,6 +47,12 @@ import {
   updateWorkflowRun,
   type WorkflowRunStreamEvent,
 } from '@/services/WorkflowService'
+import {
+  finalizeMultiWorkflowJobAfterWorkflowRun,
+  getCancelledWorkflowRunFromStream,
+  shouldAcceptWorkflowRunFromStream,
+  shouldStopLocalWorkflowForCancelledRun,
+} from '@/utils/multiWorkflowRun'
 
 type ScannedReel = {
   id: string
@@ -171,7 +177,7 @@ function mergeFacebookStepCriteria(
       assignIf(['fanpageUrl', 'nameContains', 'pickIndex'])
       break
     case 'facebook_scan_reels':
-      assignIf(['minViews', 'maxViews', 'append'])
+      assignIf(['append'])
       if (
         criteria.fallbackFanpageCount !== undefined &&
         criteria.fallbackFanpageCount !== null &&
@@ -282,6 +288,8 @@ export default function FacebookScreen() {
   const [maxViewInput, setMaxViewInput] = useState(() =>
     readStoredScanViewInput(FB_REELS_SCAN_MAX_LS_KEY, ''),
   )
+  const minViewInputRef = useRef(minViewInput)
+  const maxViewInputRef = useRef(maxViewInput)
   const [selectedReel, setSelectedReel] = useState<ScannedReel | null>(null)
   const [contentText, setContentText] = useState('')
   const [originalContentText, setOriginalContentText] = useState('')
@@ -428,6 +436,7 @@ export default function FacebookScreen() {
   /** Chỉ số fanpage trong `fanpages` đã mở ở bước `facebook_open_fanpage` — dùng cho fallbackFanpageCount. */
   const workflowOpenedFanpageIndexRef = useRef<number | null>(null)
   const fbWorkflowStopRef = useRef(false)
+  const workflowCancelledRemotelyRef = useRef(false)
   const runningFbWorkflowRunIdRef = useRef('')
   const [fbWorkflowStatus, setFbWorkflowStatus] = useState('')
   const [isFbWorkflowRunning, setIsFbWorkflowRunning] = useState(false)
@@ -464,6 +473,25 @@ export default function FacebookScreen() {
       /* ignore */
     }
   }, [maxViewInput])
+
+  useEffect(() => {
+    minViewInputRef.current = minViewInput
+  }, [minViewInput])
+
+  useEffect(() => {
+    maxViewInputRef.current = maxViewInput
+  }, [maxViewInput])
+
+  const getExtensionScanViewBounds = () => {
+    const minViews = Number(minViewInputRef.current.replace(/[^\d]/g, '')) || MIN_VIEW_COUNT
+    const maxDigits = maxViewInputRef.current.replace(/[^\d]/g, '')
+    const maxParsed = maxDigits ? Number(maxDigits) : NaN
+    const maxViews = Number.isFinite(maxParsed) && maxParsed > 0 ? maxParsed : undefined
+    return {
+      minViews,
+      ...(maxViews != null ? { maxViews } : {}),
+    }
+  }
 
   useEffect(() => {
     isContentDirtyRef.current = isContentDirty
@@ -1690,14 +1718,7 @@ export default function FacebookScreen() {
         return { fanpageUrl: url }
       }
       case 'facebook_scan_reels': {
-        const minV = schema.minViews != null ? Number(schema.minViews) : MIN_VIEW_COUNT
-        const maxV = schema.maxViews != null ? Number(schema.maxViews) : NaN
-        const minSafe = Number.isFinite(minV) && minV > 0 ? minV : MIN_VIEW_COUNT
-        const maxFinite = Number.isFinite(maxV) && maxV > 0 ? maxV : undefined
-        const viewBounds = {
-          minViews: minSafe,
-          ...(maxFinite != null ? { maxViews: maxFinite } : {}),
-        }
+        const viewBounds = getExtensionScanViewBounds()
         const fbCountRaw = schema.fallbackFanpageCount != null ? Number(schema.fallbackFanpageCount) : 0
         const fallbackFanpageCount =
           Number.isFinite(fbCountRaw) && fbCountRaw >= 0 ? Math.floor(fbCountRaw) : 0
@@ -1713,8 +1734,6 @@ export default function FacebookScreen() {
         }
 
         const runScanPass = async (appendFlag: boolean) => {
-          setMinViewInput(formatViewInput(String(minSafe)))
-          setMaxViewInput(maxFinite != null ? formatViewInput(String(maxFinite)) : '')
           handleScanReels(appendFlag, viewBounds)
           await waitScanIdle()
           await sleep(400)
@@ -1813,14 +1832,7 @@ export default function FacebookScreen() {
           }
 
           appendRound += 1
-          const scanMin = schema.minViews != null ? Number(schema.minViews) : MIN_VIEW_COUNT
-          const scanMax = schema.maxViews != null ? Number(schema.maxViews) : NaN
-          const scanMinSafe = Number.isFinite(scanMin) && scanMin > 0 ? scanMin : MIN_VIEW_COUNT
-          const scanMaxFinite = Number.isFinite(scanMax) && scanMax > 0 ? scanMax : undefined
-          handleScanReels(true, {
-            minViews: scanMinSafe,
-            ...(scanMaxFinite != null ? { maxViews: scanMaxFinite } : {}),
-          })
+          handleScanReels(true, getExtensionScanViewBounds())
           await waitScanIdle()
           await sleep(500)
         }
@@ -1845,21 +1857,22 @@ export default function FacebookScreen() {
         const text = contentTextRef.current.trim()
         if (!sr?.url || !text) throw new Error('Thiếu reel hoặc nội dung để lưu')
         try {
-          await syncStorySourceFromReel({
+          const saved = await syncStorySourceFromReel({
             sourceContent: text,
             sourceReelUrl: sr.url.trim(),
             name: (sr.title || '').trim().slice(0, 200),
           })
+          localStorage.setItem(FACEBOOK_REEL_MEMORY_KEY, text)
+          void queryClient.invalidateQueries({ queryKey: ['stories', 'sources', 'check-reel'] })
+          void queryClient.invalidateQueries({ queryKey: ['stories', 'my'] })
+          void queryClient.invalidateQueries({ queryKey: ['stories', 'sources', 'my'] })
+          return { saved: true, storySourceId: saved._id }
         } catch (e: unknown) {
           if (isAxiosError(e) && e.response?.status === 409) {
             return { skipped: true, reason: 'duplicate_reel' }
           }
           throw e
         }
-        void queryClient.invalidateQueries({ queryKey: ['stories', 'sources', 'check-reel'] })
-        void queryClient.invalidateQueries({ queryKey: ['stories', 'my'] })
-        void queryClient.invalidateQueries({ queryKey: ['stories', 'sources', 'my'] })
-        return { saved: true }
       }
       default:
         throw new Error(`Bước chưa hỗ trợ trên Facebook: ${step.actionType}`)
@@ -1870,6 +1883,14 @@ export default function FacebookScreen() {
     fbWorkflowStopRef.current = true
     setIsFbWorkflowStopping(true)
     setFbWorkflowStatus('Đang dừng workflow sau bước hiện tại…')
+  }
+
+  const stopFbWorkflowRunFromWeb = () => {
+    if (!isFbWorkflowRunningRef.current || fbWorkflowStopRef.current) return
+    workflowCancelledRemotelyRef.current = true
+    fbWorkflowStopRef.current = true
+    setIsFbWorkflowStopping(true)
+    setFbWorkflowStatus('Đã hủy từ web — dừng sau bước hiện tại…')
   }
 
   const runFbWorkflow = async (options?: {
@@ -1904,9 +1925,13 @@ export default function FacebookScreen() {
     setIsFbWorkflowRunning(true)
     setIsFbWorkflowStopping(false)
     fbWorkflowStopRef.current = false
+    workflowCancelledRemotelyRef.current = false
 
     let workflowRunId = options?.runId || ''
     runningFbWorkflowRunIdRef.current = workflowRunId
+    let mwOutcome: 'completed' | 'failed' | 'cancelled' | null = null
+    let mwErrorMessage = ''
+    let mwStorySourceId = ''
 
     let facebookCriteria = options?.facebookCriteria
     if (workflowRunId && facebookCriteria === undefined && options?.source === 'sse') {
@@ -1971,6 +1996,13 @@ export default function FacebookScreen() {
 
         try {
           const output = await executeFacebookWorkflowStep(effectiveStep, facebookCriteria)
+          const outputStorySourceId =
+            output && typeof output === 'object' && 'storySourceId' in output
+              ? String((output as { storySourceId?: string }).storySourceId || '').trim()
+              : ''
+          if (outputStorySourceId) {
+            mwStorySourceId = outputStorySourceId
+          }
           await updateStepRun(stepRun._id, {
             status: 'completed',
             output: output as Record<string, unknown>,
@@ -2001,6 +2033,7 @@ export default function FacebookScreen() {
             finishedAt: new Date().toISOString(),
           })
           setFbWorkflowStatus(`Đã dừng tại: ${step.label}`)
+          mwOutcome = 'cancelled'
           return
         }
       }
@@ -2013,8 +2046,15 @@ export default function FacebookScreen() {
         finishedAt: new Date().toISOString(),
       })
       setFbWorkflowStatus(`Hoàn tất ${fbWorkflowSteps.length} bước.`)
+      mwOutcome = 'completed'
     } catch (error) {
       const msg = error instanceof Error ? error.message : 'Workflow lỗi'
+      if (fbWorkflowStopRef.current) {
+        mwOutcome = 'cancelled'
+      } else {
+        mwOutcome = 'failed'
+        mwErrorMessage = msg
+      }
       if (!workflowRunId) {
         setFbWorkflowStatus('Không tạo được workflow run.')
       } else if (!fbWorkflowStopRef.current) {
@@ -2024,6 +2064,13 @@ export default function FacebookScreen() {
       fbWorkflowStopRef.current = false
       workflowFanpageUrlRef.current = null
       workflowOpenedFanpageIndexRef.current = null
+      if (workflowRunId && mwOutcome && !workflowCancelledRemotelyRef.current) {
+        void finalizeMultiWorkflowJobAfterWorkflowRun(workflowRunId, mwOutcome, {
+          storySourceId: mwStorySourceId || undefined,
+          errorMessage: mwErrorMessage,
+        }).catch(() => undefined)
+      }
+      workflowCancelledRemotelyRef.current = false
       runningFbWorkflowRunIdRef.current = ''
       isFbWorkflowRunningRef.current = false
       setIsFbWorkflowRunning(false)
@@ -2037,18 +2084,29 @@ export default function FacebookScreen() {
     eventSource.onmessage = (event) => {
       try {
         const payload = JSON.parse(String(event.data || '{}')) as WorkflowRunStreamEvent
+        const cancelledRun = getCancelledWorkflowRunFromStream(payload)
+        if (
+          cancelledRun &&
+          shouldStopLocalWorkflowForCancelledRun(
+            cancelledRun._id,
+            runningFbWorkflowRunIdRef.current,
+          )
+        ) {
+          stopFbWorkflowRunFromWeb()
+          return
+        }
         if (payload?.type !== 'workflow_run_created') return
         const run = payload.run
         if (!run?._id || !run?.workflowId) return
-        if ((run.status || '').toLowerCase() !== 'queued') return
-        if (run.workflowId !== fbWorkflowSteps[0]?.workflowId) return
+        if (!shouldAcceptWorkflowRunFromStream(run, fbWorkflowSteps[0]?.workflowId || '')) return
         if (isFbWorkflowRunning) return
         if (runningFbWorkflowRunIdRef.current === run._id) return
-        setFbWorkflowStatus(`SSE: chạy workflow ${run._id}`)
+        setFbWorkflowStatus(`SSE: chạy multi workflow ${run._id}`)
         const runPayload = (run.payload || {}) as { facebookCriteria?: Record<string, unknown> }
         void runFbWorkflow({
           runId: run._id,
           workflowId: run.workflowId,
+          source: 'sse',
           facebookCriteria: runPayload.facebookCriteria,
         })
       } catch {

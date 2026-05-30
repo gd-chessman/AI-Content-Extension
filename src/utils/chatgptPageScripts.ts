@@ -9,6 +9,33 @@ export type ChatgptWaitAssistantResponsePageResult = {
   elapsedMs: number
 }
 
+/** Kiểm tra composer ChatGPT đã sẵn sàng để điền prompt. */
+export function chatgptProbeComposerReadyPageScript(): boolean {
+  const isVisible = (el: Element | null): el is HTMLElement => {
+    if (!(el instanceof HTMLElement)) return false
+    const rect = el.getBoundingClientRect()
+    const style = window.getComputedStyle(el)
+    return rect.width > 50 && rect.height > 20 && style.visibility !== 'hidden' && style.display !== 'none'
+  }
+
+  const candidateSelectors = [
+    '#prompt-textarea',
+    'textarea[data-testid="prompt-textarea"]',
+    'textarea[placeholder*="Message"]',
+    'textarea[placeholder*="Send"]',
+    'textarea',
+    'div[data-testid="prompt-textarea"][contenteditable="true"]',
+    'div#prompt-textarea[contenteditable="true"]',
+    'div[role="textbox"][contenteditable="true"]',
+    'div.ProseMirror[contenteditable="true"]',
+    'div[contenteditable="true"]',
+  ]
+
+  return candidateSelectors.some((selector) =>
+    Array.from(document.querySelectorAll<HTMLElement>(selector)).some((el) => isVisible(el)),
+  )
+}
+
 /** Điền prompt vào composer; gửi nếu shouldSend. */
 export async function chatgptInjectPromptPageScript(message: string, shouldSend: boolean): Promise<boolean> {
   const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
