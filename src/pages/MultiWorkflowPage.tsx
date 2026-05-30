@@ -27,7 +27,7 @@ import {
   type MultiWorkflowItem,
   type MultiWorkflowRun,
 } from '@/services/MultiWorkflowService'
-import { getUserWorkflows, type WorkflowItem } from '@/services/WorkflowService'
+import { getExtensionPresence, getUserWorkflows, type WorkflowItem } from '@/services/WorkflowService'
 
 type EditableItem = MultiWorkflowItem & { key: string }
 
@@ -315,6 +315,14 @@ export default function MultiWorkflowPage() {
     refetchInterval: 5000,
   })
 
+  const extensionPresenceQuery = useQuery({
+    queryKey: ['extension-presence'],
+    queryFn: getExtensionPresence,
+    refetchInterval: 5000,
+  })
+
+  const extensionOnline = extensionPresenceQuery.data?.online === true
+
   const userWorkflowsQuery = useQuery({
     queryKey: ['workflows-all'],
     queryFn: () => getUserWorkflows(),
@@ -391,13 +399,24 @@ export default function MultiWorkflowPage() {
     mutationFn: (multiWorkflowId: string) =>
       createMultiWorkflowRun({ multiWorkflowId, trigger: 'web_console' }),
     onSuccess: () => {
-      setMessage(
-        'Đã gửi lệnh chạy. Mở extension Chrome (tab Facebook/ChatGPT) để thực thi.',
-      )
+      setMessage('Đã khởi chạy quy trình trên extension.')
       void queryClient.invalidateQueries({ queryKey: ['multi-workflow-runs'] })
       void queryClient.invalidateQueries({ queryKey: ['multi-workflow-jobs-active'] })
     },
     onError: (error: unknown) => {
+      if (isAxiosError(error) && error.response?.status === 503) {
+        const apiMessage =
+          typeof error.response.data?.message === 'string'
+            ? error.response.data.message
+            : Array.isArray(error.response.data?.message)
+              ? error.response.data.message.join(' ')
+              : ''
+        setMessage(
+          apiMessage ||
+            'Extension Chrome chưa mở. Mở extension (tab Facebook/ChatGPT/Grok) và đăng nhập cùng tài khoản.',
+        )
+        return
+      }
       if (isAxiosError(error) && error.response?.status === 409) {
         setMessage('Quy trình đa bước này đang chạy — đợi xong hoặc hủy lần chạy hiện tại.')
         return
@@ -446,6 +465,14 @@ export default function MultiWorkflowPage() {
       {message ? (
         <p className="text-xs text-slate-300">{message}</p>
       ) : null}
+
+      <p
+        className={`text-xs ${
+          extensionOnline ? 'text-emerald-400' : 'text-amber-400'
+        }`}
+      >
+        Extension: {extensionOnline ? 'đang online' : 'chưa kết nối — mở extension trước khi chạy'}
+      </p>
 
       {multiWorkflows.length === 0 ? (
         <EmptyState title="Chưa có quy trình đa bước" description="Bấm Tạo mới để thêm bộ quy trình." />
@@ -505,6 +532,7 @@ export default function MultiWorkflowPage() {
                       type="button"
                       disabled={
                         enabledItems.length === 0 ||
+                        !extensionOnline ||
                         (runMutation.isPending && runMutation.variables === workflow._id)
                       }
                       onClick={() => {
@@ -512,7 +540,11 @@ export default function MultiWorkflowPage() {
                         runMutation.mutate(workflow._id)
                       }}
                       className="inline-flex items-center gap-1 rounded-lg border border-emerald-500/25 px-2.5 py-1.5 text-xs text-emerald-300 hover:bg-emerald-500/10 disabled:opacity-40"
-                      title="Chạy trên extension"
+                      title={
+                        extensionOnline
+                          ? 'Chạy trên extension'
+                          : 'Mở extension Chrome (Facebook/ChatGPT/Grok) trước'
+                      }
                     >
                       <FiPlay className="h-3.5 w-3.5" />
                       {runMutation.isPending && runMutation.variables === workflow._id

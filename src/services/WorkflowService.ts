@@ -47,3 +47,8 @@ export const getUserWorkflowDetail = async (workflowId: string) => {
   const response = await axiosClient.get(`/workflows/user/${workflowId}`)
   return response.data as WorkflowDetail
 }
+
+export const getExtensionPresence = async () => {
+  const response = await axiosClient.get('/workflow-runs/extension-presence')
+  return response.data as { online: boolean }
+}

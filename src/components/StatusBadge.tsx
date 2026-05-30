@@ -11,7 +11,7 @@ const STATUS_STYLES: Record<string, string> = {
 
 const STATUS_LABELS: Record<string, string> = {
   pending: 'Chờ',
-  queued: 'Hàng đợi',
+  queued: 'Chờ extension',
   processing: 'Đang xử lý',
   running: 'Đang chạy',
   completed: 'Hoàn thành',
