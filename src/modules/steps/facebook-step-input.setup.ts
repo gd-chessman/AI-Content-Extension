@@ -3,11 +3,8 @@ import { StepActionType } from './step.schema';
 
 /**
  * Tiêu chí quét reel (Facebook) — đồng bộ ý nghĩa với FE `FacebookScreen` / `executeFacebookWorkflowStep`.
- * Không có UI lưu preset: cấu hình qua `Step.inputSchema` trên API/Mongo.
+ * Min/max lượt xem: chỉnh trên extension (tab Reels), không lưu trong `Step.inputSchema`.
  */
-
-/** Mặc định min lượt xem khi không khai báo (khớp FE `MIN_VIEW_COUNT`). */
-export const FACEBOOK_SCAN_DEFAULT_MIN_VIEWS = 500_000;
 
 /** Gợi ý số reel tối đa mỗi lần quét (FE cố định `MAX_SCAN_RESULTS = 5`). */
 export const FACEBOOK_SCAN_MAX_RESULTS_HINT = 5;
@@ -22,8 +19,6 @@ export type FacebookOpenFanpageInput = {
 };
 
 export type FacebookScanReelsInput = {
-  minViews?: number;
-  maxViews?: number;
   append?: boolean;
   /** Số fanpage **tiếp theo** trong danh sách (sau fanpage đã mở ở bước mở) để thử khi quét trống. */
   fallbackFanpageCount?: number;
@@ -99,20 +94,8 @@ export function sanitizeFacebookOpenFanpageInput(raw: Record<string, unknown>): 
 }
 
 export function sanitizeFacebookScanReelsInput(raw: Record<string, unknown>): Record<string, unknown> {
-  let minViews = positiveInt(raw.minViews)
-  let maxViews = positiveInt(raw.maxViews)
-  if (minViews === undefined) {
-    minViews = FACEBOOK_SCAN_DEFAULT_MIN_VIEWS
-  }
-  if (maxViews !== undefined && maxViews < minViews) {
-    throw new BadRequestException('facebook_scan_reels: maxViews phải >= minViews.')
-  }
   const append = raw.append === true || raw.append === 'true'
-  const out: FacebookScanReelsInput = {
-    minViews,
-    append,
-  }
-  if (maxViews !== undefined) out.maxViews = maxViews
+  const out: FacebookScanReelsInput = { append }
   const fc = intNonNeg(raw.fallbackFanpageCount)
   if (fc !== undefined) out.fallbackFanpageCount = fc
   return out as Record<string, unknown>
