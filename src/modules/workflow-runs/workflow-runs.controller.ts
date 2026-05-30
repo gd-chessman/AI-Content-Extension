@@ -12,12 +12,13 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { Request } from 'express';
-import { Observable, interval, map, merge, of, filter } from 'rxjs';
+import { Observable, defer, filter, finalize, interval, map, merge, of } from 'rxjs';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { JwtPayload } from '../auth/jwt.strategy';
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
 import { UserRole } from '../users/users.schema';
+import { ExtensionPresenceService } from './extension-presence.service';
 import { CreateWorkflowRunDto, UpdateWorkflowRunDto } from './workflow-runs.dto';
 import { WorkflowRunsEvents } from './workflow-runs.events';
 import { WorkflowRunsService } from './workflow-runs.service';
@@ -29,6 +30,7 @@ export class WorkflowRunsController {
   constructor(
     private readonly workflowRunsService: WorkflowRunsService,
     private readonly workflowRunsEvents: WorkflowRunsEvents,
+    private readonly extensionPresence: ExtensionPresenceService,
   ) {}
 
   @Get('my')
@@ -55,21 +57,35 @@ export class WorkflowRunsController {
     return this.workflowRunsService.updateForUser(id, user.sub, dto);
   }
 
+  @Get('extension-presence')
+  getExtensionPresence(@Req() req: Request) {
+    const user = req.user as JwtPayload;
+    return { online: this.extensionPresence.isOnline(user.sub) };
+  }
+
   @Sse('stream')
   stream(@Req() req: Request): Observable<MessageEvent> {
     const user = req.user as JwtPayload;
     const userId = (user.sub || '').trim();
-    const live$ = this.workflowRunsEvents.events$.pipe(
-      filter((event) => event.userId === userId),
-      map((event) => ({ type: 'message', data: event })),
-    );
-    const hello$ = of({
-      type: 'message',
-      data: { type: 'workflow_run_stream_connected', userId, ts: Date.now() },
+
+    return defer(() => {
+      this.extensionPresence.register(userId);
+
+      const live$ = this.workflowRunsEvents.events$.pipe(
+        filter((event) => event.userId === userId),
+        map((event) => ({ type: 'message', data: event })),
+      );
+      const hello$ = of({
+        type: 'message',
+        data: { type: 'workflow_run_stream_connected', userId, ts: Date.now() },
+      });
+      const heartbeat$ = interval(15_000).pipe(
+        map(() => ({ type: 'message', data: { type: 'heartbeat', ts: Date.now() } })),
+      );
+
+      return merge(hello$, heartbeat$, live$).pipe(
+        finalize(() => this.extensionPresence.unregister(userId)),
+      );
     });
-    const heartbeat$ = interval(15_000).pipe(
-      map(() => ({ type: 'message', data: { type: 'heartbeat', ts: Date.now() } })),
-    );
-    return merge(hello$, heartbeat$, live$);
   }
 }

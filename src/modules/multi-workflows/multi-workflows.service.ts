@@ -3,12 +3,15 @@ import {
   ConflictException,
   Injectable,
   NotFoundException,
+  OnModuleInit,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { StorySource, StorySourceDocument } from '../stories/story-source.schema';
 import { WorkflowRunsService } from '../workflow-runs/workflow-runs.service';
+import { ExtensionPresenceService } from '../workflow-runs/extension-presence.service';
 import { WorkflowRunStatus } from '../workflow-runs/workflow-run.schema';
 import {
   Workflow,
@@ -45,7 +48,7 @@ import {
 } from './multi-workflows.dto';
 
 @Injectable()
-export class MultiWorkflowsService {
+export class MultiWorkflowsService implements OnModuleInit {
   constructor(
     @InjectModel(MultiWorkflow.name)
     private readonly multiWorkflowModel: Model<MultiWorkflowDocument>,
@@ -58,8 +61,16 @@ export class MultiWorkflowsService {
     @InjectModel(Workflow.name)
     private readonly workflowModel: Model<WorkflowDocument>,
     private readonly workflowRunsService: WorkflowRunsService,
+    private readonly extensionPresence: ExtensionPresenceService,
     private readonly configService: ConfigService,
   ) {}
+
+  onModuleInit() {
+    this.extensionPresence.connected$.subscribe((event) => {
+      if (!event.online) return;
+      void this.resumePendingRunsForUser(event.userId);
+    });
+  }
 
   async getDefaultForUser(userId: string) {
     const userOid = this.normalizeObjectId(userId, 'Invalid user id.');
@@ -331,20 +342,26 @@ export class MultiWorkflowsService {
       }));
 
     const trigger = (dto.trigger || 'manual').trim() || 'manual';
+    if (trigger === 'web_console' && !this.extensionPresence.isOnline(userId)) {
+      throw new ServiceUnavailableException(
+        'Extension Chrome chưa mở hoặc chưa đăng nhập. Mở extension (tab Facebook/ChatGPT/Grok) rồi thử lại.',
+      );
+    }
+
     const run = await this.multiWorkflowRunModel.create({
       userId: userOid,
       multiWorkflowId: config._id,
       multiWorkflowKey,
       storySourceId,
       storyId: null,
-      status: MultiWorkflowRunStatus.RUNNING,
+      status: MultiWorkflowRunStatus.QUEUED,
       currentOrder: 0,
       items: runItems,
       payload: {
         ...(dto.payload || {}),
         trigger,
       },
-      startedAt: new Date(),
+      startedAt: null,
       finishedAt: null,
     });
 
@@ -380,9 +397,35 @@ export class MultiWorkflowsService {
       });
     }
 
-    await this.dispatchNext(String(run._id), userId);
+    if (this.extensionPresence.isOnline(userId)) {
+      await this.dispatchNext(String(run._id), userId);
+    }
     const refreshed = await this.multiWorkflowRunModel.findById(run._id);
     return refreshed?.toObject();
+  }
+
+  async resumePendingRunsForUser(userId: string) {
+    if (!this.extensionPresence.isOnline(userId)) return;
+
+    const userOid = this.normalizeObjectId(userId, 'Invalid user id.');
+    const now = new Date();
+    const runs = await this.multiWorkflowRunModel
+      .find({
+        userId: userOid,
+        status: { $in: [MultiWorkflowRunStatus.QUEUED, MultiWorkflowRunStatus.RUNNING] },
+      })
+      .sort({ createdAt: 1 })
+      .lean();
+
+    for (const run of runs) {
+      const hasPendingJob = await this.multiWorkflowJobModel.exists({
+        multiWorkflowRunId: run._id,
+        status: MultiWorkflowJobStatus.PENDING,
+        $or: [{ nextRetryAt: null }, { nextRetryAt: { $lte: now } }],
+      });
+      if (!hasPendingJob) continue;
+      await this.dispatchNext(String(run._id), userId);
+    }
   }
 
   async listJobsForUser(userId: string, query: ListMultiWorkflowJobsQueryDto) {
@@ -584,6 +627,19 @@ export class MultiWorkflowsService {
         job.workflowRunId = null;
         await job.save();
         await this.syncRunItemFromJob(job, MultiWorkflowRunItemStatus.PENDING);
+
+        const userId = String(job.userId);
+        if (this.extensionPresence.isOnline(userId)) {
+          await this.dispatchNext(String(job.multiWorkflowRunId), userId);
+        } else {
+          await this.multiWorkflowRunModel.updateOne(
+            {
+              _id: job.multiWorkflowRunId,
+              status: MultiWorkflowRunStatus.RUNNING,
+            },
+            { $set: { status: MultiWorkflowRunStatus.QUEUED } },
+          );
+        }
       }
       unlocked += 1;
     }
@@ -591,6 +647,10 @@ export class MultiWorkflowsService {
   }
 
   private async dispatchNext(multiWorkflowRunId: string, userId: string) {
+    if (!this.extensionPresence.isOnline(userId)) {
+      return;
+    }
+
     const run = await this.multiWorkflowRunModel.findById(multiWorkflowRunId);
     if (!run || run.status === MultiWorkflowRunStatus.COMPLETED || run.status === MultiWorkflowRunStatus.FAILED) {
       return;
@@ -628,7 +688,13 @@ export class MultiWorkflowsService {
     await this.syncRunItemFromJob(job, MultiWorkflowRunItemStatus.RUNNING);
     await this.multiWorkflowRunModel.updateOne(
       { _id: run._id },
-      { $set: { status: MultiWorkflowRunStatus.RUNNING, currentOrder: job.order } },
+      {
+        $set: {
+          status: MultiWorkflowRunStatus.RUNNING,
+          currentOrder: job.order,
+          startedAt: run.startedAt || now,
+        },
+      },
     );
 
     const storyId = run.storyId ? String(run.storyId) : '';
