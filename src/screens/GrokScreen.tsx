@@ -1,66 +1,55 @@
-import { useEffect, useState } from 'react'
-import { FiAlertTriangle, FiCheck, FiGlobe, FiImage, FiInfo, FiRefreshCw, FiRotateCcw } from 'react-icons/fi'
+import { useEffect, useRef, useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
+import { FiAlertTriangle, FiCheck, FiGlobe, FiImage, FiInfo, FiPlay, FiRefreshCw, FiRotateCcw, FiSquare } from 'react-icons/fi'
 import translate from 'translate'
-type BrowserTab = { id?: number; url?: string; active?: boolean }
-type ExtensionChrome = {
-  tabs?: {
-    query?: (
-      queryInfo: { url?: string[]; currentWindow?: boolean; active?: boolean },
-      callback: (tabs: BrowserTab[]) => void,
-    ) => void
-    create?: (createProperties: { url: string; active?: boolean }, callback?: (tab: BrowserTab) => void) => void
-    update?: (tabId: number, updateProperties: { url?: string; active?: boolean }, callback?: (tab: BrowserTab) => void) => void
-  }
-  scripting?: {
-    executeScript?: (injection: {
-      target: { tabId: number }
-      func: (...args: unknown[]) => unknown
-      args?: unknown[]
-    }) => Promise<Array<{ result?: unknown }>>
-  }
+import { useAuth } from '@/hooks/useAuth'
+import { getLatestGrokReadyStory, getStoryById, patchStory } from '@/services/StoryService'
+import {
+  createStepRun,
+  createWorkflowRun,
+  createWorkflowRunEventSource,
+  getUserWorkflowDetail,
+  getUserWorkflows,
+  getWorkflowRunById,
+  updateStepRun,
+  updateWorkflowRun,
+  type WorkflowRunStreamEvent,
+} from '@/services/WorkflowService'
+import {
+  captureAndSaveGrokVideoLocally,
+  fillGrokFromStoryPair,
+  listGrokVideoUrlsOnPage,
+  pickGrokTab,
+} from '@/utils/grokAutomation'
+import {
+  ensureStoryWorkspaceLayout,
+  getStoriesFolderSegmentFromStorage,
+  resolveWritableContentRootDirectory,
+  sanitizeWorkspaceFolderSegment,
+} from '@/utils/localWorkspacePersistence'
+import {
+  getCancelledWorkflowRunFromStream,
+  finalizeMultiWorkflowJobAfterWorkflowRun,
+  shouldAcceptWorkflowRunFromStream,
+  shouldStopLocalWorkflowForCancelledRun,
+} from '@/utils/multiWorkflowRun'
+import {
+  isGrokCaptureVideoLinkStep,
+  isGrokFillFromStoryStep,
+  readGrokPairIndex,
+  readGrokTimeoutMs,
+} from '@/utils/grokWorkflowSteps'
+
+type GrokProcessStep = {
+  id: string
+  label: string
+  workflowId: string
+  workflowPlatform: string
+  backendStepId: string
+  stepNo: number
+  actionType: string
+  inputSchema: Record<string, unknown>
 }
-
-const GROK_URL = 'https://grok.com/imagine/saved'
-const GROK_PATTERNS = ['*://grok.com/imagine*']
-
-const parseGrokPath = (raw?: string) => {
-  if (!raw) return null
-  try {
-    const u = new URL(raw)
-    if (u.hostname !== 'grok.com') return null
-    return u.pathname.replace(/\/+$/, '')
-  } catch {
-    return null
-  }
-}
-
-const isPreferredGrokUrl = (raw?: string) => {
-  const path = parseGrokPath(raw)
-  return path === '/imagine' || path === '/imagine/saved'
-}
-
-const isSavedGrokUrl = (raw?: string) => parseGrokPath(raw) === '/imagine/saved'
-const isImagineRootUrl = (raw?: string) => parseGrokPath(raw) === '/imagine'
-
-const isSupportedGrokUrl = (raw?: string) => {
-  const path = parseGrokPath(raw)
-  if (!path) return false
-  return path === '/imagine' || path === '/imagine/saved' || path.startsWith('/imagine/post')
-}
-
-const isImaginePostUrl = (raw?: string) => {
-  const path = parseGrokPath(raw)
-  return Boolean(path && path.startsWith('/imagine/post'))
-}
-
-const shouldRedirectPostToImagine = (raw?: string) => {
-  const path = parseGrokPath(raw)
-  return Boolean(path && path.startsWith('/imagine/post/') && path !== '/imagine/post')
-}
-
-const getChrome = () => (globalThis as { chrome?: ExtensionChrome }).chrome
-
-const sleep = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms))
 
 const translateInChunks = async (source: string) => {
   const value = (source || '').trim()
@@ -92,249 +81,37 @@ const translateInChunks = async (source: string) => {
 
   const out: string[] = []
   for (const chunk of chunks) {
-    // eslint-disable-next-line no-await-in-loop
     const translated = await translate(chunk, { to: 'vi' })
     out.push((translated || '').trim())
   }
   return out.join('\n\n').trim()
 }
 
-const queryTabs = (urlPatterns?: string[], currentWindow?: boolean, active?: boolean) =>
-  new Promise<BrowserTab[]>((resolve) => {
-    const extensionChrome = getChrome()
-    extensionChrome?.tabs?.query?.({ url: urlPatterns, currentWindow, active }, (tabs) => resolve(tabs || []))
-  })
-
-const createTab = (url: string) =>
-  new Promise<BrowserTab | null>((resolve) => {
-    const extensionChrome = getChrome()
-    extensionChrome?.tabs?.create?.({ url, active: true }, (tab) => resolve(tab || null))
-  })
-
-const updateTab = (tabId: number, url?: string) =>
-  new Promise<BrowserTab | null>((resolve) => {
-    const extensionChrome = getChrome()
-    extensionChrome?.tabs?.update?.(tabId, url ? { url, active: true } : { active: true }, (tab) => resolve(tab || null))
-  })
-
-async function injectPromptToGrok(tabId: number, prompt: string, imageDataUrl?: string) {
-  const extensionChrome = getChrome()
-  if (!extensionChrome?.scripting?.executeScript) return false
-
-  const result = await extensionChrome.scripting.executeScript({
-    target: { tabId },
-    func: (async (message: string, imageUrl?: string) => {
-      const sleep = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms))
-      const needle = message.slice(0, 32).trim()
-      const isVisible = (el: Element | null): el is HTMLElement => {
-        if (!(el instanceof HTMLElement)) return false
-        const rect = el.getBoundingClientRect()
-        const style = window.getComputedStyle(el)
-        return rect.width > 40 && rect.height > 20 && style.display !== 'none' && style.visibility !== 'hidden'
-      }
-
-      const selectors = [
-        'textarea',
-        'div[contenteditable="true"][role="textbox"]',
-        'div[contenteditable="true"]',
-      ]
-      const getBestInput = () => {
-        const candidates = selectors.flatMap((selector) => Array.from(document.querySelectorAll<HTMLElement>(selector)))
-        const visibles = candidates.filter((el) => isVisible(el))
-        if (visibles.length === 0) return null
-        const scored = visibles.map((el) => {
-          const rect = el.getBoundingClientRect()
-          const centerX = rect.left + rect.width / 2
-          const centerY = rect.top + rect.height / 2
-          const distanceX = Math.abs(centerX - window.innerWidth / 2)
-          const distanceY = Math.abs(centerY - window.innerHeight * 0.86)
-          const score = rect.width * rect.height - distanceX * 20 - distanceY * 35
-          return { el, score }
-        })
-        scored.sort((a, b) => b.score - a.score)
-        return scored[0].el
-      }
-
-      const input = getBestInput()
-      if (!input) return { foundInput: false, wroteText: false, pastedImage: false }
-
-      const pasteImageFirst = async (targetInput: HTMLElement) => {
-        if (!imageUrl) return true
-        try {
-          const clearExistingImages = async () => {
-            // Best-effort: remove existing attachments/thumbnails if any.
-            const removeRegex = /(remove|delete|clear|xóa|xoá|gỡ|discard)/i
-            const pickClickable = () =>
-              Array.from(document.querySelectorAll<HTMLElement>('button,[role="button"]')).filter((el) => {
-                const label = (el.getAttribute('aria-label') || el.getAttribute('title') || el.textContent || '').trim()
-                if (!label) return false
-                if (!removeRegex.test(label)) return false
-                const style = window.getComputedStyle(el)
-                return style.display !== 'none' && style.visibility !== 'hidden'
-              })
-
-            for (let round = 0; round < 6; round += 1) {
-              const buttons = pickClickable()
-              if (buttons.length === 0) break
-              // Click a few times; UI may re-render attachments list.
-              buttons.slice(0, 6).forEach((btn) => {
-                try {
-                  btn.click()
-                } catch {
-                  // ignore
-                }
-              })
-              await sleep(140)
-            }
-          }
-
-          await clearExistingImages()
-
-          const response = await fetch(imageUrl)
-          const blob = await response.blob()
-          const file = new File([blob], 'chatgpt-step3-image-1.png', { type: blob.type || 'image/png' })
-
-          const dt = new DataTransfer()
-          dt.items.add(file)
-
-          const imageInput = Array.from(document.querySelectorAll<HTMLInputElement>('input[type="file"]')).find((el) => {
-            if (el.disabled) return false
-            return /image/i.test(el.accept || '') || el.multiple
-          })
-          if (imageInput) {
-            imageInput.files = dt.files
-            imageInput.dispatchEvent(new Event('change', { bubbles: true }))
-            await sleep(220)
-            return true
-          }
-
-          const pasteEvent = new ClipboardEvent('paste', {
-            bubbles: true,
-            cancelable: true,
-            clipboardData: dt,
-          })
-          targetInput.dispatchEvent(pasteEvent)
-
-          const dropEvent = new DragEvent('drop', {
-            bubbles: true,
-            cancelable: true,
-            dataTransfer: dt,
-          })
-          targetInput.dispatchEvent(dropEvent)
-          await sleep(220)
-          return true
-        } catch {
-          return false
-        }
-      }
-
-      const triggerInput = (el: HTMLElement) => {
-        el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: message }))
-        el.dispatchEvent(new Event('change', { bubbles: true }))
-      }
-
-      const pastedImage = await pasteImageFirst(input)
-
-      const writeText = (targetInput: HTMLElement) => {
-        if (targetInput instanceof HTMLTextAreaElement) {
-          const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set
-          setter?.call(targetInput, message)
-          triggerInput(targetInput)
-          targetInput.focus()
-          const caret = message.length
-          targetInput.setSelectionRange(caret, caret)
-          return (targetInput.value || '').includes(needle)
-        }
-
-        const range = document.createRange()
-        range.selectNodeContents(targetInput)
-        const selection = window.getSelection()
-        selection?.removeAllRanges()
-        selection?.addRange(range)
-        document.execCommand('selectAll', false)
-        document.execCommand('insertText', false, message)
-        triggerInput(targetInput)
-        targetInput.focus()
-        const finalSelection = window.getSelection()
-        if (finalSelection) {
-          const caretRange = document.createRange()
-          caretRange.selectNodeContents(targetInput)
-          caretRange.collapse(false)
-          finalSelection.removeAllRanges()
-          finalSelection.addRange(caretRange)
-        }
-        return (targetInput.innerText || targetInput.textContent || '').includes(needle)
-      }
-
-      for (let attempt = 0; attempt < 4; attempt += 1) {
-        const currentInput = getBestInput()
-        if (!currentInput) {
-          await sleep(120)
-          continue
-        }
-        if (writeText(currentInput)) return { foundInput: true, wroteText: true, pastedImage }
-        await sleep(140)
-      }
-      return { foundInput: true, wroteText: false, pastedImage }
-    }) as (...args: unknown[]) => unknown,
-    args: [prompt, imageDataUrl],
-  })
-
-  const payload = result?.[0]?.result as { foundInput?: boolean; wroteText?: boolean; pastedImage?: boolean } | undefined
-  if (!payload) return false
-  return payload
-}
-
-async function waitForGrokComposer(tabId: number, options?: { allowPost?: boolean }) {
-  const extensionChrome = getChrome()
-  if (!extensionChrome?.scripting?.executeScript) return false
-
-  const allowPost = options?.allowPost !== false
-  const attempts = 14
-  for (let i = 0; i < attempts; i += 1) {
-    // give Grok time to hydrate
-    // eslint-disable-next-line no-await-in-loop
-    await sleep(i === 0 ? 120 : 220)
-    // eslint-disable-next-line no-await-in-loop
-    const r = await extensionChrome.scripting.executeScript({
-      target: { tabId },
-      func: ((canUsePost: boolean) => {
-        const path = location.pathname.replace(/\/+$/, '')
-        const okPath = path === '/imagine' || path === '/imagine/saved' || (canUsePost && path === '/imagine/post')
-        if (!okPath) return { ok: false, path, hasInput: false }
-
-        const isVisible = (el: Element | null): el is HTMLElement => {
-          if (!(el instanceof HTMLElement)) return false
-          const rect = el.getBoundingClientRect()
-          const style = window.getComputedStyle(el)
-          return rect.width > 40 && rect.height > 20 && style.display !== 'none' && style.visibility !== 'hidden'
-        }
-        const selectors = [
-          'textarea',
-          'div[contenteditable="true"][role="textbox"]',
-          'div[contenteditable="true"]',
-        ]
-        const candidates = selectors.flatMap((selector) => Array.from(document.querySelectorAll<HTMLElement>(selector)))
-        const hasInput = candidates.some((el) => isVisible(el))
-        return { ok: okPath, path, hasInput }
-      }) as (...args: unknown[]) => unknown,
-      args: [allowPost],
-    })
-
-    const payload = r?.[0]?.result as { ok?: boolean; path?: string; hasInput?: boolean } | undefined
-    if (payload?.ok && payload?.hasInput) return true
-  }
-  return false
-}
-
 export default function GrokScreen() {
-  const [status, setStatus] = useState('Đợi dữ liệu từ ChatGPT để điền vào Grok.')
+  const role = useAuth((state) => state.role)
+  const canUseWorkflow = role === 'user-vip' || role === 'admin'
+
+  const [status, setStatus] = useState('Đợi dữ liệu từ ChatGPT hoặc workflow Grok.')
   const [lastPrompt, setLastPrompt] = useState('')
   const [originalLastPrompt, setOriginalLastPrompt] = useState('')
   const [isContentTranslated, setIsContentTranslated] = useState(false)
   const [isTranslating, setIsTranslating] = useState(false)
   const [lastImageDataUrl, setLastImageDataUrl] = useState('')
   const [isPushingToGrok, setIsPushingToGrok] = useState(false)
+
+  const [isGrokWorkflowRunning, setIsGrokWorkflowRunning] = useState(false)
+  const [isGrokWorkflowStopping, setIsGrokWorkflowStopping] = useState(false)
+  const [grokWorkflowStatus, setGrokWorkflowStatus] = useState('')
+
+  const grokWorkflowStopRef = useRef(false)
+  const workflowCancelledRemotelyRef = useRef(false)
+  const runningGrokWorkflowRunIdRef = useRef('')
+  const isGrokWorkflowRunningRef = useRef(false)
+  const lockedGrokTabIdRef = useRef(0)
+  const grokPipelineStoryIdRef = useRef('')
+  const grokCapturedVideoUrlsRef = useRef<string[]>([])
+  const grokVideoBaselineRef = useRef<string[]>([])
+
   const statusLower = status.toLowerCase()
   const statusTone = statusLower.includes('không thể') || statusLower.includes('không tìm thấy') || statusLower.includes('thất bại') || statusLower.includes('lỗi')
     ? 'error'
@@ -344,10 +121,36 @@ export default function GrokScreen() {
         ? 'success'
         : 'info'
 
+  const { data: grokWorkflowSteps = [], isLoading: isLoadingGrokWorkflowSteps } = useQuery<GrokProcessStep[]>({
+    queryKey: ['grok-workflow-steps'],
+    queryFn: async () => {
+      const workflows = await getUserWorkflows({ platform: 'grok' })
+      const target = workflows[0] || null
+      if (!target?._id) return []
+      const detail = await getUserWorkflowDetail(target._id)
+      return (detail.steps || [])
+        .slice()
+        .sort((a, b) => (a.stepNo || 0) - (b.stepNo || 0))
+        .map((step) => ({
+          id: `grok-step-${step.stepNo}`,
+          label: (step.title || '').trim() || `Bước ${step.stepNo}`,
+          workflowId: target._id,
+          workflowPlatform: (target.platform || 'grok').trim().toLowerCase(),
+          backendStepId: (step._id || '').trim(),
+          stepNo: Number(step.stepNo) || 0,
+          actionType: (step.actionType || 'custom').trim(),
+          inputSchema: (step.inputSchema || {}) as Record<string, unknown>,
+        }))
+        .filter((step) => step.backendStepId && step.workflowId)
+    },
+    staleTime: 60_000,
+    enabled: canUseWorkflow,
+  })
+
   const pushToGrokTab = async (
     prompt: string,
     imageDataUrl: string,
-    options?: { part?: 1 | 2; single?: boolean; fromRetry?: boolean },
+    options?: { part?: 1 | 2; single?: boolean; fromRetry?: boolean; submit?: boolean },
   ) => {
     const trimmedPrompt = prompt.trim()
     if (!trimmedPrompt && !imageDataUrl) {
@@ -361,71 +164,341 @@ export default function GrokScreen() {
 
     setStatus(options?.fromRetry ? 'Đang đẩy lại nội dung lên Grok...' : 'Đang mở Grok và điền nội dung...')
 
-    const extensionChrome = getChrome()
-    if (!extensionChrome?.tabs?.query || !extensionChrome.tabs.update || !extensionChrome.tabs.create) {
-      setStatus('Môi trường hiện tại không hỗ trợ tự động điền Grok.')
-      return false
-    }
-
-    const grokTabsRaw = await queryTabs(GROK_PATTERNS, true)
-    const grokTabs = grokTabsRaw.filter((t) => isSupportedGrokUrl(t.url))
-
-    const pickBest = (tabs: BrowserTab[]) => {
-      const saved = tabs.find((t) => isSavedGrokUrl(t.url))
-      if (saved) return saved
-      const imagineRoot = tabs.find((t) => isImagineRootUrl(t.url))
-      if (imagineRoot) return imagineRoot
-      const post = tabs.find((t) => isImaginePostUrl(t.url))
-      if (post) return post
-      return tabs[0] || null
-    }
-
-    let target: BrowserTab | null | undefined = pickBest(grokTabs)
-
-    if (target?.id && target.url && isImaginePostUrl(target.url) && shouldRedirectPostToImagine(target.url)) {
-      target = await updateTab(target.id, GROK_URL)
-    } else if (target?.id && target.url && isPreferredGrokUrl(target.url)) {
-      target = await updateTab(target.id)
-    } else if (target?.id) {
-      target = await updateTab(target.id)
-    }
-
-    if (!target?.id) {
-      target = await createTab(GROK_URL)
-    } else if (!isSupportedGrokUrl(target.url || '')) {
-      target = await updateTab(target.id, GROK_URL)
-    } else {
-      target = await updateTab(target.id)
-    }
-
+    const target = await pickGrokTab(true)
     if (!target?.id) {
       setStatus('Không thể mở tab Grok.')
       return false
     }
+    lockedGrokTabIdRef.current = target.id
 
-    const ready = await waitForGrokComposer(target.id, { allowPost: true })
-    if (!ready) {
-      setStatus('Đã mở Grok nhưng chưa thấy ô nhập sẵn sàng để dán.')
+    try {
+      const injected = await fillGrokFromStoryPair(target.id, trimmedPrompt, imageDataUrl, {
+        submit: options?.submit !== false,
+      })
+      const submitted = options?.submit !== false
+      setStatus(
+        injected.foundInput
+          ? injected.wroteText
+            ? imageDataUrl
+              ? submitted
+                ? options?.fromRetry
+                  ? `Đã đẩy lại ${assetLabel} và Enter trên Grok.`
+                  : `Đã paste ${assetLabel} và Enter trên Grok.`
+                : options?.fromRetry
+                  ? `Đã đẩy lại ${assetLabel} (chưa Enter).`
+                  : `Đã paste ${assetLabel} (chưa Enter).`
+              : submitted
+                ? 'Đã điền prompt và Enter trên Grok.'
+                : 'Đã điền prompt (chưa Enter).'
+            : 'Đã paste ảnh; text có thể chưa xác nhận (Grok hay re-render).'
+          : 'Không tìm thấy ô nhập của Grok.',
+      )
+      return Boolean(injected.foundInput)
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : 'Lỗi điền Grok'
+      setStatus(msg)
       return false
     }
+  }
 
-    const r = await injectPromptToGrok(target.id, trimmedPrompt, imageDataUrl)
-    setStatus(
-      typeof r === 'object' && r?.foundInput
-        ? r.wroteText
-          ? imageDataUrl
-            ? options?.fromRetry
-              ? `Đã đẩy lại ${assetLabel} vào Grok (không Enter).`
-              : `Đã paste ${assetLabel} vào Grok (không Enter).`
-            : options?.fromRetry
-              ? 'Đã đẩy lại prompt vào Grok (không Enter).'
-              : 'Đã điền nội dung vào Grok (không Enter).'
-          : imageDataUrl
-            ? 'Đã paste ảnh. Text có thể đã vào nhưng xác nhận chưa chắc (Grok hay re-render).'
-            : 'Text có thể đã vào nhưng xác nhận chưa chắc (Grok hay re-render).'
-        : 'Không tìm thấy ô nhập của Grok.',
-    )
-    return Boolean(typeof r === 'object' && r?.foundInput)
+  const resolveStoryIdForGrok = async (workflowRunId: string): Promise<string> => {
+    const cached = grokPipelineStoryIdRef.current.trim()
+    if (cached) return cached
+
+    if (workflowRunId) {
+      try {
+        const run = await getWorkflowRunById(workflowRunId)
+        const payload = (run.payload || {}) as Record<string, unknown>
+        const fromPayload = String(payload.storyId || '').trim()
+        if (fromPayload) {
+          grokPipelineStoryIdRef.current = fromPayload
+          return fromPayload
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+
+    try {
+      const latest = await getLatestGrokReadyStory({ maxAgeMs: 3_600_000 })
+      const fromLatest = (latest._id || '').trim()
+      if (fromLatest) {
+        grokPipelineStoryIdRef.current = fromLatest
+        return fromLatest
+      }
+    } catch {
+      /* ignore */
+    }
+
+    return ''
+  }
+
+  const loadStoryPair = async (storyId: string, index: number) => {
+    const story = await getStoryById(storyId)
+    const prompts = (story.videoPrompts || []).map((s) => s.trim()).filter(Boolean)
+    const images = (story.imageUrls || []).map((s) => s.trim()).filter(Boolean)
+    const prompt = prompts[index] || prompts[0] || ''
+    const imageUrl = images[index] || images[0] || ''
+    if (!prompt) throw new Error('Story không có videoPrompt — chạy workflow ChatGPT trước.')
+    if (!imageUrl) throw new Error('Story không có imageUrl — chạy bước tạo ảnh ChatGPT trước.')
+    return { story, prompt, imageUrl }
+  }
+
+  const executeGrokWorkflowStep = async (step: GrokProcessStep) => {
+    if (grokWorkflowStopRef.current) throw new Error('Workflow đã dừng.')
+
+    const tabId = lockedGrokTabIdRef.current
+    if (!tabId) throw new Error('Chưa khóa tab Grok.')
+
+    const storyId = await resolveStoryIdForGrok(runningGrokWorkflowRunIdRef.current)
+    if (!storyId) {
+      throw new Error(
+        'Không tìm thấy Story có ảnh + videoPrompt trong 1 giờ gần đây — chạy workflow ChatGPT trước.',
+      )
+    }
+
+    const pairIndex = readGrokPairIndex(step.inputSchema)
+
+    if (isGrokFillFromStoryStep(step)) {
+      const { prompt, imageUrl } = await loadStoryPair(storyId, pairIndex)
+      setLastPrompt(prompt)
+      setLastImageDataUrl(imageUrl)
+      setGrokWorkflowStatus(`${step.label}: điền ảnh + VIDEO ${pairIndex + 1} và Enter…`)
+      await fillGrokFromStoryPair(tabId, prompt, imageUrl, { submit: true })
+      grokVideoBaselineRef.current = await listGrokVideoUrlsOnPage(tabId)
+      return { filled: true, pairIndex, imageUrl, promptLength: prompt.length }
+    }
+
+    if (isGrokCaptureVideoLinkStep(step)) {
+      const timeoutMs = readGrokTimeoutMs(step.inputSchema)
+      setGrokWorkflowStatus(`${step.label}: chọn thư mục workspace để lưu video…`)
+      const root = await resolveWritableContentRootDirectory({ allowPicker: true })
+      if (!root) {
+        throw new Error('Cần chọn thư mục workspace trên máy để lưu video Grok.')
+      }
+
+      const storyForFolder = await getStoryById(storyId)
+      const folderSegment = sanitizeWorkspaceFolderSegment(
+        (storyForFolder.name || '').trim(),
+        `story-${storyId.replace(/[^a-zA-Z0-9]/g, '').slice(-12) || 'id'}`,
+      )
+      const storiesSeg = await getStoriesFolderSegmentFromStorage(
+        (globalThis as { chrome?: { storage?: { local?: Parameters<typeof getStoriesFolderSegmentFromStorage>[0] } } })
+          .chrome?.storage?.local,
+      )
+      const dirs = await ensureStoryWorkspaceLayout(root, storiesSeg, folderSegment)
+      const filename = `video-${pairIndex + 1}.mp4`
+      const relativePath = `${storiesSeg}/${folderSegment}/videos/${filename}`
+
+      setGrokWorkflowStatus(`${step.label}: chờ video Grok (tối đa ${Math.round(timeoutMs / 1000)}s)…`)
+      const { grokUrl, localPath, byteLength } = await captureAndSaveGrokVideoLocally(
+        tabId,
+        timeoutMs,
+        { dirHandle: dirs.videosDir, filename, relativePath },
+        { baselineUrls: grokVideoBaselineRef.current },
+      )
+      if (!grokUrl || !localPath) {
+        throw new Error('Hết thời gian chờ — chưa tải được video Grok.')
+      }
+
+      grokVideoBaselineRef.current = [...grokVideoBaselineRef.current, grokUrl].filter(Boolean)
+
+      const story = await getStoryById(storyId)
+      const merged = [...(story.videoStorageAddresses || [])]
+      while (merged.length <= pairIndex) merged.push('')
+      merged[pairIndex] = localPath
+      await patchStory(storyId, { videoStorageAddresses: merged })
+      grokCapturedVideoUrlsRef.current = merged
+
+      const sizeMb = byteLength > 0 ? ` (${(byteLength / (1024 * 1024)).toFixed(1)} MB)` : ''
+      setGrokWorkflowStatus(`${step.label}: đã lưu ${relativePath}${sizeMb}.`)
+      return { captured: true, grokUrl, localPath, relativePath, byteLength, videoStorageAddresses: merged }
+    }
+
+    throw new Error(`Bước Grok chưa hỗ trợ: ${step.actionType}`)
+  }
+
+  const stopGrokWorkflow = () => {
+    if (!isGrokWorkflowRunningRef.current || grokWorkflowStopRef.current) return
+    grokWorkflowStopRef.current = true
+    setIsGrokWorkflowStopping(true)
+    setGrokWorkflowStatus('Đang dừng workflow sau bước hiện tại…')
+  }
+
+  const stopGrokWorkflowRunFromWeb = () => {
+    if (!isGrokWorkflowRunningRef.current || grokWorkflowStopRef.current) return
+    workflowCancelledRemotelyRef.current = true
+    grokWorkflowStopRef.current = true
+    setIsGrokWorkflowStopping(true)
+    setGrokWorkflowStatus('Đã hủy từ web — dừng sau bước hiện tại…')
+  }
+
+  const runGrokWorkflow = async (options?: { runId?: string; workflowId?: string; source?: string }) => {
+    if (!canUseWorkflow) {
+      setGrokWorkflowStatus('Workflow Grok chỉ dành cho VIP hoặc admin.')
+      return
+    }
+    if (!grokWorkflowSteps.length || isGrokWorkflowRunning) return
+
+    const first = grokWorkflowSteps[0]
+    if (!first?.workflowId) {
+      setGrokWorkflowStatus('Chưa có workflow Grok trên backend.')
+      return
+    }
+    if (options?.workflowId && options.workflowId !== first.workflowId) {
+      setGrokWorkflowStatus('Workflow Grok không khớp dữ liệu đang tải.')
+      return
+    }
+
+    isGrokWorkflowRunningRef.current = true
+    setIsGrokWorkflowRunning(true)
+    setIsGrokWorkflowStopping(false)
+    grokWorkflowStopRef.current = false
+    workflowCancelledRemotelyRef.current = false
+    grokCapturedVideoUrlsRef.current = []
+    grokVideoBaselineRef.current = []
+
+    let workflowRunId = options?.runId || ''
+    runningGrokWorkflowRunIdRef.current = workflowRunId
+    let mwOutcome: 'completed' | 'failed' | 'cancelled' | null = null
+    let mwErrorMessage = ''
+
+    try {
+      grokPipelineStoryIdRef.current = ''
+
+      const grokTab = await pickGrokTab(true)
+      lockedGrokTabIdRef.current = grokTab?.id || 0
+      if (!lockedGrokTabIdRef.current) {
+        setGrokWorkflowStatus('Không thể mở tab Grok.')
+        return
+      }
+
+      if (!workflowRunId) {
+        setGrokWorkflowStatus(`Tạo workflow run (${grokWorkflowSteps.length} bước)…`)
+        const run = await createWorkflowRun({
+          workflowId: first.workflowId,
+          payload: { source: options?.source || 'grok_screen', totalSteps: grokWorkflowSteps.length },
+        })
+        workflowRunId = run._id
+        runningGrokWorkflowRunIdRef.current = workflowRunId
+      } else {
+        try {
+          const existingRun = await getWorkflowRunById(workflowRunId)
+          const payload = (existingRun.payload || {}) as Record<string, unknown>
+          const storyId = String(payload.storyId || '').trim()
+          if (storyId) grokPipelineStoryIdRef.current = storyId
+        } catch {
+          /* ignore */
+        }
+        await updateWorkflowRun(workflowRunId, {
+          status: 'running',
+          progress: 0,
+          currentStepNo: 0,
+          startedAt: new Date().toISOString(),
+          finishedAt: null,
+          result: {},
+          error: { code: '', message: '', details: {} },
+        })
+      }
+
+      for (let index = 0; index < grokWorkflowSteps.length; index += 1) {
+        if (grokWorkflowStopRef.current) {
+          mwOutcome = 'cancelled'
+          break
+        }
+
+        const step = grokWorkflowSteps[index]
+        const stepNo = step.stepNo || index + 1
+        const progress = Math.round((index / grokWorkflowSteps.length) * 100)
+
+        await updateWorkflowRun(workflowRunId, {
+          status: 'running',
+          currentStepNo: stepNo,
+          progress,
+        })
+
+        setGrokWorkflowStatus(`Workflow: ${step.label} (${index + 1}/${grokWorkflowSteps.length})`)
+
+        const stepRun = await createStepRun({
+          workflowRunId,
+          workflowId: step.workflowId,
+          stepId: step.backendStepId,
+          stepNo,
+          stepTitle: step.label,
+          status: 'running',
+          input: { actionType: step.actionType, inputSchema: step.inputSchema || {} },
+        })
+
+        try {
+          const output = await executeGrokWorkflowStep(step)
+          await updateStepRun(stepRun._id, {
+            status: 'completed',
+            output: output as Record<string, unknown>,
+            finishedAt: new Date().toISOString(),
+          })
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : 'Step failed'
+          await updateStepRun(stepRun._id, {
+            status: 'failed',
+            error: { message: errorMessage },
+            finishedAt: new Date().toISOString(),
+          })
+          await updateWorkflowRun(workflowRunId, {
+            status: 'failed',
+            progress,
+            currentStepNo: stepNo,
+            error: { code: 'STEP_FAILED', message: errorMessage, details: { stepNo } },
+            finishedAt: new Date().toISOString(),
+          })
+          throw error
+        }
+      }
+
+      if (grokWorkflowStopRef.current) {
+        mwOutcome = 'cancelled'
+      } else {
+        await updateWorkflowRun(workflowRunId, {
+          status: 'completed',
+          progress: 100,
+          currentStepNo: grokWorkflowSteps[grokWorkflowSteps.length - 1]?.stepNo || grokWorkflowSteps.length,
+          result: {
+            completedSteps: grokWorkflowSteps.length,
+            videoStorageAddresses: grokCapturedVideoUrlsRef.current,
+          },
+          finishedAt: new Date().toISOString(),
+        })
+        setGrokWorkflowStatus(`Hoàn tất ${grokWorkflowSteps.length} bước Grok.`)
+        mwOutcome = 'completed'
+      }
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : 'Workflow lỗi'
+      if (grokWorkflowStopRef.current) {
+        mwOutcome = 'cancelled'
+      } else {
+        mwOutcome = 'failed'
+        mwErrorMessage = msg
+        setGrokWorkflowStatus(`Lỗi: ${msg}`)
+      }
+    } finally {
+      if (workflowRunId && mwOutcome && !workflowCancelledRemotelyRef.current) {
+        void finalizeMultiWorkflowJobAfterWorkflowRun(workflowRunId, mwOutcome, {
+          storyId: grokPipelineStoryIdRef.current.trim() || undefined,
+          errorMessage: mwErrorMessage,
+          result: {
+            videoStorageAddresses: grokCapturedVideoUrlsRef.current,
+          },
+        }).catch(() => undefined)
+      }
+      workflowCancelledRemotelyRef.current = false
+      grokWorkflowStopRef.current = false
+      lockedGrokTabIdRef.current = 0
+      runningGrokWorkflowRunIdRef.current = ''
+      grokPipelineStoryIdRef.current = ''
+      grokCapturedVideoUrlsRef.current = []
+      isGrokWorkflowRunningRef.current = false
+      setIsGrokWorkflowRunning(false)
+      setIsGrokWorkflowStopping(false)
+    }
   }
 
   useEffect(() => {
@@ -450,13 +523,42 @@ export default function GrokScreen() {
       setIsContentTranslated(false)
       setLastImageDataUrl(imageDataUrl)
 
-      await pushToGrokTab(prompt, imageDataUrl, { part, single: isSingle })
+      await pushToGrokTab(prompt, imageDataUrl, { part, single: isSingle, submit: false })
     }
 
     window.addEventListener('fill-grok-from-chatgpt-video1-image', onFillFromChatgpt as EventListener)
     return () => window.removeEventListener('fill-grok-from-chatgpt-video1-image', onFillFromChatgpt as EventListener)
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- pushToGrokTab ổn định theo closure màn hình
   }, [])
+
+  useEffect(() => {
+    if (!canUseWorkflow || !grokWorkflowSteps.length) return
+    const eventSource = createWorkflowRunEventSource()
+    eventSource.onmessage = (event) => {
+      try {
+        const payload = JSON.parse(String(event.data || '{}')) as WorkflowRunStreamEvent
+        const cancelledRun = getCancelledWorkflowRunFromStream(payload)
+        if (
+          cancelledRun &&
+          shouldStopLocalWorkflowForCancelledRun(cancelledRun._id, runningGrokWorkflowRunIdRef.current)
+        ) {
+          stopGrokWorkflowRunFromWeb()
+          return
+        }
+        if (payload?.type !== 'workflow_run_created') return
+        const run = payload.run
+        if (!run?._id || !run?.workflowId) return
+        if (!shouldAcceptWorkflowRunFromStream(run, grokWorkflowSteps[0]?.workflowId || '')) return
+        if (isGrokWorkflowRunning) return
+        if (runningGrokWorkflowRunIdRef.current === run._id) return
+        setGrokWorkflowStatus(`SSE: chạy workflow Grok ${run._id}`)
+        void runGrokWorkflow({ runId: run._id, workflowId: run.workflowId, source: 'sse' })
+      } catch {
+        /* ignore */
+      }
+    }
+    eventSource.onerror = () => {}
+    return () => eventSource.close()
+  }, [canUseWorkflow, grokWorkflowSteps, isGrokWorkflowRunning])
 
   const retryPushToGrok = async () => {
     if (isPushingToGrok) return
@@ -468,7 +570,7 @@ export default function GrokScreen() {
     }
     setIsPushingToGrok(true)
     try {
-      await pushToGrokTab(prompt, imageDataUrl, { fromRetry: true })
+      await pushToGrokTab(prompt, imageDataUrl, { fromRetry: true, submit: false })
     } finally {
       setIsPushingToGrok(false)
     }
@@ -509,8 +611,40 @@ export default function GrokScreen() {
 
   return (
     <section className="glass-panel flex h-full min-h-0 flex-col rounded-3xl p-4">
-      <h2 className="text-sm font-semibold text-white">Grok</h2>
-      <p className="mt-1 text-[11px] text-slate-400">Tự động nhận prompt ảnh từ ChatGPT và điền vào ô nhập Grok.</p>
+      <div className="flex items-center justify-between gap-2">
+        <h2 className="text-sm font-semibold text-white">Grok</h2>
+        {canUseWorkflow ? (
+          <div className="flex shrink-0 items-center gap-2">
+            {isGrokWorkflowRunning ? (
+              <button
+                type="button"
+                onClick={stopGrokWorkflow}
+                disabled={isGrokWorkflowStopping}
+                className="inline-flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-lg border border-rose-500/30 bg-rose-500/15 text-rose-100 transition hover:bg-rose-500/25 disabled:cursor-not-allowed disabled:opacity-50"
+                title={isGrokWorkflowStopping ? 'Đang dừng…' : 'Dừng workflow'}
+                aria-label={isGrokWorkflowStopping ? 'Đang dừng workflow' : 'Dừng workflow'}
+              >
+                <FiSquare className="h-3.5 w-3.5" aria-hidden />
+              </button>
+            ) : (
+              <button
+                type="button"
+                disabled={!grokWorkflowSteps.length || isLoadingGrokWorkflowSteps}
+                onClick={() => void runGrokWorkflow()}
+                className="inline-flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-lg bg-violet-500/25 text-violet-100 transition hover:bg-violet-500/35 disabled:cursor-not-allowed disabled:opacity-40"
+                title="Chạy workflow Grok"
+                aria-label="Chạy workflow Grok"
+              >
+                <FiPlay className="h-3.5 w-3.5" aria-hidden />
+              </button>
+            )}
+          </div>
+        ) : null}
+      </div>
+      {canUseWorkflow && grokWorkflowStatus ? (
+        <p className="mt-1 text-[10px] text-violet-100/90">{grokWorkflowStatus}</p>
+      ) : null}
+
       <p
         className={`mt-2 inline-flex shrink-0 items-center gap-1.5 rounded-xl border px-3 py-2 text-[11px] ${
           statusTone === 'success'
@@ -533,11 +667,12 @@ export default function GrokScreen() {
         )}
         {status}
       </p>
+
       <div className="mt-2 flex min-h-0 flex-1 flex-col rounded-xl border border-white/10 bg-slate-900/70 p-2">
         {lastImageDataUrl ? (
           <div className="mb-2 rounded-lg border border-white/10 bg-black/20 p-1.5">
             <p className="mb-1 text-[10px] text-slate-500">Ảnh gần nhất</p>
-            <img src={lastImageDataUrl} alt="Ảnh gần nhất từ ChatGPT" className="max-h-36 w-full rounded-md object-contain" />
+            <img src={lastImageDataUrl} alt="Ảnh gần nhất" className="max-h-36 w-full rounded-md object-contain" />
           </div>
         ) : null}
         <div className="flex shrink-0 items-center justify-between gap-2">
@@ -547,7 +682,7 @@ export default function GrokScreen() {
               type="button"
               onClick={() => void retryPushToGrok()}
               disabled={(!lastPrompt.trim() && !lastImageDataUrl) || isPushingToGrok || isTranslating}
-              title={isPushingToGrok ? 'Đang đẩy lại…' : 'Đẩy lại prompt + ảnh lên Grok'}
+              title="Đẩy lại prompt + ảnh lên Grok"
               aria-label="Đẩy lại lên Grok"
               className="inline-flex h-7 w-7 cursor-pointer items-center justify-center rounded-md bg-emerald-500/20 text-emerald-100 transition hover:bg-emerald-500/30 disabled:cursor-not-allowed disabled:opacity-40"
             >
@@ -557,30 +692,19 @@ export default function GrokScreen() {
               type="button"
               onClick={() => void translateLastPrompt()}
               disabled={!lastPrompt.trim() || isTranslating || isPushingToGrok}
-              title={
-              isTranslating
-                ? 'Đang dịch...'
-                : isContentTranslated
-                  ? 'Quay về nội dung gốc'
-                  : 'Dịch sang tiếng Việt'
-            }
-            aria-label={isContentTranslated ? 'Quay về nội dung gốc' : 'Dịch nội dung'}
-            className="relative inline-flex cursor-pointer items-center rounded-md bg-violet-500/20 px-2 py-1 text-[10px] font-semibold text-violet-100 transition hover:bg-violet-500/30 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            {isTranslating ? (
-              <span className="animate-pulse">…</span>
-            ) : isContentTranslated ? (
-              <FiRotateCcw className="h-3.5 w-3.5" />
-            ) : (
-              <FiGlobe className="h-3.5 w-3.5" />
-            )}
-            {isContentTranslated ? (
-              <span className="absolute -right-1 -top-1 rounded-full bg-violet-500 px-1 text-[7px] leading-none text-white">
-                VI
-              </span>
-            ) : null}
-          </button>
-        </div>
+              title={isContentTranslated ? 'Quay về nội dung gốc' : 'Dịch sang tiếng Việt'}
+              aria-label={isContentTranslated ? 'Quay về nội dung gốc' : 'Dịch nội dung'}
+              className="relative inline-flex cursor-pointer items-center rounded-md bg-violet-500/20 px-2 py-1 text-[10px] font-semibold text-violet-100 transition hover:bg-violet-500/30 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {isTranslating ? (
+                <span className="animate-pulse">…</span>
+              ) : isContentTranslated ? (
+                <FiRotateCcw className="h-3.5 w-3.5" />
+              ) : (
+                <FiGlobe className="h-3.5 w-3.5" />
+              )}
+            </button>
+          </div>
         </div>
         <div className="mt-1 min-h-0 flex-1 overflow-y-auto whitespace-pre-wrap text-[11px] text-slate-200">
           {lastPrompt || 'Chưa có dữ liệu.'}

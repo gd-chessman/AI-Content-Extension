@@ -17,6 +17,7 @@ export type StoryItem = {
   usageCount?: number
   videoPrompts?: string[]
   imageUrls?: string[]
+  videoStorageAddresses?: string[]
   createdAt?: string
   updatedAt?: string
 }
@@ -120,7 +121,25 @@ export const incrementStoryUsage = async (storyId: string) => {
   return response.data as IncrementStoryUsageResult
 }
 
-export const patchStory = async (storyId: string, payload: { videoPrompts: string[] }) => {
+export const getStoryById = async (storyId: string) => {
+  const response = await axiosClient.get(`/stories/my/${storyId}`)
+  return response.data as StoryItem
+}
+
+/** Story mới nhất có videoPrompts + imageUrls, mặc định không quá 1 giờ. */
+export const getLatestGrokReadyStory = async (options?: { maxAgeMs?: number }) => {
+  const response = await axiosClient.get('/stories/my/latest-grok-ready', {
+    params: {
+      maxAgeMs: options?.maxAgeMs ?? 3_600_000,
+    },
+  })
+  return response.data as StoryItem
+}
+
+export const patchStory = async (
+  storyId: string,
+  payload: { videoPrompts?: string[]; videoStorageAddresses?: string[] },
+) => {
   const response = await axiosClient.patch(`/stories/${storyId}`, payload)
   return response.data as StoryItem
 }

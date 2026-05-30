@@ -17,7 +17,7 @@ export const WORKSPACE_STORIES_FOLDER_STORAGE_KEY = 'workspaceStoriesFolderSegme
 /** Truyền showDirectoryPicker — Chrome gợi nhớ thư mục. */
 export const WORKSPACE_ROOT_PICKER_ID = 'aicontent-workspace-root'
 
-export const WORKSPACE_STORY_SUBDIRS = ['images', 'content', 'info'] as const
+export const WORKSPACE_STORY_SUBDIRS = ['images', 'content', 'info', 'videos'] as const
 
 /** Giữ handle trong phiên — tránh load IndexedDB lặp và giữ quyền ổn định hơn. */
 let cachedContentRootHandle: FileSystemDirectoryHandle | null = null
@@ -234,6 +234,7 @@ export type StoryWorkspaceDirs = {
   imagesDir: FileSystemDirectoryHandle
   contentDir: FileSystemDirectoryHandle
   infoDir: FileSystemDirectoryHandle
+  videosDir: FileSystemDirectoryHandle
 }
 
 /** Gốc → [stories] / [tên story] / images | content | info (tạo nếu thiếu). */
@@ -254,7 +255,8 @@ export async function ensureStoryWorkspaceLayout(
   const imagesDir = await storyDir.getDirectoryHandle('images', { create: true })
   const contentDir = await storyDir.getDirectoryHandle('content', { create: true })
   const infoDir = await storyDir.getDirectoryHandle('info', { create: true })
-  return { storyDir, imagesDir, contentDir, infoDir }
+  const videosDir = await storyDir.getDirectoryHandle('videos', { create: true })
+  return { storyDir, imagesDir, contentDir, infoDir, videosDir }
 }
 
 export async function writeUtf8File(parent: FileSystemDirectoryHandle, filename: string, text: string): Promise<void> {
