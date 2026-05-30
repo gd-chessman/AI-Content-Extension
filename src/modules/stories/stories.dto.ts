@@ -31,6 +31,9 @@ export class UpsertStorySourceDto {
 export class PatchStoryDto {
   /** Prompt/script video (một hoặc nhiều khối VIDEO). */
   videoPrompts?: string[];
+
+  /** URL video Grok (một hoặc nhiều) — extension ghi sau bước capture. */
+  videoStorageAddresses?: string[];
 }
 
 /** Query GET /stories/my — Nest trả plain object, parse qua `parse()`. */
@@ -57,3 +60,15 @@ export type ListMyStoriesQuery = {
   q: string;
   hasLongContent: boolean;
 };
+
+/** Query GET /stories/my/latest-grok-ready */
+export class LatestGrokReadyStoryQueryDto {
+  /** Tuổi tối đa (ms), mặc định 1 giờ. */
+  maxAgeMs?: string;
+
+  static parse(raw: LatestGrokReadyStoryQueryDto): { maxAgeMs: number } {
+    const parsed = Number.parseInt(raw.maxAgeMs || '3600000', 10);
+    const maxAgeMs = Number.isFinite(parsed) ? Math.min(Math.max(parsed, 60_000), 86_400_000) : 3_600_000;
+    return { maxAgeMs };
+  }
+}

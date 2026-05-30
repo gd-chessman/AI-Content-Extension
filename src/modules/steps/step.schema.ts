@@ -30,6 +30,10 @@ export enum StepActionType {
   /** Extension ChatGPT — tạo Story + videoPrompts (chạy nền, không mở ChatGPT). */
   CHATGPT_SAVE_STORY = 'chatgpt_save_story',
   FILL_GROK = 'fill_grok',
+  /** Grok — đọc Story (imageUrls + videoPrompts), điền Imagine và Enter. */
+  GROK_FILL_FROM_STORY = 'grok_fill_from_story',
+  /** Grok — chờ video render, lấy link, lưu videoStorageAddresses vào Story. */
+  GROK_CAPTURE_VIDEO_LINK = 'grok_capture_video_link',
   COPY_TO_CLIPBOARD = 'copy_to_clipboard',
   PUSH_GGSHEET = 'push_ggsheet',
   EXTRACT_GGSHEET_ROW = 'extract_ggsheet_row',

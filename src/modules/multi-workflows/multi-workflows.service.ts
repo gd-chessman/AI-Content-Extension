@@ -720,13 +720,17 @@ export class MultiWorkflowsService {
   }
 
   private async buildDefaultItems(): Promise<MultiWorkflowItem[]> {
-    const [facebookWorkflow, chatgptWorkflow] = await Promise.all([
+    const [facebookWorkflow, chatgptWorkflow, grokWorkflow] = await Promise.all([
       this.workflowModel
         .findOne({ status: WorkflowStatus.ACTIVE, platform: WorkflowPlatform.FACEBOOK })
         .sort({ createdAt: 1 })
         .lean(),
       this.workflowModel
         .findOne({ status: WorkflowStatus.ACTIVE, platform: WorkflowPlatform.CHATGPT })
+        .sort({ createdAt: 1 })
+        .lean(),
+      this.workflowModel
+        .findOne({ status: WorkflowStatus.ACTIVE, platform: WorkflowPlatform.GROK })
         .sort({ createdAt: 1 })
         .lean(),
     ]);
@@ -745,6 +749,14 @@ export class MultiWorkflowsService {
         order: items.length + 1,
         workflowId: chatgptWorkflow._id as Types.ObjectId,
         platform: WorkflowPlatform.CHATGPT,
+        enabled: true,
+      });
+    }
+    if (grokWorkflow) {
+      items.push({
+        order: items.length + 1,
+        workflowId: grokWorkflow._id as Types.ObjectId,
+        platform: WorkflowPlatform.GROK,
         enabled: true,
       });
     }

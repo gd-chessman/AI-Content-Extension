@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { google } from 'googleapis';
+import { normalizeStyledTextToPlain } from '../../shared/text/text-search-normalize';
 import { PushGgSheetDto, UpdateGgSheetDto } from './ggsheet.dto';
 import { GgSheetPushLog, GgSheetPushLogDocument } from './ggsheet-push-log.schema';
 import { GgSheet, GgSheetDocument } from './ggsheet.schema';
@@ -228,6 +229,118 @@ export class GgSheetService {
       todayPushes,
       thisMonthPushes,
     };
+  }
+
+  async getPushStatusForStory(
+    userId: string,
+    title = '',
+    shortContent = '',
+  ) {
+    const map = await this.getPushStatusMapForStories(userId, [
+      { storyId: '__single__', title, shortContent },
+    ]);
+    return map.get('__single__') || { pushed: false };
+  }
+
+  async getPushStatusMapForStories(
+    userId: string,
+    stories: Array<{ storyId: string; title?: string; shortContent?: string }>,
+  ) {
+    const result = new Map<string, { pushed: boolean; targetRow?: number }>();
+    for (const story of stories) {
+      result.set(story.storyId, { pushed: false });
+    }
+    if (!stories.length) return result;
+
+    const sheetRows = await this.loadTitleShortRowsFromUserSheet(userId);
+    if (!sheetRows.length) return result;
+
+    for (const story of stories) {
+      const storyTitle = (story.title || '').trim();
+      const storyShort = (story.shortContent || '').trim();
+      if (!storyTitle && !storyShort) continue;
+
+      for (const row of sheetRows) {
+        if (
+          this.titleMatches(storyTitle, row.title) &&
+          this.shortContentMatchesPrefix(storyShort, row.shortContent)
+        ) {
+          result.set(story.storyId, { pushed: true, targetRow: row.rowNumber });
+          break;
+        }
+      }
+    }
+
+    return result;
+  }
+
+  private static readonly SHORT_MATCH_LEN = 120;
+
+  private normalizeMatchText(value: string) {
+    return normalizeStyledTextToPlain(value).replace(/\r\n/g, '\n').replace(/\s+/g, ' ').trim();
+  }
+
+  private titleMatches(storyTitle: string, sheetTitle: string) {
+    const left = this.normalizeMatchText(storyTitle).toLowerCase();
+    const right = this.normalizeMatchText(sheetTitle).toLowerCase();
+    if (!left) return true;
+    if (!right) return false;
+    return left === right;
+  }
+
+  /** Khớp khi sheet chứa prefix đoạn ngắn của story (hoặc ngược lại nếu sheet ngắn hơn). */
+  private shortContentMatchesPrefix(storyShort: string, sheetShort: string) {
+    const storyNorm = this.normalizeMatchText(storyShort);
+    const sheetNorm = this.normalizeMatchText(sheetShort);
+    if (!storyNorm) return true;
+    if (!sheetNorm) return false;
+
+    const prefixLen = Math.min(GgSheetService.SHORT_MATCH_LEN, storyNorm.length);
+    const storyPrefix = storyNorm.slice(0, prefixLen);
+    if (sheetNorm.startsWith(storyPrefix)) return true;
+
+    const sheetPrefixLen = Math.min(GgSheetService.SHORT_MATCH_LEN, sheetNorm.length);
+    const sheetPrefix = sheetNorm.slice(0, sheetPrefixLen);
+    return storyNorm.startsWith(sheetPrefix);
+  }
+
+  private async loadTitleShortRowsFromUserSheet(userId: string) {
+    const setting = await this.getMySetting(userId);
+    const ggSheetPath = (setting?.ggSheetPath || '').trim();
+    const sheetId = this.extractSheetId(ggSheetPath);
+    const sheetGid = this.extractSheetGidFromUrl(ggSheetPath);
+    if (!sheetId) return [];
+
+    const columns = this.resolveColumns(setting);
+    if (!columns.title || !columns.shortContent) return [];
+
+    try {
+      const sheets = this.createSheetsClient();
+      const sheetTitle = await this.getSheetTitle(sheets, sheetId, sheetGid);
+      const response = await sheets.spreadsheets.values.batchGet({
+        spreadsheetId: sheetId,
+        ranges: [
+          `${sheetTitle}!${columns.title}:${columns.title}`,
+          `${sheetTitle}!${columns.shortContent}:${columns.shortContent}`,
+        ],
+      });
+
+      const titleRows = response.data.valueRanges?.[0]?.values || [];
+      const shortRows = response.data.valueRanges?.[1]?.values || [];
+      const maxLen = Math.max(titleRows.length, shortRows.length);
+      const rows: Array<{ rowNumber: number; title: string; shortContent: string }> = [];
+
+      for (let idx = 0; idx < maxLen; idx += 1) {
+        const title = String(titleRows[idx]?.[0] || '').trim();
+        const shortContent = String(shortRows[idx]?.[0] || '').trim();
+        if (!title && !shortContent) continue;
+        rows.push({ rowNumber: idx + 1, title, shortContent });
+      }
+
+      return rows;
+    } catch {
+      return [];
+    }
   }
 
   async extractRow(userId: string, row: number) {

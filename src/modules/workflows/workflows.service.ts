@@ -1,8 +1,9 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { StepToolsService } from '../step-tools/step-tools.service';
 import { Step, StepDocument } from '../steps/step.schema';
+import { GROK_WORKFLOW_SEED, GROK_WORKFLOW_SEED_NAME } from '../../shared/workflows/grok-workflow.seed';
 import { CreateWorkflowDto, UpdateWorkflowDto } from './workflows.dto';
 import {
   WorkflowCategory,
@@ -13,7 +14,7 @@ import {
 } from './workflow.schema';
 
 @Injectable()
-export class WorkflowsService {
+export class WorkflowsService implements OnModuleInit {
   constructor(
     @InjectModel(Workflow.name)
     private readonly workflowModel: Model<WorkflowDocument>,
@@ -21,6 +22,81 @@ export class WorkflowsService {
     private readonly stepModel: Model<StepDocument>,
     private readonly stepToolsService: StepToolsService,
   ) {}
+
+  async onModuleInit() {
+    try {
+      await this.seedGrokWorkflow();
+    } catch (error) {
+      console.warn('[WorkflowsService] Grok workflow seed skipped:', error);
+    }
+  }
+
+  /** Idempotent — tạo/cập nhật workflow Grok mặc định + 2 bước extension. */
+  async seedGrokWorkflow() {
+    let workflow = await this.workflowModel
+      .findOne({ platform: WorkflowPlatform.GROK, name: GROK_WORKFLOW_SEED_NAME })
+      .sort({ createdAt: 1 });
+
+    if (!workflow) {
+      workflow = await this.workflowModel.create({
+        name: GROK_WORKFLOW_SEED.name,
+        description: GROK_WORKFLOW_SEED.description,
+        version: GROK_WORKFLOW_SEED.version,
+        status: GROK_WORKFLOW_SEED.status,
+        platform: GROK_WORKFLOW_SEED.platform,
+        category: GROK_WORKFLOW_SEED.category,
+      });
+    } else {
+      await this.workflowModel.updateOne(
+        { _id: workflow._id },
+        {
+          $set: {
+            description: GROK_WORKFLOW_SEED.description,
+            status: WorkflowStatus.ACTIVE,
+            category: GROK_WORKFLOW_SEED.category,
+            version: GROK_WORKFLOW_SEED.version,
+          },
+        },
+      );
+    }
+
+    const workflowId = workflow._id as Types.ObjectId;
+    let stepsCreated = 0;
+    let stepsUpdated = 0;
+
+    for (const seedStep of GROK_WORKFLOW_SEED.steps) {
+      const existing = await this.stepModel.findOne({ workflowId, stepNo: seedStep.stepNo });
+      const payload = {
+        workflowId,
+        stepNo: seedStep.stepNo,
+        title: seedStep.title,
+        instruction: seedStep.instruction,
+        prompt: seedStep.prompt || '',
+        actionType: seedStep.actionType,
+        displayMode: seedStep.displayMode,
+        inputSchema: seedStep.inputSchema || {},
+        outputSchema: {},
+        isActive: true,
+      };
+
+      if (!existing) {
+        await this.stepModel.create(payload);
+        stepsCreated += 1;
+      } else {
+        await this.stepModel.updateOne({ _id: existing._id }, { $set: payload });
+        stepsUpdated += 1;
+      }
+    }
+
+    const steps = await this.stepModel.find({ workflowId }).sort({ stepNo: 1 }).lean();
+
+    return {
+      workflow: (await this.workflowModel.findById(workflowId).lean()) || workflow.toObject(),
+      steps,
+      stepsCreated,
+      stepsUpdated,
+    };
+  }
 
   async list() {
     return this.workflowModel.find().sort({ createdAt: -1 }).lean();

@@ -10,6 +10,7 @@ import { CreateStoryDto, ListMyStoriesQuery, PatchStoryDto, UpsertStorySourceDto
 import { StorySource, StorySourceDocument } from './story-source.schema';
 import { Story, StoryDocument } from './story.schema';
 import { StoryTopic, StoryTopicDocument } from './story-topic.schema';
+import { GgSheetService } from '../ggsheet/ggsheet.service';
 
 const MIN_SOURCE_CONTENT_LENGTH = 256;
 const MAX_STORY_SHORT_CONTENT = 80_000;
@@ -25,6 +26,7 @@ export class StoriesService {
     private readonly storySourceModel: Model<StorySourceDocument>,
     @InjectModel(StoryTopic.name)
     private readonly storyTopicModel: Model<StoryTopicDocument>,
+    private readonly ggSheetService: GgSheetService,
   ) {}
 
   /**
@@ -87,10 +89,23 @@ export class StoriesService {
         .lean(),
     ]);
 
+    const serialized = rows.map((row) =>
+      this.serializeStory(row as unknown as Record<string, unknown>),
+    );
+    const ggsheetMap = await this.ggSheetService.getPushStatusMapForStories(
+      userId,
+      serialized.map((item) => ({
+        storyId: item._id,
+        title: item.name,
+        shortContent: item.shortContent,
+      })),
+    );
+
     return {
-      items: rows.map((row) =>
-        this.serializeStory(row as unknown as Record<string, unknown>),
-      ),
+      items: serialized.map((item) => ({
+        ...item,
+        ggsheetPush: ggsheetMap.get(item._id) || { pushed: false },
+      })),
       pagination: {
         total,
         page,
@@ -205,6 +220,66 @@ export class StoriesService {
     return this.serializeStorySource(doc.toObject() as unknown as Record<string, unknown>);
   }
 
+  /** Story mới nhất (≤ maxAgeMs) có ít nhất 1 videoPrompt và 1 imageUrl — dùng cho Grok khi thiếu storyId. */
+  async getLatestGrokReadyForUser(userId: string, options: { maxAgeMs: number }) {
+    const userOid = new Types.ObjectId(userId);
+    const since = new Date(Date.now() - options.maxAgeMs);
+
+    const rows = await this.storyModel
+      .find({
+        userId: userOid,
+        createdAt: { $gte: since },
+        'videoPrompts.0': { $exists: true },
+        'imageUrls.0': { $exists: true },
+      })
+      .sort({ createdAt: -1 })
+      .limit(20)
+      .populate({
+        path: 'storySourceId',
+        select: 'sourceContent sourceReelUrl name usageCount',
+      })
+      .lean();
+
+    const row = rows.find((item) => {
+      const r = item as Record<string, unknown>;
+      const prompts = this.normalizeVideoPrompts((r.videoPrompts as string[]) || []);
+      const images = this.normalizeStoryImageUrls((r.imageUrls as string[]) || []);
+      return prompts.length > 0 && images.length > 0;
+    });
+
+    if (!row) {
+      throw new NotFoundException(
+        'No recent story with video prompts and images found (within the allowed time window).',
+      );
+    }
+
+    return this.serializeStory(row as unknown as Record<string, unknown>);
+  }
+
+  async getByIdForUser(userId: string, storyId: string) {
+    if (!Types.ObjectId.isValid(storyId)) {
+      throw new BadRequestException('Invalid story id.');
+    }
+    const userOid = new Types.ObjectId(userId);
+    const row = await this.storyModel
+      .findOne({ _id: new Types.ObjectId(storyId), userId: userOid })
+      .populate({
+        path: 'storySourceId',
+        select: 'sourceContent sourceReelUrl name usageCount',
+      })
+      .lean();
+    if (!row) {
+      throw new NotFoundException('Story not found.');
+    }
+    const serialized = this.serializeStory(row as unknown as Record<string, unknown>);
+    const ggsheetPush = await this.ggSheetService.getPushStatusForStory(
+      userId,
+      serialized.name,
+      serialized.shortContent,
+    );
+    return { ...serialized, ggsheetPush };
+  }
+
   async patchForUser(userId: string, storyId: string, dto: PatchStoryDto) {
     if (!Types.ObjectId.isValid(storyId)) {
       throw new BadRequestException('Invalid story id.');
@@ -214,6 +289,9 @@ export class StoriesService {
     const update: Record<string, unknown> = {};
     if (dto.videoPrompts !== undefined) {
       update.videoPrompts = this.normalizeVideoPrompts(dto.videoPrompts);
+    }
+    if (dto.videoStorageAddresses !== undefined) {
+      update.videoStorageAddresses = this.normalizeVideoStorageAddresses(dto.videoStorageAddresses);
     }
     if (Object.keys(update).length === 0) {
       throw new BadRequestException('No fields to update.');
@@ -496,6 +574,30 @@ export class StoriesService {
     return value
       .slice(0, maxItems)
       .map((s) => String(s ?? '').trim().slice(0, 50_000));
+  }
+
+  private normalizeVideoStorageAddresses(value: unknown): string[] {
+    if (!Array.isArray(value)) {
+      throw new BadRequestException('videoStorageAddresses must be an array.');
+    }
+    const maxItems = 32;
+    return value.slice(0, maxItems).map((raw) => {
+      const trimmed = String(raw ?? '').trim();
+      if (!trimmed) return '';
+      if (trimmed.startsWith('local:')) {
+        const path = trimmed.slice('local:'.length).trim();
+        if (!path || path.length > 500) return '';
+        if (/[\x00-\x1f<>:"|?*]/.test(path)) return '';
+        return `local:${path}`;
+      }
+      try {
+        const parsed = new URL(trimmed);
+        if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return '';
+        return parsed.toString();
+      } catch {
+        return '';
+      }
+    });
   }
 
   private normalizeHttpUrl(raw: string) {

@@ -7,6 +7,7 @@ import { RolesGuard } from '../auth/roles.guard';
 import { UserRole } from '../users/users.schema';
 import {
   CreateStoryDto,
+  LatestGrokReadyStoryQueryDto,
   ListMyStoriesQueryDto,
   PatchStoryDto,
   UpsertStorySourceDto,
@@ -18,6 +19,21 @@ import { StoriesService } from './stories.service';
 @Roles(UserRole.USER, UserRole.USER_VIP, UserRole.ADMIN)
 export class StoriesController {
   constructor(private readonly storiesService: StoriesService) {}
+
+  @Get('my/latest-grok-ready')
+  getLatestGrokReady(@Req() req: Request, @Query() query: LatestGrokReadyStoryQueryDto) {
+    const user = req.user as JwtPayload;
+    return this.storiesService.getLatestGrokReadyForUser(
+      user.sub,
+      LatestGrokReadyStoryQueryDto.parse(query),
+    );
+  }
+
+  @Get('my/:id')
+  getMyById(@Req() req: Request, @Param('id') id: string) {
+    const user = req.user as JwtPayload;
+    return this.storiesService.getByIdForUser(user.sub, id);
+  }
 
   @Get('my')
   listMy(@Req() req: Request, @Query() query: ListMyStoriesQueryDto) {
