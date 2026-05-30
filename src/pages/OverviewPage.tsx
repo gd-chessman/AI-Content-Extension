@@ -56,31 +56,31 @@ export default function OverviewPage() {
       <div>
         <h1 className="text-xl font-semibold text-white">Tổng quan</h1>
         <p className="mt-1 text-sm text-slate-400">
-          Trạng thái multi workflow realtime — extension trên Chrome sẽ thực thi job.
+          Trạng thái quy trình đa bước theo thời gian thực — extension trên Chrome sẽ thực thi các tác vụ.
         </p>
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard
-          label="Multi workflow đang chạy"
+          label="Quy trình đang chạy"
           value={activeRuns}
           icon={<FiActivity className="h-5 w-5 text-sky-400" />}
           tone="bg-sky-500/10"
         />
         <StatCard
-          label="Job đang xử lý"
+          label="Tác vụ đang xử lý"
           value={processingJobs}
           icon={<FiClock className="h-5 w-5 text-amber-400" />}
           tone="bg-amber-500/10"
         />
         <StatCard
-          label="Job chờ extension"
+          label="Tác vụ chờ extension"
           value={pendingJobs}
           icon={<FiCheckCircle className="h-5 w-5 text-emerald-400" />}
           tone="bg-emerald-500/10"
         />
         <StatCard
-          label="Run lỗi (gần đây)"
+          label="Lần chạy lỗi (gần đây)"
           value={failedRecent}
           icon={<FiAlertCircle className="h-5 w-5 text-rose-400" />}
           tone="bg-rose-500/10"
@@ -88,14 +88,14 @@ export default function OverviewPage() {
       </div>
 
       <section className="surface-card rounded-2xl p-4">
-        <h2 className="text-sm font-semibold text-slate-200">Multi workflow runs gần đây</h2>
+        <h2 className="text-sm font-semibold text-slate-200">Lần chạy gần đây</h2>
         {runsQuery.isLoading ? (
           <p className="mt-4 text-sm text-slate-400">Đang tải…</p>
         ) : runs.length === 0 ? (
           <div className="mt-4">
             <EmptyState
-              title="Chưa có multi workflow run"
-              description="Vào tab Multi workflow để khởi chạy, hoặc lưu reel từ extension Facebook."
+              title="Chưa có lần chạy nào"
+              description="Vào tab Quy trình đa bước để khởi chạy, hoặc lưu reel từ extension Facebook."
             />
           </div>
         ) : (
@@ -104,7 +104,7 @@ export default function OverviewPage() {
               <thead>
                 <tr className="border-b border-white/10 text-xs text-slate-400">
                   <th className="pb-2 pr-4 font-medium">Thời gian</th>
-                  <th className="pb-2 pr-4 font-medium">Story source</th>
+                  <th className="pb-2 pr-4 font-medium">Nguồn reel</th>
                   <th className="pb-2 pr-4 font-medium">Trạng thái</th>
                   <th className="pb-2 font-medium">Bước</th>
                 </tr>
@@ -139,11 +139,11 @@ export default function OverviewPage() {
       </section>
 
       <section className="surface-card rounded-2xl p-4">
-        <h2 className="text-sm font-semibold text-slate-200">Jobs đang hoạt động</h2>
+        <h2 className="text-sm font-semibold text-slate-200">Tác vụ đang hoạt động</h2>
         {jobsQuery.isLoading ? (
           <p className="mt-4 text-sm text-slate-400">Đang tải…</p>
         ) : jobs.filter((j) => j.status === 'processing' || j.status === 'pending').length === 0 ? (
-          <p className="mt-4 text-sm text-slate-400">Không có job pending/processing.</p>
+          <p className="mt-4 text-sm text-slate-400">Không có tác vụ đang chờ hoặc đang xử lý.</p>
         ) : (
           <div className="mt-4 space-y-2">
             {jobs
@@ -156,7 +156,7 @@ export default function OverviewPage() {
                 >
                   <div className="flex items-center gap-2">
                     <PlatformBadge platform={job.platform} />
-                    <span className="text-xs text-slate-400">order {job.order}</span>
+                    <span className="text-xs text-slate-400">bước {job.order}</span>
                   </div>
                   <div className="flex items-center gap-2">
                     <StatusBadge status={job.status} />

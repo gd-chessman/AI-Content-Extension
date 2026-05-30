@@ -16,7 +16,7 @@ const PLATFORM_LABELS: Record<WorkflowPlatform, string> = {
   grok: 'Grok',
   ggsheet: 'GG Sheet',
   webblog: 'WebBlog',
-  multi: 'Multi',
+  multi: 'Đa bước',
 }
 
 export default function PlatformBadge({ platform }: { platform: WorkflowPlatform }) {

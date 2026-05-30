@@ -49,7 +49,7 @@ export default function LoginPage() {
             </div>
             <h1 className="mt-3 text-2xl font-semibold text-white">Web Console</h1>
             <p className="mt-1 text-xs text-neutral-300">
-              Quan sát và điều khiển multi workflow. Extension thực thi trên Chrome.
+              Quan sát và điều khiển quy trình đa bước. Extension thực thi trên Chrome.
             </p>
           </div>
 

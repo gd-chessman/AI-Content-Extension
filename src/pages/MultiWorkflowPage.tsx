@@ -117,7 +117,7 @@ function ConfigFormModal({
       return
     }
     if (!formItems.length) {
-      setError('Thêm ít nhất một workflow.')
+      setError('Thêm ít nhất một quy trình con.')
       return
     }
     setError('')
@@ -132,11 +132,11 @@ function ConfigFormModal({
     })
   }
 
-  const title = mode === 'create' ? 'Tạo multi workflow mới' : 'Sửa multi workflow'
+  const title = mode === 'create' ? 'Tạo quy trình đa bước mới' : 'Sửa quy trình đa bước'
   const subtitle =
     mode === 'create'
-      ? 'Đặt tên và chọn các workflow theo thứ tự chạy.'
-      : 'Cập nhật tên và danh sách workflow.'
+      ? 'Đặt tên và chọn các quy trình con theo thứ tự chạy.'
+      : 'Cập nhật tên và danh sách quy trình con.'
   const submitLabel = mode === 'create' ? 'Tạo cấu hình' : 'Lưu cấu hình'
   const SubmitIcon = mode === 'create' ? FiPlus : FiSave
 
@@ -187,10 +187,10 @@ function ConfigFormModal({
           </div>
 
           <div>
-            <p className="text-xs font-medium text-slate-400">Workflow ({formItems.length})</p>
+            <p className="text-xs font-medium text-slate-400">Quy trình con ({formItems.length})</p>
             {formItems.length === 0 ? (
               <p className="mt-2 rounded-xl border border-dashed border-white/10 px-3 py-4 text-center text-xs text-slate-500">
-                Chưa có workflow — thêm từ danh sách bên dưới.
+                Chưa có quy trình con — thêm từ danh sách bên dưới.
               </p>
             ) : (
               <div className="mt-2 space-y-2">
@@ -243,7 +243,7 @@ function ConfigFormModal({
 
           {availableToAdd.length > 0 ? (
             <div>
-              <p className="text-xs font-medium text-slate-400">Thêm workflow</p>
+              <p className="text-xs font-medium text-slate-400">Thêm quy trình con</p>
               <div className="mt-2 flex flex-wrap gap-2">
                 {availableToAdd.map((wf) => (
                   <button
@@ -260,9 +260,9 @@ function ConfigFormModal({
               </div>
             </div>
           ) : formItems.length > 0 ? (
-            <p className="text-xs text-slate-500">Đã thêm hết workflow khả dụng.</p>
+            <p className="text-xs text-slate-500">Đã thêm hết quy trình con khả dụng.</p>
           ) : workflows.length === 0 ? (
-            <p className="text-xs text-amber-300">Chưa có workflow active — tạo workflow trước.</p>
+            <p className="text-xs text-amber-300">Chưa có quy trình con đang bật — tạo quy trình trước.</p>
           ) : null}
 
           {error ? (
@@ -341,7 +341,7 @@ export default function MultiWorkflowPage() {
       createMultiWorkflow(payload),
     onSuccess: () => {
       setModal(null)
-      setMessage('Đã tạo multi workflow.')
+      setMessage('Đã tạo quy trình đa bước.')
       invalidateMultiWorkflows()
     },
     onError: () => setMessage('Tạo thất bại.'),
@@ -371,7 +371,7 @@ export default function MultiWorkflowPage() {
     },
     onError: (error: unknown) => {
       if (isAxiosError(error) && error.response?.status === 400) {
-        setMessage('Không thể xóa multi workflow duy nhất.')
+        setMessage('Không thể xóa quy trình đa bước duy nhất.')
         return
       }
       setMessage('Xóa thất bại.')
@@ -399,25 +399,25 @@ export default function MultiWorkflowPage() {
     },
     onError: (error: unknown) => {
       if (isAxiosError(error) && error.response?.status === 409) {
-        setMessage('Multi workflow này đang chạy — đợi xong hoặc hủy run hiện tại.')
+        setMessage('Quy trình đa bước này đang chạy — đợi xong hoặc hủy lần chạy hiện tại.')
         return
       }
       if (isAxiosError(error) && error.response?.status === 400) {
-        setMessage('Bộ này chưa có workflow nào được bật.')
+        setMessage('Bộ này chưa có quy trình con nào được bật.')
         return
       }
-      setMessage('Không thể khởi chạy multi workflow.')
+      setMessage('Không thể khởi chạy quy trình đa bước.')
     },
   })
 
   const cancelRunMutation = useMutation({
     mutationFn: (runId: string) => cancelMultiWorkflowRun(runId),
     onSuccess: () => {
-      setMessage('Đã hủy multi workflow run.')
+      setMessage('Đã hủy lần chạy quy trình.')
       void queryClient.invalidateQueries({ queryKey: ['multi-workflow-runs'] })
       void queryClient.invalidateQueries({ queryKey: ['multi-workflow-runs-full'] })
     },
-    onError: () => setMessage('Không thể hủy run — có thể đã kết thúc.'),
+    onError: () => setMessage('Không thể hủy — lần chạy có thể đã kết thúc.'),
   })
 
   const isFormPending = createMutation.isPending || updateMutation.isPending
@@ -430,7 +430,7 @@ export default function MultiWorkflowPage() {
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-4">
         <div>
-          <h1 className="text-xl font-semibold text-white">Multi workflow</h1>
+          <h1 className="text-xl font-semibold text-white">Quy trình đa bước</h1>
           <p className="mt-0.5 text-sm text-slate-400">{multiWorkflows.length} bộ</p>
         </div>
         <button
@@ -448,7 +448,7 @@ export default function MultiWorkflowPage() {
       ) : null}
 
       {multiWorkflows.length === 0 ? (
-        <EmptyState title="Chưa có multi workflow" description="Bấm Tạo mới để thêm bộ multi workflow." />
+        <EmptyState title="Chưa có quy trình đa bước" description="Bấm Tạo mới để thêm bộ quy trình." />
       ) : (
         <ul className="divide-y divide-white/10 rounded-xl border border-white/10 bg-[#121212]">
           {multiWorkflows.map((workflow) => {
@@ -494,7 +494,7 @@ export default function MultiWorkflowPage() {
                         cancelRunMutation.mutate(activeRun._id)
                       }}
                       className="inline-flex items-center gap-1 rounded-lg border border-rose-500/30 bg-rose-500/10 px-2.5 py-1.5 text-xs text-rose-300 hover:bg-rose-500/20 disabled:opacity-40"
-                      title="Hủy run đang chạy"
+                      title="Hủy lần chạy đang chạy"
                     >
                       {cancelRunMutation.isPending && cancelRunMutation.variables === activeRun._id
                         ? 'Đang hủy…'
@@ -517,7 +517,7 @@ export default function MultiWorkflowPage() {
                       <FiPlay className="h-3.5 w-3.5" />
                       {runMutation.isPending && runMutation.variables === workflow._id
                         ? 'Đang gửi…'
-                        : 'Run'}
+                        : 'Chạy'}
                     </button>
                   )}
                   <button

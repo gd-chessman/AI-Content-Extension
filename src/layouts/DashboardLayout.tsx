@@ -1,12 +1,14 @@
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
-import { FiActivity, FiLayers, FiLogOut, FiSettings } from 'react-icons/fi'
+import { FiActivity, FiBookOpen, FiGitBranch, FiLayers, FiLogOut, FiSettings } from 'react-icons/fi'
 import { logoutSession } from '@/services/AuthService'
 import { canUseMultiWorkflow, useAuth } from '@/hooks/useAuth'
 
 const NAV = [
   { to: '/overview', label: 'Tổng quan', icon: FiActivity, iconClass: 'text-sky-400' },
-  { to: '/runs', label: 'Multi workflow runs', icon: FiLayers, iconClass: 'text-violet-400' },
-  { to: '/multi-workflow', label: 'Multi workflow', icon: FiSettings, iconClass: 'text-amber-400' },
+  { to: '/stories', label: 'Câu chuyện', icon: FiBookOpen, iconClass: 'text-emerald-400' },
+  { to: '/workflows', label: 'Quy trình', icon: FiGitBranch, iconClass: 'text-sky-400' },
+  { to: '/runs', label: 'Lịch sử chạy', icon: FiLayers, iconClass: 'text-violet-400' },
+  { to: '/multi-workflow', label: 'Quy trình đa bước', icon: FiSettings, iconClass: 'text-amber-400' },
 ] as const
 
 function navLinkClass(isActive: boolean) {
@@ -65,7 +67,7 @@ export default function DashboardLayout() {
       <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-[var(--app-bg)]">
         {!multiWorkflowAllowed ? (
           <div className="border-b border-amber-500/30 bg-amber-500/10 px-6 py-3 text-xs text-amber-100">
-            Tài khoản cần quyền VIP hoặc Admin để dùng multi workflow API. Một số tính năng có thể bị giới hạn.
+            Tài khoản cần quyền VIP hoặc Admin để dùng quy trình đa bước. Một số tính năng có thể bị giới hạn.
           </div>
         ) : null}
         <main className="flex-1 overflow-y-auto p-6 lg:p-8">

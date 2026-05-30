@@ -11,6 +11,17 @@ import {
   listMultiWorkflowRuns,
 } from '@/services/MultiWorkflowService'
 
+const TRIGGER_LABELS: Record<string, string> = {
+  manual: 'Thủ công',
+  web_console: 'Trang web',
+  extension: 'Extension',
+}
+
+function formatTrigger(raw: unknown) {
+  const key = String(raw || 'manual').trim().toLowerCase()
+  return TRIGGER_LABELS[key] || key
+}
+
 export default function RunsPage() {
   const queryClient = useQueryClient()
   const [expandedId, setExpandedId] = useState<string | null>(null)
@@ -56,14 +67,14 @@ export default function RunsPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-xl font-semibold text-white">Multi workflow runs</h1>
-        <p className="mt-1 text-sm text-slate-400">Lịch sử và chi tiết từng lần chạy.</p>
+        <h1 className="text-xl font-semibold text-white">Lịch sử chạy</h1>
+        <p className="mt-1 text-sm text-slate-400">Lịch sử và chi tiết từng lần chạy quy trình đa bước.</p>
       </div>
 
       {runsQuery.isLoading ? (
         <p className="text-sm text-slate-400">Đang tải…</p>
       ) : runs.length === 0 ? (
-        <EmptyState title="Chưa có run nào" description="Khởi chạy multi workflow từ tab Multi workflow." />
+        <EmptyState title="Chưa có lần chạy nào" description="Khởi chạy quy trình đa bước từ tab Quy trình đa bước." />
       ) : (
         <div className="space-y-2">
           {runs.map((run) => {
@@ -91,11 +102,11 @@ export default function RunsPage() {
                       <p className="mt-1 text-xs text-slate-500">
                         {run.createdAt ? new Date(run.createdAt).toLocaleString('vi-VN') : '—'}
                         {' · '}
-                        trigger: {String(run.payload?.trigger || 'manual')}
+                        kích hoạt: {formatTrigger(run.payload?.trigger)}
                         {run.multiWorkflowId ? (
                           <>
                             {' · '}
-                            multi workflow:{' '}
+                            quy trình:{' '}
                             {multiWorkflowNameById.get(run.multiWorkflowId) ||
                               `…${run.multiWorkflowId.slice(-8)}`}
                           </>
@@ -121,17 +132,17 @@ export default function RunsPage() {
                   <div className="border-t border-white/8 px-4 py-4">
                     <dl className="grid gap-2 text-xs sm:grid-cols-2">
                       <div>
-                        <dt className="text-slate-500">Story source</dt>
+                        <dt className="text-slate-500">Nguồn reel</dt>
                         <dd className="font-mono text-slate-300">{detail.storySourceId}</dd>
                       </div>
                       <div>
-                        <dt className="text-slate-500">Story (sau ChatGPT)</dt>
+                        <dt className="text-slate-500">Câu chuyện (sau ChatGPT)</dt>
                         <dd className="font-mono text-slate-300">{detail.storyId || '—'}</dd>
                       </div>
                     </dl>
 
                     <h3 className="mb-2 mt-4 text-xs font-semibold uppercase tracking-wide text-slate-400">
-                      Các bước workflow
+                      Các bước quy trình
                     </h3>
                     <div className="space-y-2">
                       {detail.items.map((item) => (
