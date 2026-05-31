@@ -33,6 +33,7 @@ import {
 import {
   checkStorySourceForReel,
   getMyStorySources,
+  skipStorySourceFromReel,
   syncStorySourceFromReel,
 } from '@/services/StoryService'
 import { normalizeStepDisplayMode } from '@/utils/stepDisplayMode'
@@ -377,6 +378,16 @@ export default function FacebookScreen() {
     for (const row of myStorySources) {
       const u = (row.sourceReelUrl || '').trim()
       if (u) next.add(canonicalSourceReelUrl(u))
+    }
+    return next
+  }, [myStorySources])
+
+  const skippedReelReasonByUrl = useMemo(() => {
+    const next = new Map<string, string>()
+    for (const row of myStorySources) {
+      const reason = (row.skipReason || '').trim()
+      const u = (row.sourceReelUrl || '').trim()
+      if (reason && u) next.set(canonicalSourceReelUrl(u), reason)
     }
     return next
   }, [myStorySources])
@@ -1646,6 +1657,40 @@ export default function FacebookScreen() {
 
   const sleep = (ms: number) => new Promise<void>((r) => window.setTimeout(r, ms))
 
+  const fetchUnsavedScannedReels = async () => {
+    const sources = await queryClient.fetchQuery({
+      queryKey: ['stories', 'sources', 'my'],
+      queryFn: getMyStorySources,
+    })
+    const handledSet = new Set<string>()
+    for (const row of sources) {
+      const u = (row.sourceReelUrl || '').trim()
+      if (u) handledSet.add(canonicalSourceReelUrl(u))
+    }
+
+    let rows = scanResultRef.current
+    for (let i = 0; i < 40 && rows.length === 0; i += 1) {
+      await sleep(250)
+      rows = scanResultRef.current
+    }
+
+    return rows.filter((r) => !handledSet.has(canonicalSourceReelUrl(r.url)))
+  }
+
+  const waitForReelCaption = async (minLen: number, timeoutMs: number) => {
+    const t0 = Date.now()
+    while (Date.now() - t0 < timeoutMs) {
+      if (fbWorkflowStopRef.current) throw new Error('Đã dừng workflow')
+      const sr = selectedReelRef.current
+      if (sr) refreshSelectedReelFromFacebook(sr)
+      await sleep(1600)
+      if ((contentTextRef.current || '').trim().length >= minLen) {
+        return contentTextRef.current.trim().length
+      }
+    }
+    return null
+  }
+
   const waitScanIdle = (timeoutMs = 180_000) =>
     new Promise<void>((resolve, reject) => {
       const started = Date.now()
@@ -1837,18 +1882,72 @@ export default function FacebookScreen() {
       }
       case 'facebook_wait_content': {
         const minLen = schema.minLength != null ? Number(schema.minLength) : 30
-        const timeoutMs = schema.timeoutMs != null ? Number(schema.timeoutMs) : 90_000
-        const t0 = Date.now()
-        while (Date.now() - t0 < timeoutMs) {
+        const timeoutMs = 15_000
+        const maxSkipAttempts = Math.max(scanResultRef.current.length, 1)
+        let skippedCount = 0
+        const skippedUrls: string[] = []
+
+        while (skippedCount <= maxSkipAttempts) {
           if (fbWorkflowStopRef.current) throw new Error('Đã dừng workflow')
-          const sr = selectedReelRef.current
-          if (sr) refreshSelectedReelFromFacebook(sr)
-          await sleep(1600)
-          if ((contentTextRef.current || '').trim().length >= minLen) {
-            return { contentLength: contentTextRef.current.trim().length }
+
+          let current = selectedReelRef.current
+          if (!current?.url) {
+            const unsaved = await fetchUnsavedScannedReels()
+            if (!unsaved.length) {
+              throw new Error('Không còn reel chưa xử lý để chờ caption.')
+            }
+            handleSelectReel(unsaved[0])
+            await sleep(900)
+            current = selectedReelRef.current
           }
+
+          const contentLength = await waitForReelCaption(minLen, timeoutMs)
+          if (contentLength != null && current?.url) {
+            return {
+              contentLength,
+              reelUrl: current.url,
+              skippedCount,
+              skippedUrls,
+            }
+          }
+
+          if (!current?.url) {
+            throw new Error('Không có reel đang chọn để bỏ qua.')
+          }
+
+          await skipStorySourceFromReel({
+            sourceReelUrl: current.url.trim(),
+            name: (current.title || '').trim().slice(0, 200),
+            reason: 'caption_timeout',
+          })
+          skippedUrls.push(current.url.trim())
+          skippedCount += 1
+
+          void queryClient.invalidateQueries({ queryKey: ['stories', 'sources', 'my'] })
+          void queryClient.invalidateQueries({
+            queryKey: ['stories', 'sources', 'check-reel', canonicalSourceReelUrl(current.url)],
+          })
+
+          setFbWorkflowStatus(
+            `Caption quá ${Math.round(timeoutMs / 1000)}s — đã bỏ qua ${skippedCount} reel, thử reel tiếp…`,
+          )
+
+          const unsaved = await fetchUnsavedScannedReels()
+          if (!unsaved.length) {
+            throw new Error(
+              skippedCount > 0
+                ? `Đã bỏ qua ${skippedCount} reel (caption timeout) — không còn reel chưa xử lý.`
+                : 'Timeout chờ nội dung caption đủ dài',
+            )
+          }
+
+          handleSelectReel(unsaved[0])
+          await sleep(900)
         }
-        throw new Error('Timeout chờ nội dung caption đủ dài')
+
+        throw new Error(
+          `Đã bỏ qua ${skippedCount} reel caption timeout — vượt giới hạn thử (${maxSkipAttempts}).`,
+        )
       }
       case 'facebook_save_story': {
         const sr = selectedReelRef.current
@@ -2062,10 +2161,14 @@ export default function FacebookScreen() {
       workflowFanpageUrlRef.current = null
       workflowOpenedFanpageIndexRef.current = null
       if (workflowRunId && mwOutcome && !workflowCancelledRemotelyRef.current) {
-        void finalizeMultiWorkflowJobAfterWorkflowRun(workflowRunId, mwOutcome, {
-          storySourceId: mwStorySourceId || undefined,
-          errorMessage: mwErrorMessage,
-        }).catch(() => undefined)
+        try {
+          await finalizeMultiWorkflowJobAfterWorkflowRun(workflowRunId, mwOutcome, {
+            storySourceId: mwStorySourceId || undefined,
+            errorMessage: mwErrorMessage,
+          })
+        } catch {
+          /* BE có thể đã cập nhật job — bỏ qua lỗi mạng lặp */
+        }
       }
       workflowCancelledRemotelyRef.current = false
       runningFbWorkflowRunIdRef.current = ''
@@ -2557,7 +2660,9 @@ export default function FacebookScreen() {
             <h2 className="text-sm font-semibold text-white">Danh sách reels</h2>
               <div className="mt-2 space-y-2">
               {scannedReels.map((reel) => {
-                const reelSavedInList = savedCanonicalReelUrls.has(canonicalSourceReelUrl(reel.url))
+                const canonical = canonicalSourceReelUrl(reel.url)
+                const reelSavedInList = savedCanonicalReelUrls.has(canonical)
+                const skipReason = skippedReelReasonByUrl.get(canonical)
                 return (
                 <article key={reel.id} className="rounded-2xl border border-blue-300/20 bg-blue-400/10 p-3">
                   <div className="flex gap-2">
@@ -2578,8 +2683,14 @@ export default function FacebookScreen() {
                         {reelSavedInList ? (
                           <span
                             className="relative inline-flex shrink-0 text-amber-200/90"
-                            title="Đã có story nguồn (caption đã đồng bộ)"
-                            aria-label="Đã có story nguồn trên máy chủ"
+                            title={
+                              skipReason
+                                ? `Đã bỏ qua (${skipReason})`
+                                : 'Đã có story nguồn (caption đã đồng bộ)'
+                            }
+                            aria-label={
+                              skipReason ? 'Reel đã bỏ qua' : 'Đã có story nguồn trên máy chủ'
+                            }
                           >
                             <FiSave className="h-4 w-4" aria-hidden />
                             <span

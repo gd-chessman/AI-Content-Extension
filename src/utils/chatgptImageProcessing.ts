@@ -241,6 +241,7 @@ export async function chatgptWaitGeneratedImageDonePageScript(
   const pollMs = 700
   const stableMs = 1800
   const settleAfterDetectMs = 3200
+  const textOnlyFailMs = 10_000
   const startedAt = Date.now()
   let stableSince = Date.now()
   let imageDetected = false
@@ -305,7 +306,8 @@ export async function chatgptWaitGeneratedImageDonePageScript(
     }
   }
 
-  let prevSig = getAssistantSignature()
+  const baselineSig = getAssistantSignature()
+  let prevSig = baselineSig
 
   while (Date.now() - startedAt < maxWaitMs) {
     const currentCount = countAssistantImages()
@@ -336,6 +338,14 @@ export async function chatgptWaitGeneratedImageDonePageScript(
       !generatingNow
     ) {
       return { ok: true, reason: 'image_done_settle', imageCount: currentCount }
+    }
+
+    const elapsed = Date.now() - startedAt
+    const noNewImages = currentCount <= baseCount
+    const hasNewTextResponse =
+      currentSig.count > baselineSig.count || currentSig.textLen > baselineSig.textLen
+    if (elapsed >= textOnlyFailMs && noNewImages && hasNewTextResponse && !generatingNow) {
+      return { ok: false, reason: 'text_only_response', imageCount: currentCount }
     }
 
     lastCount = currentCount

@@ -77,6 +77,7 @@ export type StorySourceListItem = {
   sourceReelUrl: string
   name: string
   usageCount: number
+  skipReason?: string
   createdAt?: string
   updatedAt?: string
 }
@@ -157,7 +158,18 @@ export const syncStorySourceFromReel = async (payload: {
     sourceContent: string
     sourceReelUrl: string
     usageCount?: number
+    skipReason?: string
     createdAt?: string
     updatedAt?: string
   }
+}
+
+/** Đánh dấu reel bỏ qua vĩnh viễn (caption timeout) — không chọn lại trong workflow. */
+export const skipStorySourceFromReel = async (payload: {
+  sourceReelUrl: string
+  name?: string
+  reason?: string
+}) => {
+  const response = await axiosClient.post('/stories/sources/skip', payload)
+  return response.data as StorySourceListItem
 }

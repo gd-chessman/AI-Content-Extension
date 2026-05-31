@@ -1467,12 +1467,15 @@ export default function ChatgptScreen() {
     const pollMs = 700
     const stableMs = 1800
     const settleAfterDetectMs = 3200
+    const textOnlyFailMs = 10_000
     const startedAt = Date.now()
     let stableSince = Date.now()
     let imageDetected = false
     let firstDetectAt = 0
     let lastCount = baselineCount
     let prevSig = await readSnapshot()
+    const baselineAssistantCount = prevSig?.assistantCount ?? 0
+    const baselineAssistantTextLen = prevSig?.assistantTextLen ?? 0
 
     while (Date.now() - startedAt < timeoutMs) {
       throwIfWorkflowStopped()
@@ -1512,6 +1515,16 @@ export default function ChatgptScreen() {
       ) {
         setStatus(`${stepLabel}: Ảnh đã tạo xong, tiếp tục bước kế tiếp.`)
         return true
+      }
+
+      const elapsed = Date.now() - startedAt
+      const noNewImages = currentCount <= baselineCount
+      const hasNewTextResponse =
+        snap.assistantCount > baselineAssistantCount ||
+        snap.assistantTextLen > baselineAssistantTextLen
+      if (elapsed >= textOnlyFailMs && noNewImages && hasNewTextResponse && !generatingNow) {
+        setStatus(`${stepLabel}: ChatGPT trả lời text thay vì ảnh — tạo ảnh lỗi.`)
+        return false
       }
 
       lastCount = currentCount
@@ -2110,10 +2123,14 @@ export default function ChatgptScreen() {
       }
     } finally {
       if (workflowRunId && mwOutcome && !workflowCancelledRemotelyRef.current) {
-        void finalizeMultiWorkflowJobAfterWorkflowRun(workflowRunId, mwOutcome, {
-          storyId: chatgptPipelineStoryIdRef.current.trim() || undefined,
-          errorMessage: mwErrorMessage,
-        }).catch(() => undefined)
+        try {
+          await finalizeMultiWorkflowJobAfterWorkflowRun(workflowRunId, mwOutcome, {
+            storyId: chatgptPipelineStoryIdRef.current.trim() || undefined,
+            errorMessage: mwErrorMessage,
+          })
+        } catch {
+          /* ignore */
+        }
       }
       workflowCancelledRemotelyRef.current = false
       workflowStopRef.current = false

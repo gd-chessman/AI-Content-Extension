@@ -10,7 +10,10 @@ export const completeMultiWorkflowJob = async (
 
 export const failMultiWorkflowJob = async (
   jobId: string,
-  payload?: { error?: { code?: string; message?: string; details?: Record<string, unknown> } },
+  payload?: {
+    terminal?: boolean
+    error?: { code?: string; message?: string; details?: Record<string, unknown> }
+  },
 ) => {
   const response = await axiosClient.patch(`/multi-workflows/jobs/${jobId}/fail`, payload || {})
   return response.data

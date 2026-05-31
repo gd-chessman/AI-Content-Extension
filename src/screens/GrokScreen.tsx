@@ -111,6 +111,34 @@ export default function GrokScreen() {
   const grokPipelineStoryIdRef = useRef('')
   const grokCapturedVideoUrlsRef = useRef<string[]>([])
   const grokVideoBaselineRef = useRef<string[]>([])
+  const pendingGrokRunsRef = useRef<Array<{ runId: string; workflowId: string }>>([])
+
+  const enqueueGrokWorkflowRun = (run: { _id: string; workflowId: string }) => {
+    const runId = (run._id || '').trim()
+    const workflowId = (run.workflowId || '').trim()
+    if (!runId || !workflowId) return
+    if (runningGrokWorkflowRunIdRef.current === runId) return
+
+    if (isGrokWorkflowRunningRef.current) {
+      const exists = pendingGrokRunsRef.current.some((item) => item.runId === runId)
+      if (!exists) {
+        pendingGrokRunsRef.current.push({ runId, workflowId })
+        setGrokWorkflowStatus(`Đã xếp hàng Grok (${pendingGrokRunsRef.current.length} chờ)…`)
+      }
+      return
+    }
+
+    setGrokWorkflowStatus(`SSE: chạy workflow Grok ${runId}`)
+    void runGrokWorkflow({ runId, workflowId, source: 'sse' })
+  }
+
+  const drainGrokWorkflowQueue = () => {
+    if (isGrokWorkflowRunningRef.current || grokWorkflowStopRef.current) return
+    const next = pendingGrokRunsRef.current.shift()
+    if (!next) return
+    setGrokWorkflowStatus(`SSE: chạy workflow Grok ${next.runId} (hàng đợi)…`)
+    void runGrokWorkflow({ runId: next.runId, workflowId: next.workflowId, source: 'sse' })
+  }
 
   const statusLower = status.toLowerCase()
   const statusTone = statusLower.includes('không thể') || statusLower.includes('không tìm thấy') || statusLower.includes('thất bại') || statusLower.includes('lỗi')
@@ -481,13 +509,17 @@ export default function GrokScreen() {
       }
     } finally {
       if (workflowRunId && mwOutcome && !workflowCancelledRemotelyRef.current) {
-        void finalizeMultiWorkflowJobAfterWorkflowRun(workflowRunId, mwOutcome, {
-          storyId: grokPipelineStoryIdRef.current.trim() || undefined,
-          errorMessage: mwErrorMessage,
-          result: {
-            videoStorageAddresses: grokCapturedVideoUrlsRef.current,
-          },
-        }).catch(() => undefined)
+        try {
+          await finalizeMultiWorkflowJobAfterWorkflowRun(workflowRunId, mwOutcome, {
+            storyId: grokPipelineStoryIdRef.current.trim() || undefined,
+            errorMessage: mwErrorMessage,
+            result: {
+              videoStorageAddresses: grokCapturedVideoUrlsRef.current,
+            },
+          })
+        } catch {
+          /* ignore */
+        }
       }
       workflowCancelledRemotelyRef.current = false
       grokWorkflowStopRef.current = false
@@ -498,6 +530,7 @@ export default function GrokScreen() {
       isGrokWorkflowRunningRef.current = false
       setIsGrokWorkflowRunning(false)
       setIsGrokWorkflowStopping(false)
+      drainGrokWorkflowQueue()
     }
   }
 
@@ -548,17 +581,14 @@ export default function GrokScreen() {
         const run = payload.run
         if (!run?._id || !run?.workflowId) return
         if (!shouldAcceptWorkflowRunFromStream(run, grokWorkflowSteps[0]?.workflowId || '')) return
-        if (isGrokWorkflowRunning) return
-        if (runningGrokWorkflowRunIdRef.current === run._id) return
-        setGrokWorkflowStatus(`SSE: chạy workflow Grok ${run._id}`)
-        void runGrokWorkflow({ runId: run._id, workflowId: run.workflowId, source: 'sse' })
+        enqueueGrokWorkflowRun(run)
       } catch {
         /* ignore */
       }
     }
     eventSource.onerror = () => {}
     return () => eventSource.close()
-  }, [canUseWorkflow, grokWorkflowSteps, isGrokWorkflowRunning])
+  }, [canUseWorkflow, grokWorkflowSteps])
 
   const retryPushToGrok = async () => {
     if (isPushingToGrok) return

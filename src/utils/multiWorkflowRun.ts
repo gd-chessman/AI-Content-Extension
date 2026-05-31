@@ -26,7 +26,7 @@ export function shouldAcceptWorkflowRunFromStream(
   const status = (run.status || '').toLowerCase()
   const mw = getMultiWorkflowPayload(run.payload as Record<string, unknown>)
   if (mw) return status === 'queued' || status === 'running'
-  return status === 'queued'
+  return status === 'queued' || status === 'running'
 }
 
 /** SSE từ web hủy run — BE gửi workflow_run_updated status cancelled. */
@@ -84,6 +84,7 @@ export async function finalizeMultiWorkflowJobAfterWorkflowRun(
   }
 
   await failMultiWorkflowJob(jobId, {
+    terminal: true,
     error: {
       code: outcome,
       message: extra?.errorMessage || `Workflow ${outcome}`,
