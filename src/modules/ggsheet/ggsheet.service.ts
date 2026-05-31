@@ -4,9 +4,45 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { google } from 'googleapis';
 import { normalizeStyledTextToPlain } from '../../shared/text/text-search-normalize';
+import { Story, StoryDocument } from '../stories/story.schema';
 import { PushGgSheetDto, UpdateGgSheetDto } from './ggsheet.dto';
 import { GgSheetPushLog, GgSheetPushLogDocument } from './ggsheet-push-log.schema';
 import { GgSheet, GgSheetDocument } from './ggsheet.schema';
+
+export type GgSheetCompareRow = {
+  rowNumber: number;
+  title: string;
+  shortContent: string;
+  shortContentPreview: string;
+  matchStatus: 'matched' | 'sheet_only';
+  titleMatch: boolean;
+  shortMatch: boolean;
+  story?: {
+    id: string;
+    name: string;
+    shortContentPreview: string;
+  };
+};
+
+export type GgSheetCompareResult = {
+  configured: boolean;
+  sheetUrl: string;
+  sheetTitle: string;
+  columns: { title: string; shortContent: string; full: string };
+  summary: {
+    sheetRows: number;
+    matched: number;
+    sheetOnly: number;
+    dbOnly: number;
+  };
+  rows: GgSheetCompareRow[];
+  unmatchedStories: Array<{
+    id: string;
+    name: string;
+    shortContentPreview: string;
+    createdAt?: string;
+  }>;
+};
 
 @Injectable()
 export class GgSheetService {
@@ -16,6 +52,8 @@ export class GgSheetService {
     private readonly ggSheetModel: Model<GgSheetDocument>,
     @InjectModel(GgSheetPushLog.name)
     private readonly ggSheetPushLogModel: Model<GgSheetPushLogDocument>,
+    @InjectModel(Story.name)
+    private readonly storyModel: Model<StoryDocument>,
   ) {}
 
   async getMySetting(userId: string) {
@@ -199,6 +237,104 @@ export class GgSheetService {
     };
   }
 
+  async compareWithStories(userId: string): Promise<GgSheetCompareResult> {
+    const setting = await this.getMySetting(userId);
+    const ggSheetPath = (setting?.ggSheetPath || '').trim();
+    const columns = this.resolveColumns(setting);
+    const emptyResult: GgSheetCompareResult = {
+      configured: false,
+      sheetUrl: ggSheetPath,
+      sheetTitle: '',
+      columns,
+      summary: { sheetRows: 0, matched: 0, sheetOnly: 0, dbOnly: 0 },
+      rows: [],
+      unmatchedStories: [],
+    };
+
+    if (!ggSheetPath || !columns.title || !columns.shortContent) {
+      return emptyResult;
+    }
+
+    const sheetMeta = await this.loadSheetMeta(userId);
+    const sheetRows = sheetMeta.rows.filter((row) => row.rowNumber >= 2);
+    const stories = await this.storyModel
+      .find({ userId: new Types.ObjectId(userId) })
+      .select('_id name shortContent createdAt')
+      .sort({ createdAt: -1 })
+      .limit(2000)
+      .lean();
+
+    const storyItems = stories.map((row) => {
+      const item = row as Record<string, unknown>;
+      return {
+        id: String(item._id || ''),
+        name: String(item.name || '').trim(),
+        shortContent: String(item.shortContent || '').trim(),
+        createdAt: item.createdAt ? new Date(String(item.createdAt)).toISOString() : undefined,
+      };
+    });
+
+    const matchedStoryIds = new Set<string>();
+    const compareRows: GgSheetCompareRow[] = sheetRows.map((sheetRow) => {
+      const matchedStory = storyItems.find(
+        (story) =>
+          this.titleMatches(story.name, sheetRow.title) &&
+          this.shortContentMatchesPrefix(story.shortContent, sheetRow.shortContent),
+      );
+
+      if (matchedStory) {
+        matchedStoryIds.add(matchedStory.id);
+      }
+
+      return {
+        rowNumber: sheetRow.rowNumber,
+        title: sheetRow.title,
+        shortContent: sheetRow.shortContent,
+        shortContentPreview: this.previewText(sheetRow.shortContent),
+        matchStatus: matchedStory ? 'matched' : 'sheet_only',
+        titleMatch: matchedStory
+          ? this.titleMatches(matchedStory.name, sheetRow.title)
+          : false,
+        shortMatch: matchedStory
+          ? this.shortContentMatchesPrefix(matchedStory.shortContent, sheetRow.shortContent)
+          : false,
+        story: matchedStory
+          ? {
+              id: matchedStory.id,
+              name: matchedStory.name,
+              shortContentPreview: this.previewText(matchedStory.shortContent),
+            }
+          : undefined,
+      };
+    });
+
+    const unmatchedStories = storyItems
+      .filter((story) => !matchedStoryIds.has(story.id))
+      .map((story) => ({
+        id: story.id,
+        name: story.name,
+        shortContentPreview: this.previewText(story.shortContent),
+        createdAt: story.createdAt,
+      }));
+
+    const matched = compareRows.filter((row) => row.matchStatus === 'matched').length;
+
+    return {
+      configured: true,
+      sheetUrl: ggSheetPath,
+      sheetTitle: sheetMeta.sheetTitle,
+      columns,
+      summary: {
+        sheetRows: compareRows.length,
+        matched,
+        sheetOnly: compareRows.length - matched,
+        dbOnly: unmatchedStories.length,
+      },
+      rows: compareRows,
+      unmatchedStories,
+    };
+  }
+
   async getMyStats(userId: string) {
     const objectId = new Types.ObjectId(userId);
     const [totalPushes, successPushes, failedPushes] = await Promise.all([
@@ -304,40 +440,60 @@ export class GgSheetService {
     return storyNorm.startsWith(sheetPrefix);
   }
 
-  private async loadTitleShortRowsFromUserSheet(userId: string) {
+  private previewText(value: string, maxLen = 120) {
+    const normalized = this.normalizeMatchText(value);
+    if (normalized.length <= maxLen) return normalized;
+    return `${normalized.slice(0, maxLen)}…`;
+  }
+
+  private async loadSheetMeta(userId: string) {
     const setting = await this.getMySetting(userId);
     const ggSheetPath = (setting?.ggSheetPath || '').trim();
     const sheetId = this.extractSheetId(ggSheetPath);
     const sheetGid = this.extractSheetGidFromUrl(ggSheetPath);
-    if (!sheetId) return [];
+    if (!sheetId) {
+      throw new BadRequestException('Google Sheet path is not configured.');
+    }
 
     const columns = this.resolveColumns(setting);
-    if (!columns.title || !columns.shortContent) return [];
+    if (!columns.title || !columns.shortContent) {
+      throw new BadRequestException('Title and short content columns are required.');
+    }
 
+    const sheets = this.createSheetsClient();
+    const sheetTitle = await this.getSheetTitle(sheets, sheetId, sheetGid);
+    let response;
     try {
-      const sheets = this.createSheetsClient();
-      const sheetTitle = await this.getSheetTitle(sheets, sheetId, sheetGid);
-      const response = await sheets.spreadsheets.values.batchGet({
+      response = await sheets.spreadsheets.values.batchGet({
         spreadsheetId: sheetId,
         ranges: [
           `${sheetTitle}!${columns.title}:${columns.title}`,
           `${sheetTitle}!${columns.shortContent}:${columns.shortContent}`,
         ],
       });
+    } catch (error) {
+      this.handleGoogleSheetError(error);
+    }
 
-      const titleRows = response.data.valueRanges?.[0]?.values || [];
-      const shortRows = response.data.valueRanges?.[1]?.values || [];
-      const maxLen = Math.max(titleRows.length, shortRows.length);
-      const rows: Array<{ rowNumber: number; title: string; shortContent: string }> = [];
+    const titleRows = response.data.valueRanges?.[0]?.values || [];
+    const shortRows = response.data.valueRanges?.[1]?.values || [];
+    const maxLen = Math.max(titleRows.length, shortRows.length);
+    const rows: Array<{ rowNumber: number; title: string; shortContent: string }> = [];
 
-      for (let idx = 0; idx < maxLen; idx += 1) {
-        const title = String(titleRows[idx]?.[0] || '').trim();
-        const shortContent = String(shortRows[idx]?.[0] || '').trim();
-        if (!title && !shortContent) continue;
-        rows.push({ rowNumber: idx + 1, title, shortContent });
-      }
+    for (let idx = 0; idx < maxLen; idx += 1) {
+      const title = String(titleRows[idx]?.[0] || '').trim();
+      const shortContent = String(shortRows[idx]?.[0] || '').trim();
+      if (!title && !shortContent) continue;
+      rows.push({ rowNumber: idx + 1, title, shortContent });
+    }
 
-      return rows;
+    return { sheetTitle, rows };
+  }
+
+  private async loadTitleShortRowsFromUserSheet(userId: string) {
+    try {
+      const meta = await this.loadSheetMeta(userId);
+      return meta.rows;
     } catch {
       return [];
     }

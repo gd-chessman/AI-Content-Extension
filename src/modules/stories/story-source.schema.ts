@@ -23,6 +23,10 @@ export class StorySource {
   /** Lượt ghi nhận (copy/vận hành) trên reel nguồn này — dùng chung cho mọi Story cùng nguồn. */
   @Prop({ default: 0 })
   usageCount: number;
+
+  /** Reel bị bỏ qua vĩnh viễn (vd. caption timeout) — không chọn lại trong workflow. */
+  @Prop({ default: '', trim: true, index: true })
+  skipReason: string;
 }
 
 export const StorySourceSchema = SchemaFactory.createForClass(StorySource);

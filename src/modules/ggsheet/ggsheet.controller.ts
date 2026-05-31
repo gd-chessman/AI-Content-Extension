@@ -32,6 +32,12 @@ export class GgSheetController {
     return this.ggSheetService.getMyStats(user.sub);
   }
 
+  @Get('compare')
+  compareWithStories(@Req() req: Request) {
+    const user = req.user as JwtPayload;
+    return this.ggSheetService.compareWithStories(user.sub);
+  }
+
   @Get('extract/:row')
   extractRow(@Req() req: Request, @Param('row') row: string) {
     const user = req.user as JwtPayload;

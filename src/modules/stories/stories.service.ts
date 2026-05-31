@@ -6,11 +6,18 @@ import {
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
-import { CreateStoryDto, ListMyStoriesQuery, PatchStoryDto, UpsertStorySourceDto } from './stories.dto';
+import { CreateStoryDto, ListMyStoriesQuery, PatchStoryDto, SkipStorySourceDto, UpsertStorySourceDto } from './stories.dto';
 import { StorySource, StorySourceDocument } from './story-source.schema';
 import { Story, StoryDocument } from './story.schema';
 import { StoryTopic, StoryTopicDocument } from './story-topic.schema';
 import { GgSheetService } from '../ggsheet/ggsheet.service';
+import {
+  buildStoryPipelineMongoFilter,
+  isPostFilterPipelineStatus,
+  matchesStoryPipelineStatus,
+  parseStoryPipelineStatus,
+  type StoryPipelineStatus,
+} from './story-pipeline-status';
 
 const MIN_SOURCE_CONTENT_LENGTH = 256;
 const MAX_STORY_SHORT_CONTENT = 80_000;
@@ -36,7 +43,7 @@ export class StoriesService {
   async listSourcesForUser(userId: string) {
     const rows = await this.storySourceModel
       .find({ userId: new Types.ObjectId(userId) })
-      .select('_id sourceContent sourceReelUrl name usageCount createdAt updatedAt')
+      .select('_id sourceContent sourceReelUrl name usageCount skipReason createdAt updatedAt')
       .sort({ createdAt: -1, usageCount: 1 })
       .limit(500)
       .lean();
@@ -49,6 +56,7 @@ export class StoriesService {
         sourceReelUrl: String(row.sourceReelUrl || ''),
         name: String(row.name || ''),
         usageCount: Number(row.usageCount) || 0,
+        skipReason: String(row.skipReason || ''),
         createdAt: row.createdAt,
         updatedAt: row.updatedAt,
       };
@@ -56,12 +64,25 @@ export class StoriesService {
   }
 
   async listForUser(userId: string, query: ListMyStoriesQuery) {
-    const { page, limit, q, hasLongContent } = query;
-    const userOid = new Types.ObjectId(userId);
+    const { page, limit, q } = query;
+    const pipelineStatus = parseStoryPipelineStatus(query.status);
 
+    if (isPostFilterPipelineStatus(pipelineStatus)) {
+      return this.listForUserWithPipelinePostFilter(userId, query, pipelineStatus);
+    }
+
+    const userOid = new Types.ObjectId(userId);
     const baseFilter: Record<string, unknown> = { userId: userOid };
-    if (hasLongContent) {
+
+    if (!pipelineStatus && query.hasLongContent) {
       baseFilter.longContent = { $exists: true, $nin: ['', null] };
+    }
+
+    if (pipelineStatus) {
+      const pipelineFilter = buildStoryPipelineMongoFilter(pipelineStatus);
+      if (pipelineFilter) {
+        Object.assign(baseFilter, pipelineFilter);
+      }
     }
 
     if (q) {
@@ -73,6 +94,79 @@ export class StoriesService {
       baseFilter.$or = or;
     }
 
+    return this.paginateStoriesForUser(userId, baseFilter, page, limit);
+  }
+
+  private async listForUserWithPipelinePostFilter(
+    userId: string,
+    query: ListMyStoriesQuery,
+    pipelineStatus: StoryPipelineStatus,
+  ) {
+    const { page, limit, q } = query;
+    const userOid = new Types.ObjectId(userId);
+    const baseFilter: Record<string, unknown> = { userId: userOid };
+
+    if (q) {
+      const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const or: Record<string, unknown>[] = [{ name: { $regex: escaped, $options: 'i' } }];
+      if (Types.ObjectId.isValid(q)) {
+        or.push({ _id: new Types.ObjectId(q) });
+      }
+      baseFilter.$or = or;
+    }
+
+    const populate = {
+      path: 'storySourceId',
+      select: 'sourceContent sourceReelUrl name usageCount',
+    };
+
+    const rows = await this.storyModel
+      .find(baseFilter)
+      .populate(populate)
+      .sort({ createdAt: -1 })
+      .limit(500)
+      .lean();
+
+    const serialized = rows.map((row) =>
+      this.serializeStory(row as unknown as Record<string, unknown>),
+    );
+    const ggsheetMap = await this.ggSheetService.getPushStatusMapForStories(
+      userId,
+      serialized.map((item) => ({
+        storyId: item._id,
+        title: item.name,
+        shortContent: item.shortContent,
+      })),
+    );
+
+    const filtered = serialized
+      .map((item) => ({
+        ...item,
+        ggsheetPush: ggsheetMap.get(item._id) || { pushed: false },
+      }))
+      .filter((item) => matchesStoryPipelineStatus(item, pipelineStatus));
+
+    const total = filtered.length;
+    const start = (page - 1) * limit;
+    const items = filtered.slice(start, start + limit);
+
+    return {
+      items,
+      pagination: {
+        total,
+        page,
+        limit,
+        totalPages: Math.max(1, Math.ceil(total / limit)),
+      },
+    };
+  }
+
+  private async paginateStoriesForUser(
+    userId: string,
+    baseFilter: Record<string, unknown>,
+    page: number,
+    limit: number,
+  ) {
     const populate = {
       path: 'storySourceId',
       select: 'sourceContent sourceReelUrl name usageCount',
@@ -216,6 +310,49 @@ export class StoriesService {
       sourceContent,
       name: (dto.name || '').trim().slice(0, 200),
     });
+
+    return this.serializeStorySource(doc.toObject() as unknown as Record<string, unknown>);
+  }
+
+  /** Đánh dấu reel bỏ qua (caption timeout, v.v.) — loại khỏi workflow chọn reel. */
+  async skipStorySourceForUser(userId: string, dto: SkipStorySourceDto) {
+    const sourceReelUrl = this.normalizeHttpUrl((dto.sourceReelUrl || '').trim());
+    if (!sourceReelUrl) {
+      throw new BadRequestException('Invalid reel URL.');
+    }
+    this.assertFacebookReelUrl(sourceReelUrl);
+
+    const canonicalReelUrl = this.canonicalSourceReelUrl(sourceReelUrl);
+    const userOid = new Types.ObjectId(userId);
+    const reason = (dto.reason || 'caption_timeout').trim() || 'caption_timeout';
+    const name = (dto.name || '').trim().slice(0, 200);
+
+    const existing = await this.storySourceModel
+      .findOne({ userId: userOid, sourceReelUrl: canonicalReelUrl })
+      .lean();
+
+    if (
+      existing &&
+      (existing.sourceContent || '').trim().length >= MIN_SOURCE_CONTENT_LENGTH &&
+      !(existing.skipReason || '').trim()
+    ) {
+      return this.serializeStorySource(existing as unknown as Record<string, unknown>);
+    }
+
+    const doc = await this.storySourceModel.findOneAndUpdate(
+      { userId: userOid, sourceReelUrl: canonicalReelUrl },
+      {
+        $set: {
+          skipReason: reason,
+          name: name || String(existing?.name || ''),
+          sourceContent: '',
+        },
+      },
+      { upsert: true, new: true },
+    );
+    if (!doc) {
+      throw new NotFoundException('Could not skip story source.');
+    }
 
     return this.serializeStorySource(doc.toObject() as unknown as Record<string, unknown>);
   }
@@ -440,6 +577,7 @@ export class StoriesService {
         $set: {
           sourceContent: params.sourceContent,
           name,
+          skipReason: '',
         },
       },
       { upsert: true, new: true },
@@ -474,6 +612,7 @@ export class StoriesService {
       sourceContent: (row.sourceContent as string) || '',
       sourceReelUrl: (row.sourceReelUrl as string) || '',
       usageCount: Number(row.usageCount) || 0,
+      skipReason: String(row.skipReason || ''),
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
     };

@@ -563,7 +563,9 @@ export class MultiWorkflowsService implements OnModuleInit {
     };
     job.lastError = error;
 
-    if (job.attempts < job.maxAttempts) {
+    const terminal = dto.terminal === true || error.code === 'cancelled';
+
+    if (!terminal && job.attempts < job.maxAttempts) {
       job.status = MultiWorkflowJobStatus.PENDING;
       job.nextRetryAt = new Date(Date.now() + this.getRetryDelayMs());
       job.lockedAt = null;
@@ -572,23 +574,33 @@ export class MultiWorkflowsService implements OnModuleInit {
       job.workflowRunId = null;
       await job.save();
       await this.syncRunItemFromJob(job, MultiWorkflowRunItemStatus.PENDING);
+      await this.multiWorkflowRunModel.updateOne(
+        { _id: job.multiWorkflowRunId, status: MultiWorkflowRunStatus.RUNNING },
+        { $set: { status: MultiWorkflowRunStatus.QUEUED } },
+      );
       return job.toObject();
     }
 
-    job.status = MultiWorkflowJobStatus.FAILED;
-    job.finishedAt = new Date();
+    const now = new Date();
+    const isCancelled = error.code === 'cancelled';
+
+    job.status = isCancelled ? MultiWorkflowJobStatus.CANCELLED : MultiWorkflowJobStatus.FAILED;
+    job.finishedAt = now;
     job.lockedAt = null;
     job.lockedBy = '';
     job.lockExpiresAt = null;
     await job.save();
 
-    await this.syncRunItemFromJob(job, MultiWorkflowRunItemStatus.FAILED);
+    await this.syncRunItemFromJob(
+      job,
+      isCancelled ? MultiWorkflowRunItemStatus.SKIPPED : MultiWorkflowRunItemStatus.FAILED,
+    );
     await this.multiWorkflowRunModel.updateOne(
       { _id: job.multiWorkflowRunId },
       {
         $set: {
-          status: MultiWorkflowRunStatus.FAILED,
-          finishedAt: new Date(),
+          status: isCancelled ? MultiWorkflowRunStatus.CANCELLED : MultiWorkflowRunStatus.FAILED,
+          finishedAt: now,
         },
       },
     );

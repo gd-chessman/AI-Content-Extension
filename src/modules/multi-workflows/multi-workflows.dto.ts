@@ -39,6 +39,8 @@ export class CompleteMultiWorkflowJobDto {
 }
 
 export class FailMultiWorkflowJobDto {
+  /** Lỗi từ extension — không retry, kết thúc run ngay. */
+  terminal?: boolean;
   error?: {
     code?: string;
     message?: string;

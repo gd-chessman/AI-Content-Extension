@@ -10,6 +10,7 @@ import {
   LatestGrokReadyStoryQueryDto,
   ListMyStoriesQueryDto,
   PatchStoryDto,
+  SkipStorySourceDto,
   UpsertStorySourceDto,
 } from './stories.dto';
 import { StoriesService } from './stories.service';
@@ -58,6 +59,12 @@ export class StoriesController {
   syncStorySource(@Req() req: Request, @Body() dto: UpsertStorySourceDto) {
     const user = req.user as JwtPayload;
     return this.storiesService.upsertStorySourceForUser(user.sub, dto);
+  }
+
+  @Post('sources/skip')
+  skipStorySource(@Req() req: Request, @Body() dto: SkipStorySourceDto) {
+    const user = req.user as JwtPayload;
+    return this.storiesService.skipStorySourceForUser(user.sub, dto);
   }
 
   @Post()

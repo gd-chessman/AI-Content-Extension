@@ -28,6 +28,13 @@ export class UpsertStorySourceDto {
   name?: string;
 }
 
+/** Đánh dấu reel bỏ qua — không tạo Story, loại khỏi danh sách reel chưa xử lý. */
+export class SkipStorySourceDto {
+  sourceReelUrl: string;
+  name?: string;
+  reason?: string;
+}
+
 export class PatchStoryDto {
   /** Prompt/script video (một hoặc nhiều khối VIDEO). */
   videoPrompts?: string[];
@@ -43,6 +50,8 @@ export class ListMyStoriesQueryDto {
   q?: string;
   /** Client gửi `true` để chỉ lấy story có longContent (WebBlog import). */
   hasLongContent?: string;
+  /** Lọc theo bước pipeline: complete, in_progress, missing_chatgpt, … */
+  status?: string;
 
   static parse(raw: ListMyStoriesQueryDto): ListMyStoriesQuery {
     return {
@@ -50,6 +59,7 @@ export class ListMyStoriesQueryDto {
       limit: Math.min(100, Math.max(1, Number.parseInt(raw.limit || '20', 10) || 20)),
       q: (raw.q || '').trim(),
       hasLongContent: raw.hasLongContent === 'true',
+      status: (raw.status || '').trim().toLowerCase(),
     };
   }
 }
@@ -59,6 +69,7 @@ export type ListMyStoriesQuery = {
   limit: number;
   q: string;
   hasLongContent: boolean;
+  status: string;
 };
 
 /** Query GET /stories/my/latest-grok-ready */
