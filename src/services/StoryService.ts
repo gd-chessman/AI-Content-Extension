@@ -41,6 +41,7 @@ export type GetMyStoriesParams = {
   limit?: number
   q?: string
   hasLongContent?: boolean
+  status?: string
 }
 
 export const getMyStories = async (params?: GetMyStoriesParams) => {
@@ -50,6 +51,7 @@ export const getMyStories = async (params?: GetMyStoriesParams) => {
       limit: params?.limit ?? 20,
       ...(params?.q?.trim() ? { q: params.q.trim() } : {}),
       ...(params?.hasLongContent ? { hasLongContent: 'true' } : {}),
+      ...(params?.status?.trim() ? { status: params.status.trim() } : {}),
     },
   })
   return (response.data || {

@@ -76,10 +76,10 @@ export default function WorkflowsPage() {
             key={opt.value}
             type="button"
             onClick={() => setPlatform(opt.value)}
-            className={`rounded-full border px-3 py-1.5 text-xs transition ${
+            className={`rounded-full border px-3 py-1.5 text-xs transition-colors ${
               platform === opt.value
-                ? 'border-violet-500/40 bg-violet-500/15 text-violet-100'
-                : 'border-white/10 bg-black/20 text-slate-400 hover:border-white/20 hover:text-slate-200'
+                ? 'border-blue-300/30 bg-blue-500/20 text-blue-100 ring-1 ring-blue-300/25'
+                : 'border-white/10 bg-black/20 text-slate-400 hover:border-blue-300/20 hover:bg-blue-500/10 hover:text-slate-200'
             }`}
           >
             {opt.label}

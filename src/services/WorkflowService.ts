@@ -52,3 +52,18 @@ export const getExtensionPresence = async () => {
   const response = await axiosClient.get('/workflow-runs/extension-presence')
   return response.data as { online: boolean }
 }
+
+export type WorkflowRunItem = {
+  _id: string
+  workflowId: string
+  status?: string
+  payload?: Record<string, unknown>
+}
+
+export const createWorkflowRun = async (payload: {
+  workflowId: string
+  payload?: Record<string, unknown>
+}) => {
+  const response = await axiosClient.post('/workflow-runs', payload)
+  return response.data as WorkflowRunItem
+}

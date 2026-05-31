@@ -1,6 +1,7 @@
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
+import { isAxiosError } from 'axios'
 import {
   FiArrowLeft,
   FiCheck,
@@ -14,13 +15,20 @@ import {
   FiVideo,
 } from 'react-icons/fi'
 import EmptyState from '@/components/EmptyState'
+import GgSheetPushButton from '@/components/GgSheetPushButton'
+import GrokRunButton from '@/components/GrokRunButton'
 import StoryVideoPlayer from '@/components/StoryVideoPlayer'
 import { useWorkspaceRoot } from '@/hooks/useWorkspaceRoot'
+import { buildGgSheetPushPayloadFromStory, pushGgSheetContent } from '@/services/GgSheetService'
 import { getStoryById, type StoryItem } from '@/services/StoryService'
+import { createWorkflowRun, getExtensionPresence, getUserWorkflows } from '@/services/WorkflowService'
 import {
   formatStoryDate,
   getPipelineSteps,
   getStoryStats,
+  isGgSheetPushable,
+  isGrokIncomplete,
+  isGrokReady,
   pipelineProgress,
 } from '@/utils/storyHelpers'
 
@@ -92,8 +100,11 @@ function PipelineTimeline({ story, stats }: { story: StoryItem; stats: ReturnTyp
 
 export default function StoryDetailPage() {
   const { id = '' } = useParams()
+  const queryClient = useQueryClient()
   const [contentTab, setContentTab] = useState<'short' | 'long'>('short')
   const [selectedImage, setSelectedImage] = useState(0)
+  const [sheetMessage, setSheetMessage] = useState('')
+  const [grokMessage, setGrokMessage] = useState('')
   const { workspaceRoot, workspaceLabel, pickingWorkspace, pickWorkspace } = useWorkspaceRoot()
 
   const storyQuery = useQuery({
@@ -103,7 +114,82 @@ export default function StoryDetailPage() {
     refetchInterval: 15_000,
   })
 
+  const extensionPresenceQuery = useQuery({
+    queryKey: ['extension-presence'],
+    queryFn: getExtensionPresence,
+    refetchInterval: 5000,
+  })
+
+  const grokWorkflowQuery = useQuery({
+    queryKey: ['workflows', 'grok'],
+    queryFn: () => getUserWorkflows({ platform: 'grok' }),
+  })
+
+  const extensionOnline = extensionPresenceQuery.data?.online === true
+  const grokWorkflowId = grokWorkflowQuery.data?.[0]?._id || ''
+
   const story = storyQuery.data
+
+  const grokMutation = useMutation({
+    mutationFn: async (item: StoryItem) => {
+      if (!grokWorkflowId) throw new Error('Chưa có workflow Grok trên hệ thống.')
+      if (!extensionOnline) {
+        throw new Error('Extension chưa online — mở extension tab Grok và đăng nhập.')
+      }
+      await createWorkflowRun({
+        workflowId: grokWorkflowId,
+        payload: {
+          storyId: item._id,
+          source: 'web_story_detail',
+          trigger: 'web_console',
+        },
+      })
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['stories', 'detail', id] })
+      void queryClient.invalidateQueries({ queryKey: ['stories', 'my'] })
+      setGrokMessage('Đã gửi lệnh Grok — extension xử lý trên tab Grok.')
+    },
+    onError: (error: unknown) => {
+      if (isAxiosError(error) && error.response?.status === 503) {
+        setGrokMessage('Extension chưa online — mở tab Grok trong extension.')
+        return
+      }
+      setGrokMessage(error instanceof Error ? error.message : 'Không thể chạy Grok.')
+    },
+  })
+
+  const sheetPushMutation = useMutation({
+    mutationFn: async (item: StoryItem) => pushGgSheetContent(buildGgSheetPushPayloadFromStory(item)),
+    onSuccess: (result) => {
+      void queryClient.invalidateQueries({ queryKey: ['stories', 'detail', id] })
+      void queryClient.invalidateQueries({ queryKey: ['stories', 'my'] })
+      void queryClient.invalidateQueries({ queryKey: ['ggsheet', 'compare'] })
+      setSheetMessage(
+        result.targetRow
+          ? `Đã đẩy lên GG Sheet — dòng ${result.targetRow}.`
+          : 'Đã đẩy lên GG Sheet.',
+      )
+    },
+    onError: (error: unknown) => {
+      if (isAxiosError(error)) {
+        const raw = String(error.response?.data?.message || '')
+        if (raw.toLowerCase().includes('duplicate')) {
+          setSheetMessage('Tiêu đề và nội dung ngắn đã tồn tại trên sheet.')
+          return
+        }
+        if (raw.toLowerCase().includes('not configured') || raw.toLowerCase().includes('ggsheetpath')) {
+          setSheetMessage('Chưa cấu hình GG Sheet — mở Cài đặt tại trang GG Sheet.')
+          return
+        }
+        if (raw) {
+          setSheetMessage(raw)
+          return
+        }
+      }
+      setSheetMessage(error instanceof Error ? error.message : 'Không thể đẩy GG Sheet.')
+    },
+  })
 
   useEffect(() => {
     if (!story) return
@@ -154,6 +240,10 @@ export default function StoryDetailPage() {
   const videos = (story.videoStorageAddresses || []).filter(Boolean)
   const prompts = (story.videoPrompts || []).filter(Boolean)
   const heroImage = images[selectedImage] || stats.firstImage
+  const canPushSheet = isGgSheetPushable(story)
+  const sheetPushed = Boolean(story.ggsheetPush?.pushed)
+  const canRunGrok = isGrokIncomplete(story, stats)
+  const missingGrokPrereq = stats.videoCount === 0 && !isGrokReady(story, stats)
 
   return (
     <div className="mx-auto max-w-6xl space-y-6">
@@ -266,7 +356,33 @@ export default function StoryDetailPage() {
             </Section>
           ) : (
             <Section title="Video Grok" icon={<FiFilm className="h-4 w-4" />} count={0}>
-              <p className="text-sm text-slate-500">Chưa có video — chạy quy trình Grok để tạo.</p>
+              <div className="space-y-3">
+                <p className="text-sm text-slate-500">Chưa có video — chạy quy trình Grok trên extension để tạo.</p>
+                {canRunGrok ? (
+                  <>
+                    <GrokRunButton
+                      disabled={grokMutation.isPending || !grokWorkflowId}
+                      onClick={() => {
+                        setGrokMessage('')
+                        grokMutation.mutate(story)
+                      }}
+                    >
+                      {grokMutation.isPending ? 'Đang gửi Grok…' : 'Chạy Grok'}
+                    </GrokRunButton>
+                    {!extensionOnline ? (
+                      <p className="text-[11px] text-amber-300/90">
+                        Extension đang offline — mở tab Grok trong extension trước khi chạy.
+                      </p>
+                    ) : null}
+                  </>
+                ) : null}
+                {missingGrokPrereq ? (
+                  <p className="text-[11px] text-slate-500">
+                    Cần có ảnh và prompt video (bước ChatGPT) trước khi chạy Grok.
+                  </p>
+                ) : null}
+                {grokMessage ? <p className="text-[11px] text-slate-300">{grokMessage}</p> : null}
+              </div>
             </Section>
           )}
 
@@ -395,16 +511,36 @@ export default function StoryDetailPage() {
               ) : null}
               <div>
                 <dt className="text-slate-500">GG Sheet</dt>
-                <dd className="mt-0.5">
-                  {story.ggsheetPush?.pushed ? (
+                <dd className="mt-0.5 space-y-2">
+                  {sheetPushed ? (
                     <span className="inline-flex items-center gap-1.5 text-emerald-300">
                       <FiTable className="h-3.5 w-3.5" />
                       Đã có trên sheet
-                      {story.ggsheetPush.targetRow ? ` · dòng ${story.ggsheetPush.targetRow}` : ''}
+                      {story.ggsheetPush?.targetRow ? ` · dòng ${story.ggsheetPush.targetRow}` : ''}
                     </span>
                   ) : (
                     <span className="text-slate-500">Chưa thấy trên sheet</span>
                   )}
+                  {!sheetPushed ? (
+                    <div className="space-y-2">
+                      <GgSheetPushButton
+                        className="w-full mt-2"
+                        disabled={!canPushSheet || sheetPushMutation.isPending}
+                        onClick={() => {
+                          setSheetMessage('')
+                          sheetPushMutation.mutate(story)
+                        }}
+                      >
+                        {sheetPushMutation.isPending ? 'Đang đẩy…' : 'Đẩy GG Sheet'}
+                      </GgSheetPushButton>
+                      {!canPushSheet ? (
+                        <p className="text-[11px] text-slate-500">
+                          Cần có tiêu đề và nội dung ngắn hoặc dài trước khi đẩy.
+                        </p>
+                      ) : null}
+                    </div>
+                  ) : null}
+                  {sheetMessage ? <p className="text-[11px] text-slate-300">{sheetMessage}</p> : null}
                 </dd>
               </div>
               <div>
