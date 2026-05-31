@@ -1,5 +1,5 @@
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
-import { FiActivity, FiBookOpen, FiGitBranch, FiLayers, FiLogOut, FiSettings } from 'react-icons/fi'
+import { FiActivity, FiBookOpen, FiCalendar, FiGitBranch, FiLayers, FiLogOut, FiSettings } from 'react-icons/fi'
 import { SiGooglesheets } from 'react-icons/si'
 import { logoutSession } from '@/services/AuthService'
 import { canUseMultiWorkflow, useAuth } from '@/hooks/useAuth'
@@ -9,6 +9,7 @@ const NAV = [
   { to: '/stories', label: 'Câu chuyện', icon: FiBookOpen, iconClass: 'text-emerald-400' },
   { to: '/ggsheet', label: 'GG Sheet', icon: SiGooglesheets, iconClass: 'text-green-500' },
   { to: '/workflows', label: 'Quy trình', icon: FiGitBranch, iconClass: 'text-sky-400' },
+  { to: '/workflow-schedules', label: 'Lịch quy trình', icon: FiCalendar, iconClass: 'text-blue-400' },
   { to: '/runs', label: 'Lịch sử chạy', icon: FiLayers, iconClass: 'text-violet-400' },
   { to: '/multi-workflow', label: 'Quy trình đa bước', icon: FiSettings, iconClass: 'text-amber-400' },
 ] as const

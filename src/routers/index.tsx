@@ -9,6 +9,7 @@ import RunsPage from '@/pages/RunsPage'
 import StoriesPage from '@/pages/StoriesPage'
 import StoryDetailPage from '@/pages/StoryDetailPage'
 import GgSheetPage from '@/pages/GgSheetPage'
+import WorkflowSchedulesPage from '@/pages/WorkflowSchedulesPage'
 import { GuestOnly, RequireAuth } from '@/routers/AuthGuards'
 
 export default function AppRouter() {
@@ -27,6 +28,7 @@ export default function AppRouter() {
           <Route path="ggsheet" element={<GgSheetPage />} />
           <Route path="workflows" element={<WorkflowsPage />} />
           <Route path="workflows/:id" element={<WorkflowDetailPage />} />
+          <Route path="workflow-schedules" element={<WorkflowSchedulesPage />} />
           <Route path="runs" element={<RunsPage />} />
           <Route path="multi-workflow" element={<MultiWorkflowPage />} />
           <Route path="config" element={<Navigate to="/multi-workflow" replace />} />

@@ -78,12 +78,12 @@ export function getStoryListStatusLabel(status: StoryListStatusFilter): string {
 }
 
 /** Còn thiếu ít nhất một đầu ra ChatGPT: ảnh, prompt hoặc nội dung dài. */
-export function isChatgptIncomplete(story: StoryItem, stats: StoryStats): boolean {
+export function isChatgptIncomplete(_story: StoryItem, stats: StoryStats): boolean {
   return stats.imageCount === 0 || stats.promptCount === 0 || !stats.hasLongContent
 }
 
 /** Đủ ảnh + prompt để chạy Grok. */
-export function isGrokReady(story: StoryItem, stats: StoryStats): boolean {
+export function isGrokReady(_story: StoryItem, stats: StoryStats): boolean {
   return stats.promptCount > 0 && stats.imageCount > 0
 }
 
