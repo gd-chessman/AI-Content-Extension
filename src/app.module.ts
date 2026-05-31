@@ -22,6 +22,7 @@ import { TelegramBotModule } from './modules/telegram-bot/telegram-bot.module';
 import { StoriesModule } from './modules/stories/stories.module';
 import { DataCleanupModule } from './modules/data-cleanup/data-cleanup.module';
 import { MultiWorkflowsModule } from './modules/multi-workflows/multi-workflows.module';
+import { WorkflowSchedulesModule } from './modules/workflow-schedules/workflow-schedules.module';
 
 @Module({
   imports: [
@@ -47,6 +48,7 @@ import { MultiWorkflowsModule } from './modules/multi-workflows/multi-workflows.
     StoriesModule,
     DataCleanupModule,
     MultiWorkflowsModule,
+    WorkflowSchedulesModule,
   ],
   controllers: [AppController],
   providers: [AppService]

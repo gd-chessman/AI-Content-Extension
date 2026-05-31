@@ -1,7 +1,8 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { StorySource, StorySourceSchema } from '../stories/story-source.schema';
 import { WorkflowRunsModule } from '../workflow-runs/workflow-runs.module';
+import { WorkflowSchedulesModule } from '../workflow-schedules/workflow-schedules.module';
 import { Workflow, WorkflowSchema } from '../workflows/workflow.schema';
 import { MultiWorkflowJob, MultiWorkflowJobSchema } from './multi-workflow-job.schema';
 import { MultiWorkflowRun, MultiWorkflowRunSchema } from './multi-workflow-run.schema';
@@ -19,7 +20,8 @@ import { MultiWorkflowsService } from './multi-workflows.service';
       { name: StorySource.name, schema: StorySourceSchema },
       { name: Workflow.name, schema: WorkflowSchema },
     ]),
-    WorkflowRunsModule,
+    forwardRef(() => WorkflowRunsModule),
+    forwardRef(() => WorkflowSchedulesModule),
   ],
   controllers: [MultiWorkflowsController],
   providers: [MultiWorkflowsService, MultiWorkflowsCron],

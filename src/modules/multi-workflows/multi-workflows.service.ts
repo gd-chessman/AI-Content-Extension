@@ -1,10 +1,13 @@
 import {
   BadRequestException,
   ConflictException,
+  Inject,
   Injectable,
   NotFoundException,
   OnModuleInit,
+  Optional,
   ServiceUnavailableException,
+  forwardRef,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
@@ -46,6 +49,7 @@ import {
   MultiWorkflowItemDto,
   UpdateMultiWorkflowDto,
 } from './multi-workflows.dto';
+import { WorkflowScheduleBatchService } from '../workflow-schedules/workflow-schedule-batch.service';
 
 @Injectable()
 export class MultiWorkflowsService implements OnModuleInit {
@@ -63,6 +67,9 @@ export class MultiWorkflowsService implements OnModuleInit {
     private readonly workflowRunsService: WorkflowRunsService,
     private readonly extensionPresence: ExtensionPresenceService,
     private readonly configService: ConfigService,
+    @Optional()
+    @Inject(forwardRef(() => WorkflowScheduleBatchService))
+    private readonly scheduleBatchService?: WorkflowScheduleBatchService,
   ) {}
 
   onModuleInit() {
@@ -288,6 +295,7 @@ export class MultiWorkflowsService implements OnModuleInit {
     run.status = MultiWorkflowRunStatus.CANCELLED;
     run.finishedAt = now;
     await run.save();
+    void this.notifyScheduleBatch(String(run._id));
     return run.toObject();
   }
 
@@ -604,6 +612,7 @@ export class MultiWorkflowsService implements OnModuleInit {
         },
       },
     );
+    void this.notifyScheduleBatch(String(job.multiWorkflowRunId));
     return job.toObject();
   }
 
@@ -630,6 +639,7 @@ export class MultiWorkflowsService implements OnModuleInit {
           { _id: job.multiWorkflowRunId },
           { $set: { status: MultiWorkflowRunStatus.FAILED, finishedAt: now } },
         );
+        void this.notifyScheduleBatch(String(job.multiWorkflowRunId));
       } else {
         job.status = MultiWorkflowJobStatus.PENDING;
         job.nextRetryAt = new Date(now.getTime() + this.getRetryDelayMs());
@@ -694,6 +704,7 @@ export class MultiWorkflowsService implements OnModuleInit {
         { _id: run._id },
         { $set: { status: MultiWorkflowRunStatus.COMPLETED, finishedAt: now } },
       );
+      void this.notifyScheduleBatch(String(run._id));
       return;
     }
 
@@ -950,5 +961,12 @@ export class MultiWorkflowsService implements OnModuleInit {
     const parsed = raw ? Number(raw) : NaN;
     if (Number.isFinite(parsed) && parsed >= 1000) return Math.floor(parsed);
     return 60_000;
+  }
+
+  private notifyScheduleBatch(multiWorkflowRunId: string) {
+    if (!this.scheduleBatchService) return;
+    void this.scheduleBatchService.onMultiWorkflowRunFinished(multiWorkflowRunId).catch((error) => {
+      console.error('Schedule batch hook (multi-workflow) failed:', error);
+    });
   }
 }
