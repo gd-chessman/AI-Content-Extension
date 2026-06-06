@@ -18,21 +18,71 @@ export function chatgptProbeComposerReadyPageScript(): boolean {
     return rect.width > 50 && rect.height > 20 && style.visibility !== 'hidden' && style.display !== 'none'
   }
 
-  const candidateSelectors = [
+  const isHiddenElement = (el: HTMLElement) => {
+    const style = window.getComputedStyle(el)
+    if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) < 0.05) return true
+    if (el.offsetParent === null && style.position !== 'fixed') return true
+    return false
+  }
+
+  /** Tránh editable block / canvas trong phản hồi assistant — chỉ nhắm composer chat. */
+  const isInsideMessageContent = (el: HTMLElement) =>
+    Boolean(
+      el.closest('[data-message-author-role]') ||
+        el.closest('[data-testid*="conversation-turn"]') ||
+        el.closest('.agent-turn') ||
+        el.closest('[data-testid="canvas-wrapper"]') ||
+        el.closest('[data-testid="artifact-content"]') ||
+        el.closest('article[class*="turn"]'),
+    )
+
+  const isComposerInput = (el: HTMLElement) => {
+    if (!isVisible(el) || isHiddenElement(el) || isInsideMessageContent(el)) return false
+
+    const id = el.id
+    const testId = el.getAttribute('data-testid') || ''
+    if (id === 'prompt-textarea' || testId === 'prompt-textarea') {
+      return el.tagName !== 'TEXTAREA' || !isHiddenElement(el)
+    }
+
+    const rect = el.getBoundingClientRect()
+    const inBottomComposerZone =
+      rect.top >= window.innerHeight * 0.42 && rect.bottom <= window.innerHeight + 96
+
+    if (el.getAttribute('role') === 'textbox' || el.classList.contains('ProseMirror')) {
+      return inBottomComposerZone
+    }
+
+    if (el instanceof HTMLTextAreaElement) {
+      return inBottomComposerZone
+    }
+
+    return false
+  }
+
+  const composerRootSelectors = ['[data-testid="composer"]', 'form', 'footer']
+  const inputSelectors = [
     '#prompt-textarea',
+    'div[data-testid="prompt-textarea"][contenteditable="true"]',
+    'div#prompt-textarea[contenteditable="true"]',
     'textarea[data-testid="prompt-textarea"]',
     'textarea[placeholder*="Message"]',
     'textarea[placeholder*="Send"]',
-    'textarea',
-    'div[data-testid="prompt-textarea"][contenteditable="true"]',
-    'div#prompt-textarea[contenteditable="true"]',
     'div[role="textbox"][contenteditable="true"]',
     'div.ProseMirror[contenteditable="true"]',
-    'div[contenteditable="true"]',
   ]
 
-  return candidateSelectors.some((selector) =>
-    Array.from(document.querySelectorAll<HTMLElement>(selector)).some((el) => isVisible(el)),
+  for (const rootSelector of composerRootSelectors) {
+    const root = document.querySelector(rootSelector)
+    if (!root) continue
+    for (const inputSelector of inputSelectors) {
+      const found = root.querySelector<HTMLElement>(inputSelector)
+      if (found && isComposerInput(found)) return true
+    }
+  }
+
+  return inputSelectors.some((selector) =>
+    Array.from(document.querySelectorAll<HTMLElement>(selector)).some((el) => isComposerInput(el)),
   )
 }
 
@@ -53,34 +103,91 @@ export async function chatgptInjectPromptPageScript(message: string, shouldSend:
     return rect.width > 50 && rect.height > 20 && style.visibility !== 'hidden' && style.display !== 'none'
   }
 
-  const candidateSelectors = [
+  const isHiddenElement = (el: HTMLElement) => {
+    const style = window.getComputedStyle(el)
+    if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) < 0.05) return true
+    if (el.offsetParent === null && style.position !== 'fixed') return true
+    return false
+  }
+
+  /** Tránh editable block / canvas trong phản hồi assistant — chỉ nhắm composer chat. */
+  const isInsideMessageContent = (el: HTMLElement) =>
+    Boolean(
+      el.closest('[data-message-author-role]') ||
+        el.closest('[data-testid*="conversation-turn"]') ||
+        el.closest('.agent-turn') ||
+        el.closest('[data-testid="canvas-wrapper"]') ||
+        el.closest('[data-testid="artifact-content"]') ||
+        el.closest('article[class*="turn"]'),
+    )
+
+  const isComposerInput = (el: HTMLElement) => {
+    if (!isVisible(el) || isHiddenElement(el) || isInsideMessageContent(el)) return false
+
+    const id = el.id
+    const testId = el.getAttribute('data-testid') || ''
+    if (id === 'prompt-textarea' || testId === 'prompt-textarea') {
+      return el.tagName !== 'TEXTAREA' || !isHiddenElement(el)
+    }
+
+    const rect = el.getBoundingClientRect()
+    const inBottomComposerZone =
+      rect.top >= window.innerHeight * 0.42 && rect.bottom <= window.innerHeight + 96
+
+    if (el.getAttribute('role') === 'textbox' || el.classList.contains('ProseMirror')) {
+      return inBottomComposerZone
+    }
+
+    if (el instanceof HTMLTextAreaElement) {
+      return inBottomComposerZone
+    }
+
+    return false
+  }
+
+  const inputSelectors = [
     '#prompt-textarea',
+    'div[data-testid="prompt-textarea"][contenteditable="true"]',
+    'div#prompt-textarea[contenteditable="true"]',
     'textarea[data-testid="prompt-textarea"]',
     'textarea[placeholder*="Message"]',
     'textarea[placeholder*="Send"]',
-    'textarea',
-    'div[data-testid="prompt-textarea"][contenteditable="true"]',
-    'div#prompt-textarea[contenteditable="true"]',
     'div[role="textbox"][contenteditable="true"]',
     'div.ProseMirror[contenteditable="true"]',
-    'div[contenteditable="true"]',
   ]
 
-  const getBestInput = () => {
-    const candidates = candidateSelectors.flatMap((selector) =>
-      Array.from(document.querySelectorAll<HTMLElement>(selector)),
-    )
-    const visibles = candidates.filter((el) => isVisible(el))
-    if (visibles.length === 0) return null
+  const composerRootSelectors = ['[data-testid="composer"]', 'form', 'footer']
 
-    const scored = visibles.map((el) => {
+  const getBestInput = () => {
+    const collectCandidates = (root: ParentNode | Document) =>
+      inputSelectors.flatMap((selector) => Array.from(root.querySelectorAll<HTMLElement>(selector)))
+
+    const candidates: HTMLElement[] = []
+    for (const rootSelector of composerRootSelectors) {
+      const root = document.querySelector(rootSelector)
+      if (root) candidates.push(...collectCandidates(root))
+    }
+    candidates.push(...collectCandidates(document))
+
+    const unique = Array.from(new Set(candidates)).filter((el) => isComposerInput(el))
+    if (unique.length === 0) return null
+
+    const scored = unique.map((el) => {
       const rect = el.getBoundingClientRect()
       const centerX = rect.left + rect.width / 2
       const centerY = rect.top + rect.height / 2
       const distanceX = Math.abs(centerX - window.innerWidth / 2)
       const distanceY = Math.abs(centerY - window.innerHeight * 0.86)
       const sizeScore = rect.width * rect.height
-      const score = sizeScore - distanceX * 25 - distanceY * 35
+      const id = el.id
+      const testId = el.getAttribute('data-testid') || ''
+      const composerBoost =
+        id === 'prompt-textarea' || testId === 'prompt-textarea'
+          ? 1_000_000
+          : el.closest('[data-testid="composer"]')
+            ? 50_000
+            : 0
+      const score = composerBoost + sizeScore - distanceX * 25 - distanceY * 35
       return { el, score }
     })
     scored.sort((a, b) => b.score - a.score)
