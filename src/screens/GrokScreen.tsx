@@ -51,6 +51,38 @@ type GrokProcessStep = {
   inputSchema: Record<string, unknown>
 }
 
+const QUOTED_TEXT_PATTERN = /"[^"]*"/g
+
+const renderTextWithQuotedHighlights = (text: string) => {
+  if (!text) return text
+
+  const parts: Array<{ key: string; text: string; quoted: boolean }> = []
+  let lastIndex = 0
+  for (const match of text.matchAll(QUOTED_TEXT_PATTERN)) {
+    const start = match.index ?? 0
+    const quoted = match[0]
+    if (start > lastIndex) {
+      parts.push({ key: `t-${lastIndex}`, text: text.slice(lastIndex, start), quoted: false })
+    }
+    parts.push({ key: `q-${start}`, text: quoted, quoted: true })
+    lastIndex = start + quoted.length
+  }
+  if (lastIndex < text.length) {
+    parts.push({ key: `t-${lastIndex}`, text: text.slice(lastIndex), quoted: false })
+  }
+  if (parts.length === 0) return text
+
+  return parts.map((part) =>
+    part.quoted ? (
+      <mark key={part.key} className="rounded-sm bg-yellow-400/40 px-0.5 text-yellow-50">
+        {part.text}
+      </mark>
+    ) : (
+      <span key={part.key}>{part.text}</span>
+    ),
+  )
+}
+
 const translateInChunks = async (source: string) => {
   const value = (source || '').trim()
   if (!value) return ''
@@ -737,7 +769,7 @@ export default function GrokScreen() {
           </div>
         </div>
         <div className="mt-1 min-h-0 flex-1 overflow-y-auto whitespace-pre-wrap text-[11px] text-slate-200">
-          {lastPrompt || 'Chưa có dữ liệu.'}
+          {lastPrompt ? renderTextWithQuotedHighlights(lastPrompt) : 'Chưa có dữ liệu.'}
         </div>
       </div>
     </section>
