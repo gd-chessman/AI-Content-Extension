@@ -2561,7 +2561,7 @@ export default function ChatgptScreen() {
     setIsSavingVideoShortLocal(true)
     try {
       setStatus('Đang chọn thư mục và ghi file video ngắn đã chuẩn bị...')
-      const root = await resolveWritableContentRootDirectory({ allowPicker: true })
+      const root = await resolveWritableContentRootDirectory({ allowPicker: true, allowRequest: true })
       if (!root) {
         setStatus('Đã hủy chọn thư mục — bấm Lưu local lại để hoàn tất ghi file.')
         return false
@@ -2626,7 +2626,7 @@ export default function ChatgptScreen() {
     setIsSavingVideoShortLocal(true)
     try {
       setStatus('Đang xác nhận quyền thư mục lưu...')
-      const root = await resolveWritableContentRootDirectory({ allowPicker: true })
+      const root = await resolveWritableContentRootDirectory({ allowPicker: true, allowRequest: true })
       if (!root) {
         setStatus('Cần chọn thư mục lưu video ngắn trên máy để tiếp tục.')
         return

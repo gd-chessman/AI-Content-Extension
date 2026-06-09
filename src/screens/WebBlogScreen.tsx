@@ -23,8 +23,8 @@ import {
 import {
   getVideoShortsFolderSegmentFromStorage,
   listLocalVideoShortFolders,
-  loadContentRootDirectoryHandle,
   loadLocalVideoShortBundle,
+  resolveReadableContentRootDirectory,
   type LocalVideoShortFolderEntry,
 } from '@/utils/localWorkspacePersistence'
 import translate from 'translate'
@@ -311,7 +311,7 @@ export default function WebBlogScreen() {
     setLocalVideoShortSearch('')
     setSelectedLocalFolder('')
     try {
-      const root = await loadContentRootDirectoryHandle()
+      const root = await resolveReadableContentRootDirectory({ allowPicker: true, allowRequest: true })
       if (!root) {
         setStatus('Chưa chọn thư mục gốc workspace. Vào Hồ sơ → Cấu hình → Chọn thư mục gốc.')
         setShowLocalImport(false)
@@ -320,7 +320,7 @@ export default function WebBlogScreen() {
       const videoShortsSeg = await getVideoShortsFolderSegmentFromStorage(
         getChrome()?.storage?.local as Parameters<typeof getVideoShortsFolderSegmentFromStorage>[0],
       )
-      const entries = await listLocalVideoShortFolders(root, videoShortsSeg)
+      const entries = await listLocalVideoShortFolders(root, videoShortsSeg, { allowRequest: true })
       if (!entries.length) {
         setStatus('Chưa có video ngắn nào đã lưu trong workspace local.')
         setShowLocalImport(false)
@@ -331,7 +331,11 @@ export default function WebBlogScreen() {
       setStatus(`Chọn video ngắn đã lưu (${entries.length} mục) rồi bấm Nhập.`)
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
-      setStatus(`Không đọc được danh sách local: ${msg}`)
+      const hint =
+        /quyền đọc thư mục gốc workspace/i.test(msg)
+          ? ' Bấm lại nút nhập local — extension sẽ xin quyền tự động.'
+          : ''
+      setStatus(`Không đọc được danh sách local: ${msg}${hint}`)
       setShowLocalImport(false)
     } finally {
       setIsLoadingLocalList(false)
@@ -355,7 +359,7 @@ export default function WebBlogScreen() {
     }
     setIsImportingLocal(true)
     try {
-      const root = await loadContentRootDirectoryHandle()
+      const root = await resolveReadableContentRootDirectory({ allowPicker: true, allowRequest: true })
       if (!root) {
         setStatus('Chưa chọn thư mục gốc workspace. Vào Hồ sơ → Cấu hình.')
         return
@@ -363,7 +367,9 @@ export default function WebBlogScreen() {
       const videoShortsSeg = await getVideoShortsFolderSegmentFromStorage(
         getChrome()?.storage?.local as Parameters<typeof getVideoShortsFolderSegmentFromStorage>[0],
       )
-      const bundle = await loadLocalVideoShortBundle(root, videoShortsSeg, folder, injectImagesIntoLongContent)
+      const bundle = await loadLocalVideoShortBundle(root, videoShortsSeg, folder, injectImagesIntoLongContent, {
+        allowRequest: true,
+      })
       applyWebBlogPayload({
         title: bundle.title,
         longContent: bundle.longContentWithImages,

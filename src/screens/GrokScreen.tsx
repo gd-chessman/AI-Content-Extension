@@ -354,7 +354,7 @@ export default function GrokScreen() {
     if (isGrokCaptureVideoLinkStep(step)) {
       const timeoutMs = readGrokTimeoutMs(step.inputSchema)
       setGrokWorkflowStatus(`${step.label}: chọn thư mục workspace để lưu video…`)
-      const root = await resolveWritableContentRootDirectory({ allowPicker: true })
+      const root = await resolveWritableContentRootDirectory({ allowPicker: true, allowRequest: true })
       if (!root) {
         throw new Error('Cần chọn thư mục workspace trên máy để lưu video Grok.')
       }

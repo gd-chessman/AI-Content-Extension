@@ -608,7 +608,8 @@ export async function saveCopiedSplitImageIfNew(
   const tryWriteToChosenDirectory = async (): Promise<boolean> => {
     const dir = options?.directoryHandle
     if (!dir) return false
-    const writableOk = await ensureDirectoryWritable(dir)
+    const writableOk =
+      (await ensureDirectoryWritable(dir)) || (await ensureDirectoryWritable(dir, { allowRequest: true }))
     if (!writableOk) return false
     const name = `part-${part === 'left' ? '1' : '2'}-${safeHash}.png`
     const fileHandle = await dir.getFileHandle(name, { create: true })
@@ -624,7 +625,9 @@ export async function saveCopiedSplitImageIfNew(
   const tryWriteToWorkspace = async (): Promise<{ ok: boolean; relativePath?: string }> => {
     const w = options?.workspaceTarget
     if (!w) return { ok: false }
-    const rootOk = await ensureDirectoryWritable(w.rootHandle)
+    const rootOk =
+      (await ensureDirectoryWritable(w.rootHandle)) ||
+      (await ensureDirectoryWritable(w.rootHandle, { allowRequest: true }))
     if (!rootOk) return { ok: false }
     const videoShortsSeg = sanitizeWorkspaceFolderSegment(w.storiesFolderSegment, DEFAULT_VIDEO_SHORTS_FOLDER_SEGMENT)
     const videoShortSeg = sanitizeWorkspaceFolderSegment(w.storyFolderSegment, 'unnamed-story')

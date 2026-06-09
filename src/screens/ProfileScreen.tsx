@@ -6,8 +6,10 @@ import {
   clearContentRootDirectoryHandle,
   DEFAULT_VIDEO_SHORTS_FOLDER_SEGMENT,
   getVideoShortsFolderSegmentFromStorage,
+  getWorkspaceRootNameFromStorage,
   loadContentRootDirectoryHandle,
   persistContentRootDirectoryHandle,
+  resolveContentRootDirectoryAccess,
   setVideoShortsFolderSegmentInStorage,
   WORKSPACE_ROOT_PICKER_ID,
   WORKSPACE_STORY_SUBDIRS,
@@ -196,7 +198,11 @@ export default function ProfileScreen({ onLogout }: { onLogout: () => void }) {
     void (async () => {
       try {
         const h = await loadContentRootDirectoryHandle()
-        setWorkspaceRootLabel(h?.name || '')
+        const storedName = await getWorkspaceRootNameFromStorage(getChrome()?.storage?.local)
+        if (h?.name && !storedName) {
+          await persistContentRootDirectoryHandle(h)
+        }
+        setWorkspaceRootLabel(h?.name || storedName || '')
       } catch {
         setWorkspaceRootLabel('')
       }
@@ -240,6 +246,21 @@ export default function ProfileScreen({ onLogout }: { onLogout: () => void }) {
       if (e instanceof DOMException && e.name === 'AbortError') return
       const msg = e instanceof Error ? e.message : 'Lỗi không xác định'
       setStatus(`Không chọn được thư mục gốc: ${msg}`)
+    }
+  }
+
+  const restoreWorkspaceRootAccess = async () => {
+    try {
+      const handle = await resolveContentRootDirectoryAccess({ allowPicker: true, allowRequest: true })
+      if (!handle) {
+        setStatus('Chưa khôi phục được quyền thư mục workspace.')
+        return
+      }
+      setWorkspaceRootLabel(handle.name)
+      setStatus(`Đã khôi phục quyền thư mục: ${handle.name}`)
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Lỗi không xác định'
+      setStatus(`Không khôi phục được quyền thư mục: ${msg}`)
     }
   }
 
@@ -515,6 +536,11 @@ export default function ProfileScreen({ onLogout }: { onLogout: () => void }) {
                 Hiện tại:{' '}
                 <span className="font-medium text-slate-200">{workspaceRootLabel || 'Chưa chọn'}</span>
               </p>
+              <p className="mb-2 text-[10px] leading-relaxed text-slate-500">
+                Sau khi đóng extension, Chrome có thể tạm thu quyền đọc thư mục. Bấm{' '}
+                <span className="text-slate-300">Khôi phục quyền</span> (hoặc mở nhập từ workspace) để cấp lại
+                mà không cần chọn lại đường dẫn.
+              </p>
               <div className="flex flex-wrap gap-1.5">
                 <button
                   type="button"
@@ -525,14 +551,23 @@ export default function ProfileScreen({ onLogout }: { onLogout: () => void }) {
                   Chọn thư mục gốc
                 </button>
                 {workspaceRootLabel ? (
-                  <button
-                    type="button"
-                    onClick={() => void clearWorkspaceRootDirectory()}
-                    className="inline-flex cursor-pointer items-center justify-center gap-1 rounded-md border border-rose-400/30 bg-rose-500/10 px-2 py-1.5 text-[11px] text-rose-100 transition hover:bg-rose-500/20"
-                  >
-                    <FiTrash2 className="h-3.5 w-3.5" />
-                    Xóa
-                  </button>
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => void restoreWorkspaceRootAccess()}
+                      className="inline-flex cursor-pointer items-center justify-center gap-1 rounded-md border border-sky-400/30 bg-sky-500/10 px-2 py-1.5 text-[11px] text-sky-100 transition hover:bg-sky-500/20"
+                    >
+                      Khôi phục quyền
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void clearWorkspaceRootDirectory()}
+                      className="inline-flex cursor-pointer items-center justify-center gap-1 rounded-md border border-rose-400/30 bg-rose-500/10 px-2 py-1.5 text-[11px] text-rose-100 transition hover:bg-rose-500/20"
+                    >
+                      <FiTrash2 className="h-3.5 w-3.5" />
+                      Xóa
+                    </button>
+                  </>
                 ) : null}
               </div>
             </div>

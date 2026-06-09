@@ -5,6 +5,11 @@
 
 import { injectSingleImageIntoLongContent } from './chatgptContentProcessing'
 
+type ChromeLocalStorage = {
+  get?: (keys: string | string[], callback: (items: Record<string, unknown>) => void) => void
+  set?: (items: Record<string, unknown>, callback?: () => void) => void
+}
+
 const DB_NAME = 'aicontent-split-image-fs'
 const STORE = 'handles'
 export const CONTENT_ROOT_HANDLE_KEY = 'contentRootDirectory'
@@ -13,6 +18,8 @@ const LEGACY_SPLIT_IMAGE_HANDLE_KEY = 'splitImageSaveDirectory'
 
 export const DEFAULT_VIDEO_SHORTS_FOLDER_SEGMENT = 'video-shorts'
 export const WORKSPACE_VIDEO_SHORTS_FOLDER_STORAGE_KEY = 'workspaceStoriesFolderSegment'
+/** Tên thư mục gốc — hiển thị UI khi handle còn nhưng quyền FS chưa khôi phục. */
+export const WORKSPACE_ROOT_NAME_STORAGE_KEY = 'workspaceRootDirectoryName'
 
 /** Truyền showDirectoryPicker — Chrome gợi nhớ thư mục. */
 export const WORKSPACE_ROOT_PICKER_ID = 'aicontent-workspace-root'
@@ -105,12 +112,44 @@ export async function persistContentRootDirectoryHandle(handle: FileSystemDirect
   cachedContentRootHandle = handle
   await idbPutHandle(CONTENT_ROOT_HANDLE_KEY, handle)
   await idbDeleteKey(LEGACY_SPLIT_IMAGE_HANDLE_KEY)
+  await setWorkspaceRootNameInStorage(handle.name)
+}
+
+export async function getWorkspaceRootNameFromStorage(
+  storage: ChromeLocalStorage | undefined,
+): Promise<string> {
+  const area = storage
+  const get = area?.get
+  if (!area || !get) return ''
+  return new Promise((resolve) => {
+    get.call(area, [WORKSPACE_ROOT_NAME_STORAGE_KEY], (items) => {
+      resolve(String(items[WORKSPACE_ROOT_NAME_STORAGE_KEY] ?? '').trim())
+    })
+  })
+}
+
+async function setWorkspaceRootNameInStorage(name: string): Promise<void> {
+  const storage = (globalThis as { chrome?: { storage?: { local?: ChromeLocalStorage } } }).chrome?.storage
+    ?.local
+  const set = storage?.set
+  if (!storage || !set) return
+  await new Promise<void>((resolve) => {
+    set.call(storage, { [WORKSPACE_ROOT_NAME_STORAGE_KEY]: name.trim() }, () => resolve())
+  })
 }
 
 export async function clearContentRootDirectoryHandle(): Promise<void> {
   cachedContentRootHandle = null
   await idbDeleteKey(CONTENT_ROOT_HANDLE_KEY)
   await idbDeleteKey(LEGACY_SPLIT_IMAGE_HANDLE_KEY)
+  const storage = (globalThis as { chrome?: { storage?: { local?: ChromeLocalStorage } } }).chrome?.storage
+    ?.local
+  const set = storage?.set
+  if (storage && set) {
+    await new Promise<void>((resolve) => {
+      set.call(storage, { [WORKSPACE_ROOT_NAME_STORAGE_KEY]: '' }, () => resolve())
+    })
+  }
 }
 
 export async function queryDirectoryWritable(handle: FileSystemDirectoryHandle): Promise<boolean> {
@@ -159,25 +198,49 @@ export async function pickContentRootDirectory(): Promise<FileSystemDirectoryHan
 }
 
 /**
- * Lấy thư mục gốc có quyền ghi. Nếu hết quyền / chưa chọn — tự mở picker (Chrome nhớ thư mục cũ).
- * Trả null khi user hủy picker.
+ * Khôi phục quyền thư mục gốc đã lưu (IndexedDB). Gọi trong user gesture (click) để requestPermission
+ * không cần mở picker lại. Trả null khi chưa từng chọn hoặc user từ chối.
  */
-export async function resolveWritableContentRootDirectory(options?: {
+export async function resolveContentRootDirectoryAccess(options?: {
   allowPicker?: boolean
+  allowRequest?: boolean
 }): Promise<FileSystemDirectoryHandle | null> {
   const allowPicker = options?.allowPicker !== false
+  const allowRequest = options?.allowRequest !== false
   let handle = await loadContentRootDirectoryHandle()
 
-  if (handle && (await queryDirectoryWritable(handle))) {
+  if (!handle) return allowPicker ? pickContentRootDirectory() : null
+
+  if ((await queryDirectoryWritable(handle)) || (await ensureDirectoryReadable(handle))) {
     return handle
   }
 
-  if (handle && (await ensureDirectoryWritable(handle, { allowRequest: true }))) {
-    return handle
+  if (allowRequest) {
+    if (await ensureDirectoryWritable(handle, { allowRequest: true })) return handle
+    if (await ensureDirectoryReadable(handle, { allowRequest: true })) return handle
   }
 
   if (!allowPicker) return null
   return pickContentRootDirectory()
+}
+
+/** Alias đọc — cùng logic khôi phục quyền với ghi. */
+export async function resolveReadableContentRootDirectory(options?: {
+  allowPicker?: boolean
+  allowRequest?: boolean
+}): Promise<FileSystemDirectoryHandle | null> {
+  return resolveContentRootDirectoryAccess(options)
+}
+
+/**
+ * Lấy thư mục gốc có quyền ghi. Nếu hết quyền / chưa chọn — requestPermission hoặc mở picker.
+ * Trả null khi user hủy picker.
+ */
+export async function resolveWritableContentRootDirectory(options?: {
+  allowPicker?: boolean
+  allowRequest?: boolean
+}): Promise<FileSystemDirectoryHandle | null> {
+  return resolveContentRootDirectoryAccess(options)
 }
 
 /** Tạo images / content / info trong thư mục một story. */
@@ -196,11 +259,6 @@ export function sanitizeWorkspaceFolderSegment(raw: string, fallback: string): s
     .trim()
     .slice(0, 120)
   return s || fallback
-}
-
-type ChromeLocalStorage = {
-  get?: (keys: string | string[], callback: (items: Record<string, unknown>) => void) => void
-  set?: (items: Record<string, unknown>, callback?: () => void) => void
 }
 
 export async function getVideoShortsFolderSegmentFromStorage(storage: ChromeLocalStorage | undefined): Promise<string> {
@@ -423,8 +481,14 @@ async function* iterateDirectoryEntries(
 export async function listLocalVideoShortFolders(
   root: FileSystemDirectoryHandle,
   videoShortsSeg: string,
+  options?: { allowRequest?: boolean },
 ): Promise<LocalVideoShortFolderEntry[]> {
-  const ok = await ensureDirectoryReadable(root)
+  let ok = await ensureDirectoryReadable(root)
+  if (!ok && options?.allowRequest) {
+    ok =
+      (await ensureDirectoryWritable(root, { allowRequest: true })) ||
+      (await ensureDirectoryReadable(root, { allowRequest: true }))
+  }
   if (!ok) throw new Error('Không có quyền đọc thư mục gốc workspace.')
   const storiesName = sanitizeWorkspaceFolderSegment(videoShortsSeg, DEFAULT_VIDEO_SHORTS_FOLDER_SEGMENT)
   let storiesDir: FileSystemDirectoryHandle
@@ -485,8 +549,14 @@ export async function loadLocalVideoShortBundle(
   videoShortsSeg: string,
   storyFolderName: string,
   injectImages: (content: string, image1: string, image2: string) => string,
+  options?: { allowRequest?: boolean },
 ): Promise<LoadedLocalVideoShortBundle> {
-  const ok = await ensureDirectoryReadable(root)
+  let ok = await ensureDirectoryReadable(root)
+  if (!ok && options?.allowRequest) {
+    ok =
+      (await ensureDirectoryWritable(root, { allowRequest: true })) ||
+      (await ensureDirectoryReadable(root, { allowRequest: true }))
+  }
   if (!ok) throw new Error('Không có quyền đọc thư mục gốc workspace.')
   const storiesName = sanitizeWorkspaceFolderSegment(videoShortsSeg, DEFAULT_VIDEO_SHORTS_FOLDER_SEGMENT)
   const videoShortName = sanitizeWorkspaceFolderSegment(storyFolderName, 'unnamed-story')
