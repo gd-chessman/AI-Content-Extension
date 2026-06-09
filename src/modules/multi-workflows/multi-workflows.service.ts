@@ -222,8 +222,27 @@ export class MultiWorkflowsService implements OnModuleInit {
     if (query.status) {
       filter.status = this.normalizeRunStatus(query.status);
     }
-    const limit = this.normalizeLimit(query.limit, 50);
-    return this.multiWorkflowRunModel.find(filter).sort({ createdAt: -1 }).limit(limit).lean();
+    const page = this.normalizePage(query.page, 1);
+    const limit = this.normalizeLimit(query.limit, 20);
+    const [total, rows] = await Promise.all([
+      this.multiWorkflowRunModel.countDocuments(filter),
+      this.multiWorkflowRunModel
+        .find(filter)
+        .sort({ createdAt: -1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .lean(),
+    ]);
+
+    return {
+      items: rows,
+      pagination: {
+        total,
+        page,
+        limit,
+        totalPages: Math.max(1, Math.ceil(total / limit)),
+      },
+    };
   }
 
   async getRunForUser(userId: string, runId: string) {
@@ -936,10 +955,18 @@ export class MultiWorkflowsService implements OnModuleInit {
     return normalized;
   }
 
+  private normalizePage(value: number | undefined, fallback: number) {
+    if (value === undefined || value === null) return fallback;
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed) || parsed < 1) return fallback;
+    return Math.floor(parsed);
+  }
+
   private normalizeLimit(value: number | undefined, fallback: number) {
     if (value === undefined || value === null) return fallback;
-    if (!Number.isFinite(value) || value < 1) return fallback;
-    return Math.min(200, Math.floor(value));
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed) || parsed < 1) return fallback;
+    return Math.min(200, Math.floor(parsed));
   }
 
   private getLockTtlMs() {

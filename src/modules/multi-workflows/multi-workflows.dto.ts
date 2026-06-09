@@ -50,6 +50,7 @@ export class FailMultiWorkflowJobDto {
 
 export class ListMultiWorkflowRunsQueryDto {
   status?: string;
+  page?: number;
   limit?: number;
 }
 
