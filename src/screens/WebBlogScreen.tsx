@@ -14,18 +14,18 @@ import {
   FiSearch,
   FiSettings,
 } from 'react-icons/fi'
-import { getMyStories, type StoryItem } from '@/services/StoryService'
+import { getMyVideoShorts, type VideoShortItem } from '@/services/VideoShortService'
 import { getMyWebBlogSetting, updateMyWebBlogSetting } from '@/services/WebBlogService'
 import {
   injectImagesIntoLongContent,
   injectSingleImageIntoLongContent,
 } from '@/utils/chatgptContentProcessing'
 import {
-  getStoriesFolderSegmentFromStorage,
-  listLocalStoryFolders,
+  getVideoShortsFolderSegmentFromStorage,
+  listLocalVideoShortFolders,
   loadContentRootDirectoryHandle,
-  loadLocalStoryBundle,
-  type LocalStoryFolderEntry,
+  loadLocalVideoShortBundle,
+  type LocalVideoShortFolderEntry,
 } from '@/utils/localWorkspacePersistence'
 import translate from 'translate'
 import { normalizeTextForSearch, textMatchesSearch } from '@/utils/textSearchNormalize'
@@ -39,7 +39,7 @@ type WebBlogPayload = {
   image2?: string
 }
 
-const buildWebBlogPayloadFromStory = (story: StoryItem) => {
+const buildWebBlogPayloadFromVideoShort = (story: VideoShortItem) => {
   const title = (story.name || '').trim()
   let longContent = (story.longContent || '').trim()
   const urls = (story.imageUrls || []).map((u) => u.trim()).filter(Boolean)
@@ -178,27 +178,27 @@ export default function WebBlogScreen() {
   const [webPathInput, setWebPathInput] = useState('')
   const [showLocalImport, setShowLocalImport] = useState(false)
   const [showDbImport, setShowDbImport] = useState(false)
-  const [localStoryEntries, setLocalStoryEntries] = useState<LocalStoryFolderEntry[]>([])
-  const [localStorySearch, setLocalStorySearch] = useState('')
-  const [dbStorySearch, setDbStorySearch] = useState('')
-  const [debouncedDbStorySearch, setDebouncedDbStorySearch] = useState('')
+  const [localVideoShortEntries, setLocalVideoShortEntries] = useState<LocalVideoShortFolderEntry[]>([])
+  const [localVideoShortSearch, setLocalVideoShortSearch] = useState('')
+  const [dbVideoShortSearch, setDbVideoShortSearch] = useState('')
+  const [debouncedDbVideoShortSearch, setDebouncedDbVideoShortSearch] = useState('')
   const [selectedLocalFolder, setSelectedLocalFolder] = useState('')
-  const [selectedDbStoryId, setSelectedDbStoryId] = useState('')
+  const [selectedDbVideoShortId, setSelectedDbVideoShortId] = useState('')
   const [isLoadingLocalList, setIsLoadingLocalList] = useState(false)
   const [isImportingLocal, setIsImportingLocal] = useState(false)
   const [isImportingDb, setIsImportingDb] = useState(false)
 
-  const dbStorySearchKey = debouncedDbStorySearch.trim()
-    ? normalizeTextForSearch(debouncedDbStorySearch)
+  const dbVideoShortSearchKey = debouncedDbVideoShortSearch.trim()
+    ? normalizeTextForSearch(debouncedDbVideoShortSearch)
     : ''
 
   const dbStoriesQuery = useQuery({
-    queryKey: ['webblog-db-stories', dbStorySearchKey],
+    queryKey: ['webblog-db-stories', dbVideoShortSearchKey],
     queryFn: () =>
-      getMyStories({
+      getMyVideoShorts({
         page: 1,
         limit: 20,
-        q: dbStorySearchKey || undefined,
+        q: dbVideoShortSearchKey || undefined,
         hasLongContent: true,
       }),
     enabled: showDbImport,
@@ -209,10 +209,10 @@ export default function WebBlogScreen() {
   const dbStories = dbStoriesQuery.data?.items ?? []
   const dbStoriesTotal = dbStoriesQuery.data?.pagination.total ?? 0
   const isLoadingDbList = dbStoriesQuery.isLoading && !dbStoriesQuery.data
-  const filteredLocalStoryEntries = useMemo(() => {
-    const q = localStorySearch.trim()
-    if (!q) return localStoryEntries
-    return localStoryEntries.filter((entry) => {
+  const filteredLocalVideoShortEntries = useMemo(() => {
+    const q = localVideoShortSearch.trim()
+    if (!q) return localVideoShortEntries
+    return localVideoShortEntries.filter((entry) => {
       const savedLabel = entry.savedAt
         ? new Date(entry.savedAt).toLocaleString('vi-VN')
         : ''
@@ -222,16 +222,16 @@ export default function WebBlogScreen() {
         textMatchesSearch(savedLabel, q)
       )
     })
-  }, [localStoryEntries, localStorySearch])
+  }, [localVideoShortEntries, localVideoShortSearch])
 
-  const dbStoryPickerEntries = useMemo(() => {
+  const dbVideoShortPickerEntries = useMemo(() => {
     return dbStories
       .map((story) => {
         const id = (story._id || '').trim()
         const name = (story.name || '').trim()
         return {
           id,
-          displayName: name || `Story …${id.slice(-6)}`,
+          displayName: name || `Video ngắn …${id.slice(-6)}`,
           savedAt: story.updatedAt || story.createdAt,
         }
       })
@@ -240,13 +240,13 @@ export default function WebBlogScreen() {
 
   useEffect(() => {
     if (!showDbImport) return
-    const timer = window.setTimeout(() => setDebouncedDbStorySearch(dbStorySearch), 320)
+    const timer = window.setTimeout(() => setDebouncedDbVideoShortSearch(dbVideoShortSearch), 320)
     return () => window.clearTimeout(timer)
-  }, [showDbImport, dbStorySearch])
+  }, [showDbImport, dbVideoShortSearch])
 
   useEffect(() => {
     if (!showDbImport || isLoadingDbList || !dbStories.length) return
-    setSelectedDbStoryId((prev) => {
+    setSelectedDbVideoShortId((prev) => {
       if (prev && dbStories.some((s) => s._id === prev)) return prev
       return (dbStories[0]?._id || '').trim()
     })
@@ -294,10 +294,10 @@ export default function WebBlogScreen() {
   }, [])
 
   useEffect(() => {
-    if (!showLocalImport || isLoadingLocalList || !filteredLocalStoryEntries.length) return
-    const visible = filteredLocalStoryEntries.some((e) => e.folderName === selectedLocalFolder)
-    if (!visible) setSelectedLocalFolder(filteredLocalStoryEntries[0].folderName)
-  }, [showLocalImport, isLoadingLocalList, filteredLocalStoryEntries, selectedLocalFolder])
+    if (!showLocalImport || isLoadingLocalList || !filteredLocalVideoShortEntries.length) return
+    const visible = filteredLocalVideoShortEntries.some((e) => e.folderName === selectedLocalFolder)
+    if (!visible) setSelectedLocalFolder(filteredLocalVideoShortEntries[0].folderName)
+  }, [showLocalImport, isLoadingLocalList, filteredLocalVideoShortEntries, selectedLocalFolder])
 
   const toggleLocalImportPicker = async () => {
     if (showLocalImport) {
@@ -307,8 +307,8 @@ export default function WebBlogScreen() {
     setShowDbImport(false)
     setShowLocalImport(true)
     setIsLoadingLocalList(true)
-    setLocalStoryEntries([])
-    setLocalStorySearch('')
+    setLocalVideoShortEntries([])
+    setLocalVideoShortSearch('')
     setSelectedLocalFolder('')
     try {
       const root = await loadContentRootDirectoryHandle()
@@ -317,18 +317,18 @@ export default function WebBlogScreen() {
         setShowLocalImport(false)
         return
       }
-      const storiesSeg = await getStoriesFolderSegmentFromStorage(
-        getChrome()?.storage?.local as Parameters<typeof getStoriesFolderSegmentFromStorage>[0],
+      const videoShortsSeg = await getVideoShortsFolderSegmentFromStorage(
+        getChrome()?.storage?.local as Parameters<typeof getVideoShortsFolderSegmentFromStorage>[0],
       )
-      const entries = await listLocalStoryFolders(root, storiesSeg)
+      const entries = await listLocalVideoShortFolders(root, videoShortsSeg)
       if (!entries.length) {
-        setStatus('Chưa có story nào đã lưu trong workspace local.')
+        setStatus('Chưa có video ngắn nào đã lưu trong workspace local.')
         setShowLocalImport(false)
         return
       }
-      setLocalStoryEntries(entries)
+      setLocalVideoShortEntries(entries)
       setSelectedLocalFolder(entries[0].folderName)
-      setStatus(`Chọn story đã lưu (${entries.length} mục) rồi bấm Nhập.`)
+      setStatus(`Chọn video ngắn đã lưu (${entries.length} mục) rồi bấm Nhập.`)
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       setStatus(`Không đọc được danh sách local: ${msg}`)
@@ -350,7 +350,7 @@ export default function WebBlogScreen() {
   const importFromLocalWorkspace = async () => {
     const folder = selectedLocalFolder.trim()
     if (!folder) {
-      setStatus('Chọn một story trong danh sách local.')
+      setStatus('Chọn một video ngắn trong danh sách local.')
       return
     }
     setIsImportingLocal(true)
@@ -360,10 +360,10 @@ export default function WebBlogScreen() {
         setStatus('Chưa chọn thư mục gốc workspace. Vào Hồ sơ → Cấu hình.')
         return
       }
-      const storiesSeg = await getStoriesFolderSegmentFromStorage(
-        getChrome()?.storage?.local as Parameters<typeof getStoriesFolderSegmentFromStorage>[0],
+      const videoShortsSeg = await getVideoShortsFolderSegmentFromStorage(
+        getChrome()?.storage?.local as Parameters<typeof getVideoShortsFolderSegmentFromStorage>[0],
       )
-      const bundle = await loadLocalStoryBundle(root, storiesSeg, folder, injectImagesIntoLongContent)
+      const bundle = await loadLocalVideoShortBundle(root, videoShortsSeg, folder, injectImagesIntoLongContent)
       applyWebBlogPayload({
         title: bundle.title,
         longContent: bundle.longContentWithImages,
@@ -387,21 +387,21 @@ export default function WebBlogScreen() {
   }
 
   const importFromDatabase = async () => {
-    const storyId = selectedDbStoryId.trim()
-    if (!storyId) {
-      setStatus('Chọn một story trong danh sách server.')
+    const videoShortId = selectedDbVideoShortId.trim()
+    if (!videoShortId) {
+      setStatus('Chọn một video ngắn trong danh sách server.')
       return
     }
     setIsImportingDb(true)
     try {
-      const story = dbStories.find((s) => s._id === storyId)
+      const story = dbStories.find((s) => s._id === videoShortId)
       if (!story) {
-        setStatus('Không tìm thấy story đã chọn.')
+        setStatus('Không tìm thấy video ngắn đã chọn.')
         return
       }
-      const payload = buildWebBlogPayloadFromStory(story)
+      const payload = buildWebBlogPayloadFromVideoShort(story)
       if (!payload.title && !payload.longContent) {
-        setStatus('Story trên server thiếu tiêu đề và nội dung dài.')
+        setStatus('Video ngắn trên server thiếu tiêu đề và nội dung dài.')
         return
       }
       applyWebBlogPayload(payload)
@@ -412,7 +412,7 @@ export default function WebBlogScreen() {
           : payload.image1 || payload.image2
             ? ' (có ảnh trên server)'
             : ''
-      setStatus(`Đã nhập: «${payload.title || storyId}»${imgNote}.`)
+      setStatus(`Đã nhập: «${payload.title || videoShortId}»${imgNote}.`)
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       setStatus(`Nhập thất bại: ${msg}`)
@@ -638,8 +638,8 @@ export default function WebBlogScreen() {
             }`}
             title={
               showDbImport
-                ? 'Đóng nhập từ story trên server'
-                : 'Nhập tiêu đề, nội dung dài và ảnh từ story đã lưu trên server (ChatGPT → Lưu story)'
+                ? 'Đóng nhập từ video ngắn trên server'
+                : 'Nhập tiêu đề, nội dung dài và ảnh từ video ngắn đã lưu trên server (ChatGPT → Lưu video ngắn)'
             }
             aria-label={showDbImport ? 'Đóng nhập từ server' : 'Nhập từ server'}
             aria-pressed={showDbImport}
@@ -661,34 +661,34 @@ export default function WebBlogScreen() {
         <div className="mt-2 rounded-xl border border-teal-300/30 bg-teal-500/10 p-2">
           <p className="text-[10px] text-slate-300">Nhập từ workspace local</p>
           {isLoadingLocalList ? (
-            <p className="mt-1 text-[10px] text-slate-400">Đang tải danh sách story…</p>
+            <p className="mt-1 text-[10px] text-slate-400">Đang tải danh sách video ngắn…</p>
           ) : (
             <>
               <div className="relative mt-1">
                 <FiSearch className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-500" />
                 <input
                   type="search"
-                  value={localStorySearch}
-                  onChange={(e) => setLocalStorySearch(e.target.value)}
+                  value={localVideoShortSearch}
+                  onChange={(e) => setLocalVideoShortSearch(e.target.value)}
                   placeholder="Tìm theo tên, thư mục, ngày lưu…"
                   className="w-full rounded-lg bg-slate-900/80 py-1.5 pl-7 pr-2 text-[11px] text-slate-100 outline-none placeholder:text-slate-500"
                 />
               </div>
               <p className="mt-1 text-[10px] text-slate-500">
-                {filteredLocalStoryEntries.length} / {localStoryEntries.length} story
-                {localStorySearch.trim() ? ' (đã lọc)' : ''}
+                {filteredLocalVideoShortEntries.length} / {localVideoShortEntries.length} video ngắn
+                {localVideoShortSearch.trim() ? ' (đã lọc)' : ''}
               </p>
               <select
                 value={selectedLocalFolder}
                 onChange={(e) => setSelectedLocalFolder(e.target.value)}
-                disabled={filteredLocalStoryEntries.length === 0}
+                disabled={filteredLocalVideoShortEntries.length === 0}
                 className="mt-1 max-h-40 w-full rounded-lg bg-slate-900/80 px-2 py-1.5 text-[11px] text-slate-100 outline-none disabled:opacity-50"
-                size={Math.min(6, Math.max(3, filteredLocalStoryEntries.length))}
+                size={Math.min(6, Math.max(3, filteredLocalVideoShortEntries.length))}
               >
-                {filteredLocalStoryEntries.length === 0 ? (
-                  <option value="">Không có story khớp tìm kiếm</option>
+                {filteredLocalVideoShortEntries.length === 0 ? (
+                  <option value="">Không có video ngắn khớp tìm kiếm</option>
                 ) : (
-                  filteredLocalStoryEntries.map((entry) => (
+                  filteredLocalVideoShortEntries.map((entry) => (
                     <option key={entry.folderName} value={entry.folderName}>
                       {entry.displayName}
                       {entry.savedAt ? ` — ${new Date(entry.savedAt).toLocaleString('vi-VN')}` : ''}
@@ -708,7 +708,7 @@ export default function WebBlogScreen() {
                   type="button"
                   onClick={() => void importFromLocalWorkspace()}
                   disabled={
-                    !selectedLocalFolder || isImportingLocal || filteredLocalStoryEntries.length === 0
+                    !selectedLocalFolder || isImportingLocal || filteredLocalVideoShortEntries.length === 0
                   }
                   className="cursor-pointer rounded-lg bg-teal-500/30 px-2 py-1 text-[10px] font-semibold text-teal-50 transition hover:bg-teal-500/40 disabled:cursor-not-allowed disabled:opacity-40"
                 >
@@ -723,10 +723,10 @@ export default function WebBlogScreen() {
         <div className="mt-2 rounded-xl border border-violet-300/30 bg-violet-500/10 p-2">
           <p className="text-[10px] text-slate-300">Nhập từ máy chủ</p>
           {isLoadingDbList ? (
-            <p className="mt-1 text-[10px] text-slate-400">Đang tải danh sách story…</p>
+            <p className="mt-1 text-[10px] text-slate-400">Đang tải danh sách video ngắn…</p>
           ) : dbStoriesQuery.isError ? (
             <p className="mt-1 text-[10px] text-rose-200">
-              Không tải được danh sách story. Thử bấm lại nút database sau.
+              Không tải được danh sách video ngắn. Thử bấm lại nút database sau.
             </p>
           ) : (
             <>
@@ -734,27 +734,27 @@ export default function WebBlogScreen() {
                 <FiSearch className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-500" />
                 <input
                   type="search"
-                  value={dbStorySearch}
-                  onChange={(e) => setDbStorySearch(e.target.value)}
-                  placeholder="Tìm theo tên story, ngày cập nhật…"
+                  value={dbVideoShortSearch}
+                  onChange={(e) => setDbVideoShortSearch(e.target.value)}
+                  placeholder="Tìm theo tên video ngắn, ngày cập nhật…"
                   className="w-full rounded-lg bg-slate-900/80 py-1.5 pl-7 pr-2 text-[11px] text-slate-100 outline-none placeholder:text-slate-500"
                 />
               </div>
               <p className="mt-1 text-[10px] text-slate-500">
-                {dbStoryPickerEntries.length} / {dbStoriesTotal} story
-                {dbStorySearch.trim() ? ' (đã lọc)' : ''}
+                {dbVideoShortPickerEntries.length} / {dbStoriesTotal} video ngắn
+                {dbVideoShortSearch.trim() ? ' (đã lọc)' : ''}
               </p>
               <select
-                value={selectedDbStoryId}
-                onChange={(e) => setSelectedDbStoryId(e.target.value)}
-                disabled={dbStoryPickerEntries.length === 0}
+                value={selectedDbVideoShortId}
+                onChange={(e) => setSelectedDbVideoShortId(e.target.value)}
+                disabled={dbVideoShortPickerEntries.length === 0}
                 className="mt-1 max-h-40 w-full rounded-lg bg-slate-900/80 px-2 py-1.5 text-[11px] text-slate-100 outline-none disabled:opacity-50"
-                size={Math.min(6, Math.max(3, dbStoryPickerEntries.length))}
+                size={Math.min(6, Math.max(3, dbVideoShortPickerEntries.length))}
               >
-                {dbStoryPickerEntries.length === 0 ? (
-                  <option value="">Không có story khớp tìm kiếm</option>
+                {dbVideoShortPickerEntries.length === 0 ? (
+                  <option value="">Không có video ngắn khớp tìm kiếm</option>
                 ) : (
-                  dbStoryPickerEntries.map((entry) => (
+                  dbVideoShortPickerEntries.map((entry) => (
                     <option key={entry.id} value={entry.id}>
                       {entry.displayName}
                       {entry.savedAt ? ` — ${new Date(entry.savedAt).toLocaleString('vi-VN')}` : ''}
@@ -773,7 +773,7 @@ export default function WebBlogScreen() {
                 <button
                   type="button"
                   onClick={() => void importFromDatabase()}
-                  disabled={!selectedDbStoryId || isImportingDb || dbStoryPickerEntries.length === 0}
+                  disabled={!selectedDbVideoShortId || isImportingDb || dbVideoShortPickerEntries.length === 0}
                   className="cursor-pointer rounded-lg bg-violet-500/30 px-2 py-1 text-[10px] font-semibold text-violet-50 transition hover:bg-violet-500/40 disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   {isImportingDb ? 'Đang nhập…' : 'Nhập'}

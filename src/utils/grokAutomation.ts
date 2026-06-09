@@ -377,7 +377,7 @@ export async function captureAndSaveGrokVideoLocally(
   return { grokUrl, localPath: saved.localPath, byteLength: saved.byteLength }
 }
 
-export async function fillGrokFromStoryPair(
+export async function fillGrokFromVideoShortPair(
   tabId: number,
   prompt: string,
   imageUrl: string,

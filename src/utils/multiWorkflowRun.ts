@@ -5,7 +5,7 @@ export type MultiWorkflowRunPayload = {
   source?: string
   multiWorkflowJobId?: string
   multiWorkflowRunId?: string
-  storySourceId?: string
+  videoShortSourceId?: string
   platform?: string
 }
 
@@ -53,8 +53,8 @@ export async function finalizeMultiWorkflowJobAfterWorkflowRun(
   workflowRunId: string,
   outcome: 'completed' | 'failed' | 'cancelled',
   extra?: {
-    storyId?: string
-    storySourceId?: string
+    videoShortId?: string
+    videoShortSourceId?: string
     errorMessage?: string
     result?: Record<string, unknown>
   },
@@ -71,11 +71,11 @@ export async function finalizeMultiWorkflowJobAfterWorkflowRun(
 
   if (outcome === 'completed') {
     await completeMultiWorkflowJob(jobId, {
-      storyId: extra?.storyId,
-      storySourceId: extra?.storySourceId,
+      videoShortId: extra?.videoShortId,
+      videoShortSourceId: extra?.videoShortSourceId,
       result: {
         ...(extra?.result || {}),
-        ...(extra?.storySourceId ? { storySourceId: extra.storySourceId } : {}),
+        ...(extra?.videoShortSourceId ? { videoShortSourceId: extra.videoShortSourceId } : {}),
         workflowRunId: id,
         multiWorkflowRunId: mw.multiWorkflowRunId,
       },

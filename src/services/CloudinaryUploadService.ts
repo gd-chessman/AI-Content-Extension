@@ -118,5 +118,5 @@ export async function uploadDataUrlsToCloudinary(
   return urls
 }
 
-export const uploadStoryImagesFromDataUrls = (dataUrls: string[]) =>
+export const uploadVideoShortImagesFromDataUrls = (dataUrls: string[]) =>
   uploadDataUrlsToCloudinary(dataUrls, { subfolder: 'stories', resourceType: 'image' })

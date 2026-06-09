@@ -4,9 +4,9 @@
  */
 
 import {
-  DEFAULT_STORIES_FOLDER_SEGMENT,
+  DEFAULT_VIDEO_SHORTS_FOLDER_SEGMENT,
   ensureDirectoryWritable,
-  ensureStoryWorkspaceChildDirs,
+  ensureVideoShortWorkspaceChildDirs,
   sanitizeWorkspaceFolderSegment,
 } from './localWorkspacePersistence'
 
@@ -563,7 +563,7 @@ export type SaveSplitImageResult =
       reason?: 'ok'
       destination?: 'workspace' | 'directory' | 'downloads'
       directoryName?: string
-      /** Ví dụ stories/My-Story/images/part-1-abc.png */
+      /** Ví dụ stories/My-VideoShort/images/part-1-abc.png */
       relativePath?: string
     }
   | { saved: false; skipped: true; reason: 'duplicate' }
@@ -626,12 +626,12 @@ export async function saveCopiedSplitImageIfNew(
     if (!w) return { ok: false }
     const rootOk = await ensureDirectoryWritable(w.rootHandle)
     if (!rootOk) return { ok: false }
-    const storiesSeg = sanitizeWorkspaceFolderSegment(w.storiesFolderSegment, DEFAULT_STORIES_FOLDER_SEGMENT)
-    const storySeg = sanitizeWorkspaceFolderSegment(w.storyFolderSegment, 'unnamed-story')
-    const stories = await w.rootHandle.getDirectoryHandle(storiesSeg, { create: true })
-    const storyDir = await stories.getDirectoryHandle(storySeg, { create: true })
-    await ensureStoryWorkspaceChildDirs(storyDir)
-    const images = await storyDir.getDirectoryHandle('images', { create: true })
+    const videoShortsSeg = sanitizeWorkspaceFolderSegment(w.storiesFolderSegment, DEFAULT_VIDEO_SHORTS_FOLDER_SEGMENT)
+    const videoShortSeg = sanitizeWorkspaceFolderSegment(w.storyFolderSegment, 'unnamed-story')
+    const stories = await w.rootHandle.getDirectoryHandle(videoShortsSeg, { create: true })
+    const videoShortDir = await stories.getDirectoryHandle(videoShortSeg, { create: true })
+    await ensureVideoShortWorkspaceChildDirs(videoShortDir)
+    const images = await videoShortDir.getDirectoryHandle('images', { create: true })
     const name = `part-${part === 'left' ? '1' : '2'}-${safeHash}.png`
     const fileHandle = await images.getFileHandle(name, { create: true })
     const writable = await fileHandle.createWritable()
@@ -640,7 +640,7 @@ export async function saveCopiedSplitImageIfNew(
     } finally {
       await writable.close()
     }
-    return { ok: true, relativePath: `${storiesSeg}/${storySeg}/images/${name}` }
+    return { ok: true, relativePath: `${videoShortsSeg}/${videoShortSeg}/images/${name}` }
   }
 
   const tryAnchorDownloadBlob = () => {

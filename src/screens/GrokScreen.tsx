@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { FiAlertTriangle, FiCheck, FiGlobe, FiImage, FiInfo, FiPlay, FiRefreshCw, FiRotateCcw, FiSquare } from 'react-icons/fi'
 import translate from 'translate'
 import { useAuth } from '@/hooks/useAuth'
-import { getLatestGrokReadyStory, getStoryById, patchStory } from '@/services/StoryService'
+import { getLatestGrokReadyVideoShort, getVideoShortById, patchVideoShort } from '@/services/VideoShortService'
 import {
   createStepRun,
   createWorkflowRun,
@@ -17,13 +17,13 @@ import {
 } from '@/services/WorkflowService'
 import {
   captureAndSaveGrokVideoLocally,
-  fillGrokFromStoryPair,
+  fillGrokFromVideoShortPair,
   listGrokVideoUrlsOnPage,
   pickGrokTab,
 } from '@/utils/grokAutomation'
 import {
-  ensureStoryWorkspaceLayout,
-  getStoriesFolderSegmentFromStorage,
+  ensureVideoShortWorkspaceLayout,
+  getVideoShortsFolderSegmentFromStorage,
   resolveWritableContentRootDirectory,
   sanitizeWorkspaceFolderSegment,
 } from '@/utils/localWorkspacePersistence'
@@ -35,7 +35,7 @@ import {
 } from '@/utils/multiWorkflowRun'
 import {
   isGrokCaptureVideoLinkStep,
-  isGrokFillFromStoryStep,
+  isGrokFillFromVideoShortStep,
   readGrokPairIndex,
   readGrokTimeoutMs,
 } from '@/utils/grokWorkflowSteps'
@@ -140,7 +140,7 @@ export default function GrokScreen() {
   const runningGrokWorkflowRunIdRef = useRef('')
   const isGrokWorkflowRunningRef = useRef(false)
   const lockedGrokTabIdRef = useRef(0)
-  const grokPipelineStoryIdRef = useRef('')
+  const grokPipelineVideoShortIdRef = useRef('')
   const grokCapturedVideoUrlsRef = useRef<string[]>([])
   const grokVideoBaselineRef = useRef<string[]>([])
   const pendingGrokRunsRef = useRef<Array<{ runId: string; workflowId: string }>>([])
@@ -232,7 +232,7 @@ export default function GrokScreen() {
     lockedGrokTabIdRef.current = target.id
 
     try {
-      const injected = await fillGrokFromStoryPair(target.id, trimmedPrompt, imageDataUrl, {
+      const injected = await fillGrokFromVideoShortPair(target.id, trimmedPrompt, imageDataUrl, {
         submit: options?.submit !== false,
       })
       const submitted = options?.submit !== false
@@ -261,17 +261,17 @@ export default function GrokScreen() {
     }
   }
 
-  const resolveStoryIdForGrok = async (workflowRunId: string): Promise<string> => {
-    const cached = grokPipelineStoryIdRef.current.trim()
+  const resolveVideoShortIdForGrok = async (workflowRunId: string): Promise<string> => {
+    const cached = grokPipelineVideoShortIdRef.current.trim()
     if (cached) return cached
 
     if (workflowRunId) {
       try {
         const run = await getWorkflowRunById(workflowRunId)
         const payload = (run.payload || {}) as Record<string, unknown>
-        const fromPayload = String(payload.storyId || '').trim()
+        const fromPayload = String(payload.videoShortId || '').trim()
         if (fromPayload) {
-          grokPipelineStoryIdRef.current = fromPayload
+          grokPipelineVideoShortIdRef.current = fromPayload
           return fromPayload
         }
       } catch {
@@ -280,10 +280,10 @@ export default function GrokScreen() {
     }
 
     try {
-      const latest = await getLatestGrokReadyStory({ maxAgeMs: 3_600_000 })
+      const latest = await getLatestGrokReadyVideoShort({ maxAgeMs: 3_600_000 })
       const fromLatest = (latest._id || '').trim()
       if (fromLatest) {
-        grokPipelineStoryIdRef.current = fromLatest
+        grokPipelineVideoShortIdRef.current = fromLatest
         return fromLatest
       }
     } catch {
@@ -293,14 +293,14 @@ export default function GrokScreen() {
     return ''
   }
 
-  const loadStoryPair = async (storyId: string, index: number) => {
-    const story = await getStoryById(storyId)
+  const loadVideoShortPair = async (videoShortId: string, index: number) => {
+    const story = await getVideoShortById(videoShortId)
     const prompts = (story.videoPrompts || []).map((s) => s.trim()).filter(Boolean)
     const images = (story.imageUrls || []).map((s) => s.trim()).filter(Boolean)
     const prompt = prompts[index] || prompts[0] || ''
     const imageUrl = images[index] || images[0] || ''
-    if (!prompt) throw new Error('Story không có videoPrompt — chạy workflow ChatGPT trước.')
-    if (!imageUrl) throw new Error('Story không có imageUrl — chạy bước tạo ảnh ChatGPT trước.')
+    if (!prompt) throw new Error('Video ngắn không có videoPrompt — chạy workflow ChatGPT trước.')
+    if (!imageUrl) throw new Error('Video ngắn không có imageUrl — chạy bước tạo ảnh ChatGPT trước.')
     return { story, prompt, imageUrl }
   }
 
@@ -310,21 +310,21 @@ export default function GrokScreen() {
     const tabId = lockedGrokTabIdRef.current
     if (!tabId) throw new Error('Chưa khóa tab Grok.')
 
-    const storyId = await resolveStoryIdForGrok(runningGrokWorkflowRunIdRef.current)
-    if (!storyId) {
+    const videoShortId = await resolveVideoShortIdForGrok(runningGrokWorkflowRunIdRef.current)
+    if (!videoShortId) {
       throw new Error(
-        'Không tìm thấy Story có ảnh + videoPrompt trong 1 giờ gần đây — chạy workflow ChatGPT trước.',
+        'Không tìm thấy video ngắn có ảnh + videoPrompt trong 1 giờ gần đây — chạy workflow ChatGPT trước.',
       )
     }
 
     const pairIndex = readGrokPairIndex(step.inputSchema)
 
-    if (isGrokFillFromStoryStep(step)) {
-      const { prompt, imageUrl } = await loadStoryPair(storyId, pairIndex)
+    if (isGrokFillFromVideoShortStep(step)) {
+      const { prompt, imageUrl } = await loadVideoShortPair(videoShortId, pairIndex)
       setLastPrompt(prompt)
       setLastImageDataUrl(imageUrl)
       setGrokWorkflowStatus(`${step.label}: điền ảnh + VIDEO ${pairIndex + 1} và Enter…`)
-      await fillGrokFromStoryPair(tabId, prompt, imageUrl, { submit: true })
+      await fillGrokFromVideoShortPair(tabId, prompt, imageUrl, { submit: true })
       grokVideoBaselineRef.current = await listGrokVideoUrlsOnPage(tabId)
       return { filled: true, pairIndex, imageUrl, promptLength: prompt.length }
     }
@@ -337,18 +337,18 @@ export default function GrokScreen() {
         throw new Error('Cần chọn thư mục workspace trên máy để lưu video Grok.')
       }
 
-      const storyForFolder = await getStoryById(storyId)
+      const videoShortForFolder = await getVideoShortById(videoShortId)
       const folderSegment = sanitizeWorkspaceFolderSegment(
-        (storyForFolder.name || '').trim(),
-        `story-${storyId.replace(/[^a-zA-Z0-9]/g, '').slice(-12) || 'id'}`,
+        (videoShortForFolder.name || '').trim(),
+        `story-${videoShortId.replace(/[^a-zA-Z0-9]/g, '').slice(-12) || 'id'}`,
       )
-      const storiesSeg = await getStoriesFolderSegmentFromStorage(
-        (globalThis as { chrome?: { storage?: { local?: Parameters<typeof getStoriesFolderSegmentFromStorage>[0] } } })
+      const videoShortsSeg = await getVideoShortsFolderSegmentFromStorage(
+        (globalThis as { chrome?: { storage?: { local?: Parameters<typeof getVideoShortsFolderSegmentFromStorage>[0] } } })
           .chrome?.storage?.local,
       )
-      const dirs = await ensureStoryWorkspaceLayout(root, storiesSeg, folderSegment)
+      const dirs = await ensureVideoShortWorkspaceLayout(root, videoShortsSeg, folderSegment)
       const filename = `video-${pairIndex + 1}.mp4`
-      const relativePath = `${storiesSeg}/${folderSegment}/videos/${filename}`
+      const relativePath = `${videoShortsSeg}/${folderSegment}/videos/${filename}`
 
       setGrokWorkflowStatus(`${step.label}: chờ video Grok (tối đa ${Math.round(timeoutMs / 1000)}s)…`)
       const { grokUrl, localPath, byteLength } = await captureAndSaveGrokVideoLocally(
@@ -363,11 +363,11 @@ export default function GrokScreen() {
 
       grokVideoBaselineRef.current = [...grokVideoBaselineRef.current, grokUrl].filter(Boolean)
 
-      const story = await getStoryById(storyId)
+      const story = await getVideoShortById(videoShortId)
       const merged = [...(story.videoStorageAddresses || [])]
       while (merged.length <= pairIndex) merged.push('')
       merged[pairIndex] = localPath
-      await patchStory(storyId, { videoStorageAddresses: merged })
+      await patchVideoShort(videoShortId, { videoStorageAddresses: merged })
       grokCapturedVideoUrlsRef.current = merged
 
       const sizeMb = byteLength > 0 ? ` (${(byteLength / (1024 * 1024)).toFixed(1)} MB)` : ''
@@ -424,7 +424,7 @@ export default function GrokScreen() {
     let mwErrorMessage = ''
 
     try {
-      grokPipelineStoryIdRef.current = ''
+      grokPipelineVideoShortIdRef.current = ''
 
       const grokTab = await pickGrokTab(true)
       lockedGrokTabIdRef.current = grokTab?.id || 0
@@ -445,8 +445,8 @@ export default function GrokScreen() {
         try {
           const existingRun = await getWorkflowRunById(workflowRunId)
           const payload = (existingRun.payload || {}) as Record<string, unknown>
-          const storyId = String(payload.storyId || '').trim()
-          if (storyId) grokPipelineStoryIdRef.current = storyId
+          const videoShortId = String(payload.videoShortId || '').trim()
+          if (videoShortId) grokPipelineVideoShortIdRef.current = videoShortId
         } catch {
           /* ignore */
         }
@@ -543,7 +543,7 @@ export default function GrokScreen() {
       if (workflowRunId && mwOutcome && !workflowCancelledRemotelyRef.current) {
         try {
           await finalizeMultiWorkflowJobAfterWorkflowRun(workflowRunId, mwOutcome, {
-            storyId: grokPipelineStoryIdRef.current.trim() || undefined,
+            videoShortId: grokPipelineVideoShortIdRef.current.trim() || undefined,
             errorMessage: mwErrorMessage,
             result: {
               videoStorageAddresses: grokCapturedVideoUrlsRef.current,
@@ -557,7 +557,7 @@ export default function GrokScreen() {
       grokWorkflowStopRef.current = false
       lockedGrokTabIdRef.current = 0
       runningGrokWorkflowRunIdRef.current = ''
-      grokPipelineStoryIdRef.current = ''
+      grokPipelineVideoShortIdRef.current = ''
       grokCapturedVideoUrlsRef.current = []
       isGrokWorkflowRunningRef.current = false
       setIsGrokWorkflowRunning(false)

@@ -11,8 +11,8 @@ export const CONTENT_ROOT_HANDLE_KEY = 'contentRootDirectory'
 /** Cũ: thư mục lưu ảnh cắt đôi trực tiếp — migrate thành thư mục gốc workspace. */
 const LEGACY_SPLIT_IMAGE_HANDLE_KEY = 'splitImageSaveDirectory'
 
-export const DEFAULT_STORIES_FOLDER_SEGMENT = 'stories'
-export const WORKSPACE_STORIES_FOLDER_STORAGE_KEY = 'workspaceStoriesFolderSegment'
+export const DEFAULT_VIDEO_SHORTS_FOLDER_SEGMENT = 'video-shorts'
+export const WORKSPACE_VIDEO_SHORTS_FOLDER_STORAGE_KEY = 'workspaceStoriesFolderSegment'
 
 /** Truyền showDirectoryPicker — Chrome gợi nhớ thư mục. */
 export const WORKSPACE_ROOT_PICKER_ID = 'aicontent-workspace-root'
@@ -181,9 +181,9 @@ export async function resolveWritableContentRootDirectory(options?: {
 }
 
 /** Tạo images / content / info trong thư mục một story. */
-export async function ensureStoryWorkspaceChildDirs(storyDir: FileSystemDirectoryHandle): Promise<void> {
+export async function ensureVideoShortWorkspaceChildDirs(videoShortDir: FileSystemDirectoryHandle): Promise<void> {
   for (const name of WORKSPACE_STORY_SUBDIRS) {
-    await storyDir.getDirectoryHandle(name, { create: true })
+    await videoShortDir.getDirectoryHandle(name, { create: true })
   }
 }
 
@@ -203,34 +203,34 @@ type ChromeLocalStorage = {
   set?: (items: Record<string, unknown>, callback?: () => void) => void
 }
 
-export async function getStoriesFolderSegmentFromStorage(storage: ChromeLocalStorage | undefined): Promise<string> {
-  const fallback = DEFAULT_STORIES_FOLDER_SEGMENT
+export async function getVideoShortsFolderSegmentFromStorage(storage: ChromeLocalStorage | undefined): Promise<string> {
+  const fallback = DEFAULT_VIDEO_SHORTS_FOLDER_SEGMENT
   const area = storage
   const get = area?.get
   if (!area || !get) return fallback
   return new Promise((resolve) => {
-    get.call(area, [WORKSPACE_STORIES_FOLDER_STORAGE_KEY], (items) => {
-      const v = String(items[WORKSPACE_STORIES_FOLDER_STORAGE_KEY] ?? '').trim()
+    get.call(area, [WORKSPACE_VIDEO_SHORTS_FOLDER_STORAGE_KEY], (items) => {
+      const v = String(items[WORKSPACE_VIDEO_SHORTS_FOLDER_STORAGE_KEY] ?? '').trim()
       resolve(sanitizeWorkspaceFolderSegment(v || fallback, fallback))
     })
   })
 }
 
-export async function setStoriesFolderSegmentInStorage(
+export async function setVideoShortsFolderSegmentInStorage(
   storage: ChromeLocalStorage | undefined,
   value: string,
 ): Promise<void> {
-  const seg = sanitizeWorkspaceFolderSegment(value.trim(), DEFAULT_STORIES_FOLDER_SEGMENT)
+  const seg = sanitizeWorkspaceFolderSegment(value.trim(), DEFAULT_VIDEO_SHORTS_FOLDER_SEGMENT)
   const area = storage
   const set = area?.set
   if (!area || !set) return
   await new Promise<void>((resolve) => {
-    set.call(area, { [WORKSPACE_STORIES_FOLDER_STORAGE_KEY]: seg }, () => resolve())
+    set.call(area, { [WORKSPACE_VIDEO_SHORTS_FOLDER_STORAGE_KEY]: seg }, () => resolve())
   })
 }
 
-export type StoryWorkspaceDirs = {
-  storyDir: FileSystemDirectoryHandle
+export type VideoShortWorkspaceDirs = {
+  videoShortDir: FileSystemDirectoryHandle
   imagesDir: FileSystemDirectoryHandle
   contentDir: FileSystemDirectoryHandle
   infoDir: FileSystemDirectoryHandle
@@ -238,25 +238,25 @@ export type StoryWorkspaceDirs = {
 }
 
 /** Gốc → [stories] / [tên story] / images | content | info (tạo nếu thiếu). */
-export async function ensureStoryWorkspaceLayout(
+export async function ensureVideoShortWorkspaceLayout(
   root: FileSystemDirectoryHandle,
-  storiesSeg: string,
+  videoShortsSeg: string,
   storyFolderSeg: string,
-): Promise<StoryWorkspaceDirs> {
+): Promise<VideoShortWorkspaceDirs> {
   const rootOk = await queryDirectoryWritable(root)
   if (!rootOk) {
     throw new Error('PERMISSION_REQUIRED')
   }
-  const stories = sanitizeWorkspaceFolderSegment(storiesSeg, DEFAULT_STORIES_FOLDER_SEGMENT)
-  const storyName = sanitizeWorkspaceFolderSegment(storyFolderSeg, 'unnamed-story')
+  const stories = sanitizeWorkspaceFolderSegment(videoShortsSeg, DEFAULT_VIDEO_SHORTS_FOLDER_SEGMENT)
+  const videoShortName = sanitizeWorkspaceFolderSegment(storyFolderSeg, 'unnamed-story')
   const storiesDir = await root.getDirectoryHandle(stories, { create: true })
-  const storyDir = await storiesDir.getDirectoryHandle(storyName, { create: true })
-  await ensureStoryWorkspaceChildDirs(storyDir)
-  const imagesDir = await storyDir.getDirectoryHandle('images', { create: true })
-  const contentDir = await storyDir.getDirectoryHandle('content', { create: true })
-  const infoDir = await storyDir.getDirectoryHandle('info', { create: true })
-  const videosDir = await storyDir.getDirectoryHandle('videos', { create: true })
-  return { storyDir, imagesDir, contentDir, infoDir, videosDir }
+  const videoShortDir = await storiesDir.getDirectoryHandle(videoShortName, { create: true })
+  await ensureVideoShortWorkspaceChildDirs(videoShortDir)
+  const imagesDir = await videoShortDir.getDirectoryHandle('images', { create: true })
+  const contentDir = await videoShortDir.getDirectoryHandle('content', { create: true })
+  const infoDir = await videoShortDir.getDirectoryHandle('info', { create: true })
+  const videosDir = await videoShortDir.getDirectoryHandle('videos', { create: true })
+  return { videoShortDir, imagesDir, contentDir, infoDir, videosDir }
 }
 
 export async function writeUtf8File(parent: FileSystemDirectoryHandle, filename: string, text: string): Promise<void> {
@@ -299,10 +299,10 @@ export async function ensureDirectoryReadable(
   return state === 'granted'
 }
 
-export type LocalStoryBundleWritePayload = {
-  storiesSeg: string
+export type LocalVideoShortBundleWritePayload = {
+  videoShortsSeg: string
   folderSegment: string
-  storyId: string
+  videoShortId: string
   titleDisplay: string
   sourceReelUrl: string
   workflowId: string
@@ -315,7 +315,7 @@ export type LocalStoryBundleWritePayload = {
   usedStaleSplitFallback: boolean
 }
 
-function buildLocalSaveImageNote(payload: LocalStoryBundleWritePayload): string {
+function buildLocalSaveImageNote(payload: LocalVideoShortBundleWritePayload): string {
   const { splitGeneratedImages, left, right, usedStaleSplitFallback } = payload
   if (splitGeneratedImages) {
     if (left && right) {
@@ -333,17 +333,17 @@ function buildLocalSaveImageNote(payload: LocalStoryBundleWritePayload): string 
   return ' (chưa có ảnh — bỏ qua images)'
 }
 
-export async function writeStoryBundleToWorkspace(
+export async function writeVideoShortBundleToWorkspace(
   root: FileSystemDirectoryHandle,
-  payload: LocalStoryBundleWritePayload,
-): Promise<{ storiesSeg: string; folderSegment: string; imageNote: string }> {
-  const dirs = await ensureStoryWorkspaceLayout(root, payload.storiesSeg, payload.folderSegment)
+  payload: LocalVideoShortBundleWritePayload,
+): Promise<{ videoShortsSeg: string; folderSegment: string; imageNote: string }> {
+  const dirs = await ensureVideoShortWorkspaceLayout(root, payload.videoShortsSeg, payload.folderSegment)
 
   await writeUtf8File(dirs.contentDir, 'noi-dung-ngan.txt', payload.shortText)
   await writeUtf8File(dirs.contentDir, 'noi-dung-dai.txt', payload.longText)
 
   const infoPayload = {
-    storyId: payload.storyId,
+    videoShortId: payload.videoShortId,
     title: payload.titlePlain,
     storyDisplayName: payload.titleDisplay,
     sourceReelUrl: payload.sourceReelUrl || '',
@@ -363,7 +363,7 @@ export async function writeStoryBundleToWorkspace(
   }
 
   return {
-    storiesSeg: payload.storiesSeg,
+    videoShortsSeg: payload.videoShortsSeg,
     folderSegment: payload.folderSegment,
     imageNote: buildLocalSaveImageNote(payload),
   }
@@ -398,7 +398,7 @@ function blobToDataUrl(blob: Blob): Promise<string> {
   })
 }
 
-export type LocalStoryFolderEntry = {
+export type LocalVideoShortFolderEntry = {
   folderName: string
   displayName: string
   savedAt: string | null
@@ -420,13 +420,13 @@ async function* iterateDirectoryEntries(
 }
 
 /** Liệt kê thư mục story trong workspace (mới lưu trước). */
-export async function listLocalStoryFolders(
+export async function listLocalVideoShortFolders(
   root: FileSystemDirectoryHandle,
-  storiesSeg: string,
-): Promise<LocalStoryFolderEntry[]> {
+  videoShortsSeg: string,
+): Promise<LocalVideoShortFolderEntry[]> {
   const ok = await ensureDirectoryReadable(root)
   if (!ok) throw new Error('Không có quyền đọc thư mục gốc workspace.')
-  const storiesName = sanitizeWorkspaceFolderSegment(storiesSeg, DEFAULT_STORIES_FOLDER_SEGMENT)
+  const storiesName = sanitizeWorkspaceFolderSegment(videoShortsSeg, DEFAULT_VIDEO_SHORTS_FOLDER_SEGMENT)
   let storiesDir: FileSystemDirectoryHandle
   try {
     storiesDir = await root.getDirectoryHandle(storiesName)
@@ -434,14 +434,14 @@ export async function listLocalStoryFolders(
     return []
   }
 
-  const entries: LocalStoryFolderEntry[] = []
+  const entries: LocalVideoShortFolderEntry[] = []
   for await (const [name, handle] of iterateDirectoryEntries(storiesDir)) {
     if (handle.kind !== 'directory') continue
-    const storyDir = handle as FileSystemDirectoryHandle
+    const videoShortDir = handle as FileSystemDirectoryHandle
     let displayName = name
     let savedAt: string | null = null
     try {
-      const infoDir = await storyDir.getDirectoryHandle('info')
+      const infoDir = await videoShortDir.getDirectoryHandle('info')
       const metaRaw = await readUtf8FileIfExists(infoDir, 'meta.json')
       if (metaRaw) {
         const meta = JSON.parse(metaRaw) as {
@@ -469,7 +469,7 @@ export async function listLocalStoryFolders(
   return entries
 }
 
-export type LoadedLocalStoryBundle = {
+export type LoadedLocalVideoShortBundle = {
   folderName: string
   title: string
   shortContent: string
@@ -480,29 +480,29 @@ export type LoadedLocalStoryBundle = {
 }
 
 /** Đọc bundle đã lưu (content + images + meta) để điền WebBlog. */
-export async function loadLocalStoryBundle(
+export async function loadLocalVideoShortBundle(
   root: FileSystemDirectoryHandle,
-  storiesSeg: string,
+  videoShortsSeg: string,
   storyFolderName: string,
   injectImages: (content: string, image1: string, image2: string) => string,
-): Promise<LoadedLocalStoryBundle> {
+): Promise<LoadedLocalVideoShortBundle> {
   const ok = await ensureDirectoryReadable(root)
   if (!ok) throw new Error('Không có quyền đọc thư mục gốc workspace.')
-  const storiesName = sanitizeWorkspaceFolderSegment(storiesSeg, DEFAULT_STORIES_FOLDER_SEGMENT)
-  const storyName = sanitizeWorkspaceFolderSegment(storyFolderName, 'unnamed-story')
+  const storiesName = sanitizeWorkspaceFolderSegment(videoShortsSeg, DEFAULT_VIDEO_SHORTS_FOLDER_SEGMENT)
+  const videoShortName = sanitizeWorkspaceFolderSegment(storyFolderName, 'unnamed-story')
   const storiesDir = await root.getDirectoryHandle(storiesName)
-  const storyDir = await storiesDir.getDirectoryHandle(storyName)
+  const videoShortDir = await storiesDir.getDirectoryHandle(videoShortName)
 
-  const contentDir = await storyDir.getDirectoryHandle('content')
+  const contentDir = await videoShortDir.getDirectoryHandle('content')
   const longContent = (await readUtf8FileIfExists(contentDir, 'noi-dung-dai.txt'))?.trim() || ''
   const shortContent = (await readUtf8FileIfExists(contentDir, 'noi-dung-ngan.txt'))?.trim() || ''
   if (!longContent) {
-    throw new Error('Thiếu noi-dung-dai.txt trong thư mục story.')
+    throw new Error('Thiếu noi-dung-dai.txt trong thư mục video ngắn.')
   }
 
   let title = ''
   try {
-    const infoDir = await storyDir.getDirectoryHandle('info')
+    const infoDir = await videoShortDir.getDirectoryHandle('info')
     const metaRaw = await readUtf8FileIfExists(infoDir, 'meta.json')
     if (metaRaw) {
       const meta = JSON.parse(metaRaw) as { title?: string; storyDisplayName?: string }
@@ -511,12 +511,12 @@ export async function loadLocalStoryBundle(
   } catch {
     /* ignore */
   }
-  if (!title) title = storyName
+  if (!title) title = videoShortName
 
   let image1 = ''
   let image2 = ''
   try {
-    const imagesDir = await storyDir.getDirectoryHandle('images')
+    const imagesDir = await videoShortDir.getDirectoryHandle('images')
     const b1 = await readBlobFileIfExists(imagesDir, 'anh-1.png')
     const b2 = await readBlobFileIfExists(imagesDir, 'anh-2.png')
     if (b1) image1 = await blobToDataUrl(b1)
@@ -535,7 +535,7 @@ export async function loadLocalStoryBundle(
   }
 
   return {
-    folderName: storyName,
+    folderName: videoShortName,
     title,
     shortContent,
     longContent,

@@ -4,11 +4,11 @@ import { getMe, logoutSession, updateMe } from '@/services/AuthService'
 import { useAuth } from '@/hooks/useAuth'
 import {
   clearContentRootDirectoryHandle,
-  DEFAULT_STORIES_FOLDER_SEGMENT,
-  getStoriesFolderSegmentFromStorage,
+  DEFAULT_VIDEO_SHORTS_FOLDER_SEGMENT,
+  getVideoShortsFolderSegmentFromStorage,
   loadContentRootDirectoryHandle,
   persistContentRootDirectoryHandle,
-  setStoriesFolderSegmentInStorage,
+  setVideoShortsFolderSegmentInStorage,
   WORKSPACE_ROOT_PICKER_ID,
   WORKSPACE_STORY_SUBDIRS,
 } from '@/utils/localWorkspacePersistence'
@@ -39,7 +39,7 @@ export default function ProfileScreen({ onLogout }: { onLogout: () => void }) {
   const [activeTab, setActiveTab] = useState<'overview' | 'config'>('overview')
   const [status, setStatus] = useState('')
   const [workspaceRootLabel, setWorkspaceRootLabel] = useState('')
-  const [storiesFolderInput, setStoriesFolderInput] = useState(DEFAULT_STORIES_FOLDER_SEGMENT)
+  const [storiesFolderInput, setStoriesFolderInput] = useState(DEFAULT_VIDEO_SHORTS_FOLDER_SEGMENT)
   const [isSavingWorkspaceStories, setIsSavingWorkspaceStories] = useState(false)
   const [shortCutMode, setShortCutMode] = useState<ShortContentCutMode>(DEFAULT_SHORT_CONTENT_CUT_MODE)
   const [shortMinPercentInput, setShortMinPercentInput] = useState(String(DEFAULT_SHORT_CONTENT_MIN_PERCENT))
@@ -201,10 +201,10 @@ export default function ProfileScreen({ onLogout }: { onLogout: () => void }) {
         setWorkspaceRootLabel('')
       }
       try {
-        const seg = await getStoriesFolderSegmentFromStorage(getChrome()?.storage?.local)
+        const seg = await getVideoShortsFolderSegmentFromStorage(getChrome()?.storage?.local)
         setStoriesFolderInput(seg)
       } catch {
-        setStoriesFolderInput(DEFAULT_STORIES_FOLDER_SEGMENT)
+        setStoriesFolderInput(DEFAULT_VIDEO_SHORTS_FOLDER_SEGMENT)
       }
       try {
         const cfg = await getShortContentCutConfigFromStorage(getChrome()?.storage?.local)
@@ -289,8 +289,8 @@ export default function ProfileScreen({ onLogout }: { onLogout: () => void }) {
     if (isSavingWorkspaceStories) return
     setIsSavingWorkspaceStories(true)
     try {
-      await setStoriesFolderSegmentInStorage(getChrome()?.storage?.local, storiesFolderInput)
-      const seg = await getStoriesFolderSegmentFromStorage(getChrome()?.storage?.local)
+      await setVideoShortsFolderSegmentInStorage(getChrome()?.storage?.local, storiesFolderInput)
+      const seg = await getVideoShortsFolderSegmentFromStorage(getChrome()?.storage?.local)
       setStoriesFolderInput(seg)
       setStatus(`Đã lưu tên thư mục stories: ${seg}`)
     } catch (e) {
@@ -501,7 +501,7 @@ export default function ProfileScreen({ onLogout }: { onLogout: () => void }) {
               <p className="mt-1 text-[11px] leading-relaxed text-slate-400">
                 Chọn một thư mục gốc trên máy. Bên trong sẽ dùng cấu trúc:{' '}
                 <span className="text-slate-200">
-                  [gốc] / [tên thư mục stories] / [tên story] / {WORKSPACE_STORY_SUBDIRS.join(' · ')}
+                  [gốc] / [tên thư mục video ngắn] / [tên video ngắn] / {WORKSPACE_STORY_SUBDIRS.join(' · ')}
                 </span>
                 . Ảnh cắt đôi từ ChatGPT được ghi vào <code className="text-emerald-200/90">images</code>; các thư mục{' '}
                 <code className="text-emerald-200/90">content</code> và <code className="text-emerald-200/90">info</code>{' '}
@@ -538,17 +538,17 @@ export default function ProfileScreen({ onLogout }: { onLogout: () => void }) {
             </div>
 
             <div className="rounded-xl border border-white/10 bg-slate-900/50 p-3">
-              <p className="mb-1 text-[11px] font-semibold text-slate-100">Thư mục chứa các story</p>
+              <p className="mb-1 text-[11px] font-semibold text-slate-100">Thư mục chứa các video ngắn</p>
               <p className="mb-2 text-[10px] text-slate-400">
-                Tên thư mục con ngay dưới thư mục gốc (mặc định <code className="text-slate-200">stories</code>). Mỗi
-                story một thư mục con theo tên story trên hệ thống.
+                Tên thư mục con ngay dưới thư mục gốc (mặc định <code className="text-slate-200">video-shorts</code>). Mỗi
+                video ngắn một thư mục con theo tên trên hệ thống.
               </p>
               <div className="flex flex-wrap items-center gap-2">
                 <input
                   type="text"
                   value={storiesFolderInput}
                   onChange={(event) => setStoriesFolderInput(event.target.value)}
-                  placeholder={DEFAULT_STORIES_FOLDER_SEGMENT}
+                  placeholder={DEFAULT_VIDEO_SHORTS_FOLDER_SEGMENT}
                   className="min-w-0 flex-1 rounded-md border border-white/10 bg-slate-800/80 px-2 py-1.5 text-[11px] text-slate-100 outline-none placeholder:text-slate-500"
                   spellCheck={false}
                 />

@@ -31,11 +31,11 @@ import {
   updateFanpage,
 } from '@/services/FanpageService'
 import {
-  checkStorySourceForReel,
-  getMyStorySources,
-  skipStorySourceFromReel,
-  syncStorySourceFromReel,
-} from '@/services/StoryService'
+  checkVideoShortSourceForReel,
+  getMyVideoShortSources,
+  skipVideoShortSourceFromReel,
+  syncVideoShortSourceFromReel,
+} from '@/services/VideoShortService'
 import { normalizeStepDisplayMode } from '@/utils/stepDisplayMode'
 import {
   createStepRun,
@@ -297,7 +297,7 @@ export default function FacebookScreen() {
   const [copyStatus, setCopyStatus] = useState<'idle' | 'ok' | 'error'>('idle')
   const [isTranslating, setIsTranslating] = useState(false)
   const [translateStatus, setTranslateStatus] = useState<'idle' | 'loading' | 'ok' | 'error'>('idle')
-  const [storySaveStatus, setStorySaveStatus] = useState<'idle' | 'saving' | 'ok' | 'error'>('idle')
+  const [storySaveStatus, setVideoShortSaveStatus] = useState<'idle' | 'saving' | 'ok' | 'error'>('idle')
   const [isContentDirty, setIsContentDirty] = useState(false)
   const [contentReelLoadStatus, setContentReelLoadStatus] = useState('')
   /** Có ít nhất một tab cửa sổ hiện tại đang mở facebook.com/reel/… */
@@ -355,42 +355,42 @@ export default function FacebookScreen() {
   }, [selectedReel?.url])
 
   const { data: reelSavedCheck } = useQuery({
-    queryKey: ['stories', 'sources', 'check-reel', checkReelQueryKey],
-    queryFn: () => checkStorySourceForReel(selectedReel!.url.trim()),
+    queryKey: ['video-shorts', 'sources', 'check-reel', checkReelQueryKey],
+    queryFn: () => checkVideoShortSourceForReel(selectedReel!.url.trim()),
     enabled: Boolean(checkReelQueryKey),
     staleTime: 15_000,
     refetchOnMount: 'always',
   })
-  /** Đã có StorySource cho reel (GET …/sources/check-reel). */
-  const hasStorySourceSynced = reelSavedCheck?.saved === true
+  /** Đã có VideoShortSource cho reel (GET …/sources/check-reel). */
+  const hasVideoShortSourceSynced = reelSavedCheck?.saved === true
   /** Hiển thị tick khi đã có nguồn trên server hoặc vừa lưu xong. */
-  const reelSaveHasSyncedState = hasStorySourceSynced || storySaveStatus === 'ok'
+  const reelSaveHasSyncedState = hasVideoShortSourceSynced || storySaveStatus === 'ok'
 
-  const { data: myStorySources = [] } = useQuery({
-    queryKey: ['stories', 'sources', 'my'],
-    queryFn: getMyStorySources,
+  const { data: myVideoShortSources = [] } = useQuery({
+    queryKey: ['video-shorts', 'sources', 'my'],
+    queryFn: getMyVideoShortSources,
     enabled: activeView === 'reels' || activeView === 'content',
     staleTime: 30_000,
   })
 
   const savedCanonicalReelUrls = useMemo(() => {
     const next = new Set<string>()
-    for (const row of myStorySources) {
+    for (const row of myVideoShortSources) {
       const u = (row.sourceReelUrl || '').trim()
       if (u) next.add(canonicalSourceReelUrl(u))
     }
     return next
-  }, [myStorySources])
+  }, [myVideoShortSources])
 
   const skippedReelReasonByUrl = useMemo(() => {
     const next = new Map<string, string>()
-    for (const row of myStorySources) {
+    for (const row of myVideoShortSources) {
       const reason = (row.skipReason || '').trim()
       const u = (row.sourceReelUrl || '').trim()
       if (reason && u) next.set(canonicalSourceReelUrl(u), reason)
     }
     return next
-  }, [myStorySources])
+  }, [myVideoShortSources])
 
   const { data: fbWorkflowSteps = [], isLoading: isLoadingFbWorkflowSteps } = useQuery<FacebookProcessStep[]>({
     queryKey: ['facebook-workflow-steps'],
@@ -564,7 +564,7 @@ export default function FacebookScreen() {
   }, [activeView, selectedReel])
 
   useEffect(() => {
-    setStorySaveStatus('idle')
+    setVideoShortSaveStatus('idle')
   }, [selectedReel?.id])
 
   useEffect(() => {
@@ -948,7 +948,7 @@ export default function FacebookScreen() {
     }
   }
 
-  const saveStoryToServer = async () => {
+  const saveVideoShortToServer = async () => {
     const urlRaw = selectedReel?.url?.trim()
     if (
       !urlRaw ||
@@ -957,29 +957,29 @@ export default function FacebookScreen() {
     ) {
       return
     }
-    setStorySaveStatus('saving')
+    setVideoShortSaveStatus('saving')
     try {
-      await syncStorySourceFromReel({
+      await syncVideoShortSourceFromReel({
         sourceContent: contentText.trim(),
         sourceReelUrl: urlRaw,
         name: (selectedReel?.title || '').trim().slice(0, 200),
       })
-      setStorySaveStatus('ok')
-      void queryClient.invalidateQueries({ queryKey: ['stories', 'sources', 'check-reel'] })
-      void queryClient.invalidateQueries({ queryKey: ['stories', 'my'] })
-      void queryClient.invalidateQueries({ queryKey: ['stories', 'sources', 'my'] })
-      window.setTimeout(() => setStorySaveStatus('idle'), 2800)
+      setVideoShortSaveStatus('ok')
+      void queryClient.invalidateQueries({ queryKey: ['video-shorts', 'sources', 'check-reel'] })
+      void queryClient.invalidateQueries({ queryKey: ['video-shorts', 'my'] })
+      void queryClient.invalidateQueries({ queryKey: ['video-shorts', 'sources', 'my'] })
+      window.setTimeout(() => setVideoShortSaveStatus('idle'), 2800)
     } catch (e) {
       if (isAxiosError(e) && e.response?.status === 409) {
-        void queryClient.invalidateQueries({ queryKey: ['stories', 'sources', 'check-reel'] })
-        void queryClient.invalidateQueries({ queryKey: ['stories', 'my'] })
-        void queryClient.invalidateQueries({ queryKey: ['stories', 'sources', 'my'] })
-        setStorySaveStatus('ok')
-        window.setTimeout(() => setStorySaveStatus('idle'), 2200)
+        void queryClient.invalidateQueries({ queryKey: ['video-shorts', 'sources', 'check-reel'] })
+        void queryClient.invalidateQueries({ queryKey: ['video-shorts', 'my'] })
+        void queryClient.invalidateQueries({ queryKey: ['video-shorts', 'sources', 'my'] })
+        setVideoShortSaveStatus('ok')
+        window.setTimeout(() => setVideoShortSaveStatus('idle'), 2200)
         return
       }
-      setStorySaveStatus('error')
-      window.setTimeout(() => setStorySaveStatus('idle'), 4000)
+      setVideoShortSaveStatus('error')
+      window.setTimeout(() => setVideoShortSaveStatus('idle'), 4000)
     }
   }
 
@@ -1193,16 +1193,16 @@ export default function FacebookScreen() {
           setIsContentTranslated(false)
         }
         if (isFbWorkflowRunningRef.current) {
-          void syncStorySourceFromReel({
+          void syncVideoShortSourceFromReel({
             sourceReelUrl: targetReel.url.trim(),
             sourceContent: description.trim(),
             name: (targetReel.title || '').trim().slice(0, 200),
           })
             .then(() => {
               void queryClient.invalidateQueries({
-                queryKey: ['stories', 'sources', 'check-reel', targetReel.url],
+                queryKey: ['video-shorts', 'sources', 'check-reel', targetReel.url],
               })
-              void queryClient.invalidateQueries({ queryKey: ['stories', 'sources', 'my'] })
+              void queryClient.invalidateQueries({ queryKey: ['video-shorts', 'sources', 'my'] })
             })
             .catch(() => {
               /* chưa đăng nhập hoặc lỗi mạng — bỏ qua */
@@ -1659,8 +1659,8 @@ export default function FacebookScreen() {
 
   const fetchUnsavedScannedReels = async () => {
     const sources = await queryClient.fetchQuery({
-      queryKey: ['stories', 'sources', 'my'],
-      queryFn: getMyStorySources,
+      queryKey: ['video-shorts', 'sources', 'my'],
+      queryFn: getMyVideoShortSources,
     })
     const handledSet = new Set<string>()
     for (const row of sources) {
@@ -1831,8 +1831,8 @@ export default function FacebookScreen() {
           if (fbWorkflowStopRef.current) throw new Error('Đã dừng workflow')
 
           const sources = await queryClient.fetchQuery({
-            queryKey: ['stories', 'sources', 'my'],
-            queryFn: getMyStorySources,
+            queryKey: ['video-shorts', 'sources', 'my'],
+            queryFn: getMyVideoShortSources,
           })
           const savedSet = new Set<string>()
           for (const row of sources) {
@@ -1915,7 +1915,7 @@ export default function FacebookScreen() {
             throw new Error('Không có reel đang chọn để bỏ qua.')
           }
 
-          await skipStorySourceFromReel({
+          await skipVideoShortSourceFromReel({
             sourceReelUrl: current.url.trim(),
             name: (current.title || '').trim().slice(0, 200),
             reason: 'caption_timeout',
@@ -1923,9 +1923,9 @@ export default function FacebookScreen() {
           skippedUrls.push(current.url.trim())
           skippedCount += 1
 
-          void queryClient.invalidateQueries({ queryKey: ['stories', 'sources', 'my'] })
+          void queryClient.invalidateQueries({ queryKey: ['video-shorts', 'sources', 'my'] })
           void queryClient.invalidateQueries({
-            queryKey: ['stories', 'sources', 'check-reel', canonicalSourceReelUrl(current.url)],
+            queryKey: ['video-shorts', 'sources', 'check-reel', canonicalSourceReelUrl(current.url)],
           })
 
           setFbWorkflowStatus(
@@ -1949,20 +1949,20 @@ export default function FacebookScreen() {
           `Đã bỏ qua ${skippedCount} reel caption timeout — vượt giới hạn thử (${maxSkipAttempts}).`,
         )
       }
-      case 'facebook_save_story': {
+      case 'facebook_save_video_short': {
         const sr = selectedReelRef.current
         const text = contentTextRef.current.trim()
         if (!sr?.url || !text) throw new Error('Thiếu reel hoặc nội dung để lưu')
         try {
-          const saved = await syncStorySourceFromReel({
+          const saved = await syncVideoShortSourceFromReel({
             sourceContent: text,
             sourceReelUrl: sr.url.trim(),
             name: (sr.title || '').trim().slice(0, 200),
           })
-          void queryClient.invalidateQueries({ queryKey: ['stories', 'sources', 'check-reel'] })
-          void queryClient.invalidateQueries({ queryKey: ['stories', 'my'] })
-          void queryClient.invalidateQueries({ queryKey: ['stories', 'sources', 'my'] })
-          return { saved: true, storySourceId: saved._id }
+          void queryClient.invalidateQueries({ queryKey: ['video-shorts', 'sources', 'check-reel'] })
+          void queryClient.invalidateQueries({ queryKey: ['video-shorts', 'my'] })
+          void queryClient.invalidateQueries({ queryKey: ['video-shorts', 'sources', 'my'] })
+          return { saved: true, videoShortSourceId: saved._id }
         } catch (e: unknown) {
           if (isAxiosError(e) && e.response?.status === 409) {
             return { skipped: true, reason: 'duplicate_reel' }
@@ -2027,7 +2027,7 @@ export default function FacebookScreen() {
     runningFbWorkflowRunIdRef.current = workflowRunId
     let mwOutcome: 'completed' | 'failed' | 'cancelled' | null = null
     let mwErrorMessage = ''
-    let mwStorySourceId = ''
+    let mwVideoShortSourceId = ''
 
     let facebookCriteria = options?.facebookCriteria
     if (workflowRunId && facebookCriteria === undefined && options?.source === 'sse') {
@@ -2092,12 +2092,12 @@ export default function FacebookScreen() {
 
         try {
           const output = await executeFacebookWorkflowStep(effectiveStep, facebookCriteria)
-          const outputStorySourceId =
-            output && typeof output === 'object' && 'storySourceId' in output
-              ? String((output as { storySourceId?: string }).storySourceId || '').trim()
+          const outputVideoShortSourceId =
+            output && typeof output === 'object' && 'videoShortSourceId' in output
+              ? String((output as { videoShortSourceId?: string }).videoShortSourceId || '').trim()
               : ''
-          if (outputStorySourceId) {
-            mwStorySourceId = outputStorySourceId
+          if (outputVideoShortSourceId) {
+            mwVideoShortSourceId = outputVideoShortSourceId
           }
           await updateStepRun(stepRun._id, {
             status: 'completed',
@@ -2163,7 +2163,7 @@ export default function FacebookScreen() {
       if (workflowRunId && mwOutcome && !workflowCancelledRemotelyRef.current) {
         try {
           await finalizeMultiWorkflowJobAfterWorkflowRun(workflowRunId, mwOutcome, {
-            storySourceId: mwStorySourceId || undefined,
+            videoShortSourceId: mwVideoShortSourceId || undefined,
             errorMessage: mwErrorMessage,
           })
         } catch {
@@ -2686,10 +2686,10 @@ export default function FacebookScreen() {
                             title={
                               skipReason
                                 ? `Đã bỏ qua (${skipReason})`
-                                : 'Đã có story nguồn (caption đã đồng bộ)'
+                                : 'Đã có nguồn reel (caption đã đồng bộ)'
                             }
                             aria-label={
-                              skipReason ? 'Reel đã bỏ qua' : 'Đã có story nguồn trên máy chủ'
+                              skipReason ? 'Reel đã bỏ qua' : 'Đã có nguồn reel trên máy chủ'
                             }
                           >
                             <FiSave className="h-4 w-4" aria-hidden />
@@ -2833,7 +2833,7 @@ export default function FacebookScreen() {
                 setContentText(event.target.value)
                 setIsContentDirty(true)
                 setIsContentTranslated(false)
-                setStorySaveStatus('idle')
+                setVideoShortSaveStatus('idle')
                 if (translateStatus !== 'idle') setTranslateStatus('idle')
               }}
               className="h-full min-h-[140px] w-full resize-none rounded-2xl bg-slate-900/90 px-3 py-2.5 pr-29 text-xs text-slate-100 outline-none placeholder:text-slate-500 focus:ring-2 focus:ring-blue-400/30"
@@ -2885,28 +2885,28 @@ export default function FacebookScreen() {
               </button>
               <button
                 type="button"
-                onClick={() => void saveStoryToServer()}
+                onClick={() => void saveVideoShortToServer()}
                 disabled={
                   !selectedReel ||
                   !contentText.trim() ||
                   storySaveStatus === 'saving'
                 }
                 aria-label={
-                  hasStorySourceSynced
-                    ? 'Lưu lại story nguồn trên máy chủ (cập nhật nội dung nếu đã có)'
-                    : 'Lưu nội dung và link reel vào máy chủ (story nguồn)'
+                  hasVideoShortSourceSynced
+                    ? 'Lưu lại nguồn reel trên máy chủ (cập nhật nội dung nếu đã có)'
+                    : 'Lưu nội dung và link reel vào máy chủ (nguồn reel)'
                 }
                 title={
-                  hasStorySourceSynced
-                    ? 'Story nguồn đã có. Bấm để cập nhật lại caption/URL mới nhất.'
-                    : 'Lưu caption + URL reel vào story nguồn (không tạo bản ghi Story).'
+                  hasVideoShortSourceSynced
+                    ? 'Nguồn reel đã có. Bấm để cập nhật lại caption/URL mới nhất.'
+                    : 'Lưu caption + URL reel làm nguồn reel (không tạo bản ghi video ngắn).'
                 }
                 className={`relative inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg transition disabled:cursor-not-allowed ${
                   storySaveStatus === 'ok'
                     ? 'bg-amber-500/25 text-amber-100 disabled:opacity-40'
                     : storySaveStatus === 'error'
                       ? 'bg-rose-500/80 text-white disabled:opacity-40'
-                      : hasStorySourceSynced
+                      : hasVideoShortSourceSynced
                         ? 'bg-amber-500/20 text-amber-100 hover:bg-amber-500/30'
                         : 'bg-amber-500/25 text-amber-100 hover:bg-amber-500/35 disabled:opacity-40'
                 }`}

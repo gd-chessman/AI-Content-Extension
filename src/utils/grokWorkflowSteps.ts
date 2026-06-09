@@ -7,7 +7,7 @@ export type GrokProcessStepLike = {
 }
 
 export const GROK_STEP_ACTION = {
-  FILL_FROM_STORY: 'grok_fill_from_story',
+  FILL_FROM_STORY: 'grok_fill_from_video_short',
   CAPTURE_VIDEO_LINK: 'grok_capture_video_link',
   FILL_GROK_LEGACY: 'fill_grok',
 } as const
@@ -16,7 +16,7 @@ export function normalizeGrokActionType(actionType?: string): string {
   return (actionType || '').trim().toLowerCase()
 }
 
-export function isGrokFillFromStoryStep(step: GrokProcessStepLike): boolean {
+export function isGrokFillFromVideoShortStep(step: GrokProcessStepLike): boolean {
   const action = normalizeGrokActionType(step.actionType)
   return action === GROK_STEP_ACTION.FILL_FROM_STORY || action === GROK_STEP_ACTION.FILL_GROK_LEGACY
 }

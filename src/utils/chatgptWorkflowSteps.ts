@@ -22,7 +22,7 @@ export const CHATGPT_STEP_ACTION = {
   GENERATE_IMAGES: 'chatgpt_generate_images',
   GENERATE_IMAGE: 'chatgpt_generate_image',
   EXTRACT_CONTENT: 'chatgpt_extract_content',
-  SAVE_STORY: 'chatgpt_save_story',
+  SAVE_STORY: 'chatgpt_save_video_short',
 } as const
 
 export function normalizeChatgptActionType(actionType?: string): string {
@@ -65,7 +65,7 @@ export function isChatgptExtractContentStep(step: ChatgptProcessStepLike): boole
   return normalizeChatgptActionType(step.actionType) === CHATGPT_STEP_ACTION.EXTRACT_CONTENT
 }
 
-export function isChatgptSaveStoryStep(step: ChatgptProcessStepLike): boolean {
+export function isChatgptSaveVideoShortStep(step: ChatgptProcessStepLike): boolean {
   return normalizeChatgptActionType(step.actionType) === CHATGPT_STEP_ACTION.SAVE_STORY
 }
 
