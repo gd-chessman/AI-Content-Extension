@@ -76,7 +76,7 @@ export default function GgSheetPage() {
             GG Sheet
           </h1>
           <p className="mt-1 max-w-2xl text-sm text-slate-400">
-            Đối chiếu dữ liệu trên Google Sheet với câu chuyện trong database — khớp theo tiêu đề và
+            Đối chiếu dữ liệu trên Google Sheet với video ngắn trong database — khớp theo tiêu đề và
             prefix nội dung ngắn (120 ký tự). Dòng có trên Sheet nhưng không có trong DB vẫn hiển thị.
           </p>
         </div>
@@ -231,7 +231,7 @@ export default function GgSheetPage() {
                     <th className="px-4 py-2.5 font-medium">Tiêu đề (Sheet)</th>
                     <th className="px-4 py-2.5 font-medium">Nội dung ngắn (Sheet)</th>
                     <th className="px-4 py-2.5 font-medium">Trạng thái</th>
-                    <th className="px-4 py-2.5 font-medium">Story DB</th>
+                    <th className="px-4 py-2.5 font-medium">Video ngắn (DB)</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-white/5">
@@ -252,7 +252,7 @@ export default function GgSheetPage() {
                       <td className="px-4 py-3">
                         {row.story ? (
                           <Link
-                            to={`/stories/${row.story.id}`}
+                            to={`/video-shorts/${row.story.id}`}
                             className="inline-flex max-w-full flex-col gap-0.5 text-blue-300 hover:text-blue-200"
                           >
                             <span className="line-clamp-2 font-medium break-words">{row.story.name || 'Không tên'}</span>
@@ -262,7 +262,7 @@ export default function GgSheetPage() {
                           </Link>
                         ) : (
                           <span className="inline-flex rounded-lg border border-white/8 bg-white/5 px-2 py-1 text-[10px] text-slate-500">
-                            Chưa có story khớp
+                            Chưa có video ngắn khớp
                           </span>
                         )}
                       </td>
@@ -278,7 +278,7 @@ export default function GgSheetPage() {
       {data?.configured && showDbOnly && data.unmatchedStories.length > 0 ? (
         <section className="surface-card overflow-hidden rounded-2xl">
           <div className="border-b border-white/10 px-4 py-3">
-            <h2 className="text-sm font-semibold text-white">Câu chuyện chưa có trên Sheet</h2>
+            <h2 className="text-sm font-semibold text-white">Video ngắn chưa có trên Sheet</h2>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full table-fixed text-left text-xs">
@@ -311,8 +311,8 @@ export default function GgSheetPage() {
                       <MatchBadge status="db_only" />
                     </td>
                     <td className="px-4 py-3 text-right">
-                      <Link to={`/stories/${story.id}`} className="text-blue-300 hover:text-blue-200">
-                        Xem story
+                      <Link to={`/video-shorts/${story.id}`} className="text-blue-300 hover:text-blue-200">
+                        Xem video ngắn
                       </Link>
                     </td>
                   </tr>
@@ -324,7 +324,7 @@ export default function GgSheetPage() {
       ) : null}
 
       {data?.configured && viewFilter === 'db_only' && data.unmatchedStories.length === 0 ? (
-        <EmptyState title="Không có story thiếu trên Sheet" description="Mọi câu chuyện đều đã khớp với một dòng trên Google Sheet." />
+        <EmptyState title="Không có video ngắn thiếu trên Sheet" description="Mọi video ngắn đều đã khớp với một dòng trên Google Sheet." />
       ) : null}
     </div>
   )

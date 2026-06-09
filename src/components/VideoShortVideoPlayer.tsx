@@ -7,19 +7,19 @@ import {
   readFileFromWorkspace,
 } from '@/utils/localWorkspace'
 
-type StoryVideoPlayerProps = {
+type VideoShortVideoPlayerProps = {
   entry: string
   workspaceRoot: FileSystemDirectoryHandle | null
   onPickWorkspace: () => void
   pickingWorkspace?: boolean
 }
 
-export default function StoryVideoPlayer({
+export default function VideoShortVideoPlayer({
   entry,
   workspaceRoot,
   onPickWorkspace,
   pickingWorkspace = false,
-}: StoryVideoPlayerProps) {
+}: VideoShortVideoPlayerProps) {
   const [objectUrl, setObjectUrl] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')

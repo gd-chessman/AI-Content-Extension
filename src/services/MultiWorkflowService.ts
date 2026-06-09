@@ -40,8 +40,8 @@ export type MultiWorkflowRun = {
   _id: string
   multiWorkflowId?: string
   multiWorkflowKey: string
-  storySourceId?: string | null
-  storyId?: string | null
+  videoShortSourceId?: string | null
+  videoShortId?: string | null
   status: MultiWorkflowRunStatus
   currentOrder: number
   items: MultiWorkflowRunItem[]
@@ -121,7 +121,7 @@ export const setDefaultMultiWorkflow = async (id: string) => {
 }
 
 export const createMultiWorkflowRun = async (payload: {
-  storySourceId?: string
+  videoShortSourceId?: string
   multiWorkflowId?: string
   trigger?: string
 }) => {

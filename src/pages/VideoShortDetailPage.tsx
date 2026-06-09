@@ -17,20 +17,20 @@ import {
 import EmptyState from '@/components/EmptyState'
 import GgSheetPushButton from '@/components/GgSheetPushButton'
 import GrokRunButton from '@/components/GrokRunButton'
-import StoryVideoPlayer from '@/components/StoryVideoPlayer'
+import VideoShortVideoPlayer from '@/components/VideoShortVideoPlayer'
 import { useWorkspaceRoot } from '@/hooks/useWorkspaceRoot'
-import { buildGgSheetPushPayloadFromStory, pushGgSheetContent } from '@/services/GgSheetService'
-import { getStoryById, type StoryItem } from '@/services/StoryService'
+import { buildGgSheetPushPayloadFromVideoShort, pushGgSheetContent } from '@/services/GgSheetService'
+import { getVideoShortById, type VideoShortItem } from '@/services/VideoShortService'
 import { createWorkflowRun, getExtensionPresence, getUserWorkflows } from '@/services/WorkflowService'
 import {
-  formatStoryDate,
+  formatVideoShortDate,
   getPipelineSteps,
-  getStoryStats,
+  getVideoShortStats,
   isGgSheetPushable,
   isGrokIncomplete,
   isGrokReady,
   pipelineProgress,
-} from '@/utils/storyHelpers'
+} from '@/utils/videoShortHelpers'
 
 function Section({
   title,
@@ -57,7 +57,7 @@ function Section({
   )
 }
 
-function PipelineTimeline({ story, stats }: { story: StoryItem; stats: ReturnType<typeof getStoryStats> }) {
+function PipelineTimeline({ story, stats }: { story: VideoShortItem; stats: ReturnType<typeof getVideoShortStats> }) {
   const steps = getPipelineSteps(story, stats)
   const progress = pipelineProgress(story, stats)
 
@@ -98,7 +98,7 @@ function PipelineTimeline({ story, stats }: { story: StoryItem; stats: ReturnTyp
   )
 }
 
-export default function StoryDetailPage() {
+export default function VideoShortDetailPage() {
   const { id = '' } = useParams()
   const queryClient = useQueryClient()
   const [contentTab, setContentTab] = useState<'short' | 'long'>('short')
@@ -108,8 +108,8 @@ export default function StoryDetailPage() {
   const { workspaceRoot, workspaceLabel, pickingWorkspace, pickWorkspace } = useWorkspaceRoot()
 
   const storyQuery = useQuery({
-    queryKey: ['stories', 'detail', id],
-    queryFn: () => getStoryById(id),
+    queryKey: ['video-shorts', 'detail', id],
+    queryFn: () => getVideoShortById(id),
     enabled: Boolean(id.trim()),
     refetchInterval: 15_000,
   })
@@ -131,7 +131,7 @@ export default function StoryDetailPage() {
   const story = storyQuery.data
 
   const grokMutation = useMutation({
-    mutationFn: async (item: StoryItem) => {
+    mutationFn: async (item: VideoShortItem) => {
       if (!grokWorkflowId) throw new Error('Chưa có workflow Grok trên hệ thống.')
       if (!extensionOnline) {
         throw new Error('Extension chưa online — mở extension tab Grok và đăng nhập.')
@@ -139,15 +139,15 @@ export default function StoryDetailPage() {
       await createWorkflowRun({
         workflowId: grokWorkflowId,
         payload: {
-          storyId: item._id,
+          videoShortId: item._id,
           source: 'web_story_detail',
           trigger: 'web_console',
         },
       })
     },
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['stories', 'detail', id] })
-      void queryClient.invalidateQueries({ queryKey: ['stories', 'my'] })
+      void queryClient.invalidateQueries({ queryKey: ['video-shorts', 'detail', id] })
+      void queryClient.invalidateQueries({ queryKey: ['video-shorts', 'my'] })
       setGrokMessage('Đã gửi lệnh Grok — extension xử lý trên tab Grok.')
     },
     onError: (error: unknown) => {
@@ -160,10 +160,10 @@ export default function StoryDetailPage() {
   })
 
   const sheetPushMutation = useMutation({
-    mutationFn: async (item: StoryItem) => pushGgSheetContent(buildGgSheetPushPayloadFromStory(item)),
+    mutationFn: async (item: VideoShortItem) => pushGgSheetContent(buildGgSheetPushPayloadFromVideoShort(item)),
     onSuccess: (result) => {
-      void queryClient.invalidateQueries({ queryKey: ['stories', 'detail', id] })
-      void queryClient.invalidateQueries({ queryKey: ['stories', 'my'] })
+      void queryClient.invalidateQueries({ queryKey: ['video-shorts', 'detail', id] })
+      void queryClient.invalidateQueries({ queryKey: ['video-shorts', 'my'] })
       void queryClient.invalidateQueries({ queryKey: ['ggsheet', 'compare'] })
       setSheetMessage(
         result.targetRow
@@ -193,14 +193,14 @@ export default function StoryDetailPage() {
 
   useEffect(() => {
     if (!story) return
-    const s = getStoryStats(story)
+    const s = getVideoShortStats(story)
     if (!s.hasShortContent && s.hasLongContent) setContentTab('long')
     else if (s.hasShortContent) setContentTab('short')
   }, [story])
 
   if (!id.trim()) {
     return (
-      <EmptyState title="Thiếu mã câu chuyện" description="Quay lại danh sách câu chuyện để chọn một câu chuyện." />
+      <EmptyState title="Thiếu mã video ngắn" description="Quay lại danh sách video ngắn để chọn một video ngắn." />
     )
   }
 
@@ -221,21 +221,21 @@ export default function StoryDetailPage() {
     return (
       <div className="space-y-4">
         <Link
-          to="/stories"
+          to="/video-shorts"
           className="inline-flex items-center gap-2 text-sm text-slate-400 hover:text-white"
         >
           <FiArrowLeft className="h-4 w-4" />
           Quay lại danh sách
         </Link>
         <EmptyState
-          title="Không tìm thấy câu chuyện"
-          description="Câu chuyện có thể đã bị xóa hoặc bạn không có quyền truy cập."
+          title="Không tìm thấy video ngắn"
+          description="Video ngắn có thể đã bị xóa hoặc bạn không có quyền truy cập."
         />
       </div>
     )
   }
 
-  const stats = getStoryStats(story)
+  const stats = getVideoShortStats(story)
   const images = (story.imageUrls || []).filter(Boolean)
   const videos = (story.videoStorageAddresses || []).filter(Boolean)
   const prompts = (story.videoPrompts || []).filter(Boolean)
@@ -250,11 +250,11 @@ export default function StoryDetailPage() {
       {/* Top bar */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <Link
-          to="/stories"
+          to="/video-shorts"
           className="inline-flex w-fit items-center gap-2 rounded-lg border border-white/10 px-3 py-1.5 text-sm text-slate-300 transition hover:bg-white/5 hover:text-white"
         >
           <FiArrowLeft className="h-4 w-4" />
-          Câu chuyện
+          Video ngắn
         </Link>
         <button
           type="button"
@@ -303,10 +303,10 @@ export default function StoryDetailPage() {
 
           <div className="flex flex-col gap-4 p-5 lg:col-span-3 lg:p-6">
             <div>
-              <p className="text-[11px] font-medium uppercase tracking-wider text-violet-400">Câu chuyện</p>
+              <p className="text-[11px] font-medium uppercase tracking-wider text-violet-400">Video ngắn</p>
               <h1 className="mt-1 text-2xl font-semibold text-white">{story.name || 'Không tên'}</h1>
               <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
-                <span>{formatStoryDate(story.createdAt)}</span>
+                <span>{formatVideoShortDate(story.createdAt)}</span>
                 {story.usageCount != null ? (
                   <>
                     <span>·</span>
@@ -344,7 +344,7 @@ export default function StoryDetailPage() {
                 {videos.map((entry, idx) => (
                   <div key={`${entry}-${idx}`}>
                     <p className="mb-2 text-xs font-medium text-slate-400">Video {idx + 1}</p>
-                    <StoryVideoPlayer
+                    <VideoShortVideoPlayer
                       entry={entry}
                       workspaceRoot={workspaceRoot}
                       onPickWorkspace={() => void pickWorkspace()}
@@ -413,7 +413,7 @@ export default function StoryDetailPage() {
 
           {/* Content tabs */}
           {(stats.hasShortContent || stats.hasLongContent) ? (
-            <Section title="Nội dung câu chuyện" icon={<FiType className="h-4 w-4" />}>
+            <Section title="Nội dung video ngắn" icon={<FiType className="h-4 w-4" />}>
               <div className="mb-3 flex gap-1 rounded-lg border border-white/10 bg-black/20 p-1">
                 {stats.hasShortContent ? (
                   <button
@@ -473,11 +473,11 @@ export default function StoryDetailPage() {
             <dl className="space-y-3 text-xs">
               <div>
                 <dt className="text-slate-500">Nguồn reel</dt>
-                <dd className="mt-0.5 break-all font-mono text-slate-300">{story.storySourceId || '—'}</dd>
+                <dd className="mt-0.5 break-all font-mono text-slate-300">{story.videoShortSourceId || '—'}</dd>
               </div>
               <div>
                 <dt className="text-slate-500">Chủ đề</dt>
-                <dd className="mt-0.5 break-all font-mono text-slate-300">{story.topicId || '—'}</dd>
+                <dd className="mt-0.5 break-all font-mono text-slate-300">{story.videoShortTopicId || '—'}</dd>
               </div>
               {story.blogPostUrl ? (
                 <div>
@@ -545,7 +545,7 @@ export default function StoryDetailPage() {
               </div>
               <div>
                 <dt className="text-slate-500">Cập nhật</dt>
-                <dd className="mt-0.5 text-slate-300">{formatStoryDate(story.updatedAt)}</dd>
+                <dd className="mt-0.5 text-slate-300">{formatVideoShortDate(story.updatedAt)}</dd>
               </div>
             </dl>
           </Section>

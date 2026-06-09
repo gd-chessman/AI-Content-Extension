@@ -24,27 +24,27 @@ import { Link } from 'react-router-dom'
 import { isAxiosError } from 'axios'
 import EmptyState from '@/components/EmptyState'
 import GgSheetPushButton from '@/components/GgSheetPushButton'
-import { useStoryMarqueeSelection } from '@/hooks/useStoryMarqueeSelection'
-import { buildGgSheetPushPayloadFromStory, pushGgSheetContent } from '@/services/GgSheetService'
-import { getMyStories, type StoryItem } from '@/services/StoryService'
+import { useVideoShortMarqueeSelection } from '@/hooks/useVideoShortMarqueeSelection'
+import { buildGgSheetPushPayloadFromVideoShort, pushGgSheetContent } from '@/services/GgSheetService'
+import { getMyVideoShorts, type VideoShortItem } from '@/services/VideoShortService'
 import {
   createWorkflowRun,
   getExtensionPresence,
   getUserWorkflows,
 } from '@/services/WorkflowService'
 import {
-  formatStoryDate,
-  getStoryListStatusLabel,
-  getStoryStats,
+  formatVideoShortDate,
+  getVideoShortListStatusLabel,
+  getVideoShortStats,
   isGgSheetPushable,
   isGrokIncomplete,
   pipelineProgress,
   STORY_LIST_STATUS_FILTERS,
-  type StoryListStatusFilter,
-} from '@/utils/storyHelpers'
+  type VideoShortListStatusFilter,
+} from '@/utils/videoShortHelpers'
 
 const STORY_STATUS_ICONS: Record<
-  StoryListStatusFilter,
+  VideoShortListStatusFilter,
   React.ComponentType<{ className?: string }>
 > = {
   '': FiLayers,
@@ -56,7 +56,7 @@ const STORY_STATUS_ICONS: Record<
   ggsheet_pushed: FiTable,
 }
 
-const STORY_STATUS_ICON_COLORS: Record<StoryListStatusFilter, string> = {
+const STORY_STATUS_ICON_COLORS: Record<VideoShortListStatusFilter, string> = {
   '': 'text-slate-400',
   in_progress: 'text-amber-400',
   complete: 'text-emerald-400',
@@ -87,20 +87,20 @@ function StatPill({
   )
 }
 
-function StoryCard({
+function VideoShortCard({
   story,
   selected,
   selectionMode,
   registerCard,
   onToggleSelect,
 }: {
-  story: StoryItem
+  story: VideoShortItem
   selected: boolean
   selectionMode: boolean
   registerCard: (id: string, el: HTMLElement | null) => void
   onToggleSelect: (id: string) => void
 }) {
-  const stats = getStoryStats(story)
+  const stats = getVideoShortStats(story)
   const progress = pipelineProgress(story, stats)
   const excerpt = (story.shortContent || story.longContent || '').trim().slice(0, 120)
 
@@ -132,7 +132,7 @@ function StoryCard({
               ? 'border-white/25 bg-black/70 text-slate-300 hover:border-blue-300/50 hover:bg-black/90'
               : 'border-white/20 bg-black/60 text-slate-400 opacity-0 group-hover:opacity-100 hover:border-blue-300/40'
         } ${selected || selectionMode ? 'opacity-100' : ''}`}
-        aria-label={selected ? `Bỏ chọn ${story.name || 'câu chuyện'}` : `Chọn ${story.name || 'câu chuyện'}`}
+        aria-label={selected ? `Bỏ chọn ${story.name || 'video ngắn'}` : `Chọn ${story.name || 'video ngắn'}`}
         aria-pressed={selected}
       >
         {selected ? <FiCheckSquare className="h-4 w-4" /> : <FiSquare className="h-4 w-4" />}
@@ -201,10 +201,10 @@ function StoryCard({
               />
             </div>
             <div className="flex items-center justify-between gap-2 text-[10px] text-slate-500">
-              <span>{formatStoryDate(story.createdAt)}</span>
+              <span>{formatVideoShortDate(story.createdAt)}</span>
               {selectionMode ? (
                 <Link
-                  to={`/stories/${story._id}`}
+                  to={`/video-shorts/${story._id}`}
                   data-no-marquee
                   className="inline-flex items-center gap-0.5 text-blue-300 hover:text-blue-200"
                   onClick={(e) => e.stopPropagation()}
@@ -220,22 +220,22 @@ function StoryCard({
 
       {!selectionMode ? (
         <Link
-          to={`/stories/${story._id}`}
+          to={`/video-shorts/${story._id}`}
           data-no-marquee
           className="absolute inset-0 z-10 rounded-2xl focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-300/50"
-          aria-label={`Xem ${story.name || 'câu chuyện'}`}
+          aria-label={`Xem ${story.name || 'video ngắn'}`}
         />
       ) : null}
     </article>
   )
 }
 
-export default function StoriesPage() {
+export default function VideoShortsPage() {
   const queryClient = useQueryClient()
   const [page, setPage] = useState(1)
   const [searchInput, setSearchInput] = useState('')
   const [searchQuery, setSearchQuery] = useState('')
-  const [statusFilter, setStatusFilter] = useState<StoryListStatusFilter>('')
+  const [statusFilter, setStatusFilter] = useState<VideoShortListStatusFilter>('')
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set())
   const [actionMessage, setActionMessage] = useState('')
   const limit = 20
@@ -246,9 +246,9 @@ export default function StoriesPage() {
   const selectionMode = bulkActionMode !== null
 
   const storiesQuery = useQuery({
-    queryKey: ['stories', 'my', page, searchQuery, statusFilter],
+    queryKey: ['video-shorts', 'my', page, searchQuery, statusFilter],
     queryFn: () =>
-      getMyStories({
+      getMyVideoShorts({
         page,
         limit,
         q: searchQuery,
@@ -293,7 +293,7 @@ export default function StoriesPage() {
   }, [bulkActionMode])
 
   const { containerRef, registerCard, marquee, onContainerMouseDown, isDragging } =
-    useStoryMarqueeSelection({
+    useVideoShortMarqueeSelection({
       enabled: selectionMode,
       onToggleId: toggleSelect,
       onSelectIds: selectIds,
@@ -307,7 +307,7 @@ export default function StoriesPage() {
   const grokTargets = useMemo(() => {
     if (bulkActionMode !== 'grok') return []
     return selectedStories.filter((story) => {
-      const stats = getStoryStats(story)
+      const stats = getVideoShortStats(story)
       return isGrokIncomplete(story, stats)
     })
   }, [bulkActionMode, selectedStories])
@@ -323,7 +323,7 @@ export default function StoriesPage() {
     if (bulkActionMode === 'grok') {
       return items
         .filter((story) => {
-          const stats = getStoryStats(story)
+          const stats = getVideoShortStats(story)
           return isGrokIncomplete(story, stats)
         })
         .map((story) => story._id)
@@ -354,7 +354,7 @@ export default function StoriesPage() {
   }
 
   const grokMutation = useMutation({
-    mutationFn: async (stories: StoryItem[]) => {
+    mutationFn: async (stories: VideoShortItem[]) => {
       if (!grokWorkflowId) throw new Error('Chưa có workflow Grok trên hệ thống.')
       if (!extensionOnline) {
         throw new Error('Extension chưa online — mở extension tab Grok và đăng nhập.')
@@ -363,7 +363,7 @@ export default function StoriesPage() {
         await createWorkflowRun({
           workflowId: grokWorkflowId,
           payload: {
-            storyId: story._id,
+            videoShortId: story._id,
             source: 'web_stories_batch',
             trigger: 'web_console',
           },
@@ -385,12 +385,12 @@ export default function StoriesPage() {
   })
 
   const sheetMutation = useMutation({
-    mutationFn: async (stories: StoryItem[]) => {
+    mutationFn: async (stories: VideoShortItem[]) => {
       let ok = 0
       const errors: string[] = []
       for (const story of stories) {
         try {
-          await pushGgSheetContent(buildGgSheetPushPayloadFromStory(story))
+          await pushGgSheetContent(buildGgSheetPushPayloadFromVideoShort(story))
           ok += 1
         } catch (error) {
           const msg = error instanceof Error ? error.message : 'Lỗi đẩy sheet'
@@ -400,9 +400,9 @@ export default function StoriesPage() {
       return { ok, failed: errors }
     },
     onSuccess: ({ ok, failed }) => {
-      void queryClient.invalidateQueries({ queryKey: ['stories', 'my'] })
+      void queryClient.invalidateQueries({ queryKey: ['video-shorts', 'my'] })
       if (failed.length === 0) {
-        setActionMessage(`Đã đẩy ${ok} câu chuyện lên GG Sheet.`)
+        setActionMessage(`Đã đẩy ${ok} video ngắn lên GG Sheet.`)
       } else {
         setActionMessage(`Đã đẩy ${ok}/${ok + failed.length} — lỗi: ${failed[0]}`)
       }
@@ -419,7 +419,7 @@ export default function StoriesPage() {
     setSearchQuery(searchInput.trim())
   }
 
-  const handleStatusChange = (next: StoryListStatusFilter) => {
+  const handleStatusChange = (next: VideoShortListStatusFilter) => {
     setStatusFilter(next)
     setPage(1)
     setSelectedIds(new Set())
@@ -428,12 +428,12 @@ export default function StoriesPage() {
 
   const pageHint =
     bulkActionMode === 'grok'
-      ? 'Tab Thiếu video — tick hoặc kéo vùng chọn story, rồi Chạy Grok trên extension.'
+      ? 'Tab Thiếu video — tick hoặc kéo vùng chọn video ngắn, rồi Chạy Grok trên extension.'
       : bulkActionMode === 'sheet'
-        ? 'Tab Chưa lên sheet — tick hoặc kéo vùng chọn story, rồi đẩy GG Sheet.'
+        ? 'Tab Chưa lên sheet — tick hoặc kéo vùng chọn video ngắn, rồi đẩy GG Sheet.'
         : 'Lọc «Thiếu video» hoặc «Chưa lên sheet» để chọn hàng loạt và xử lý.'
 
-  const statusLabel = statusFilter ? getStoryListStatusLabel(statusFilter) : ''
+  const statusLabel = statusFilter ? getVideoShortListStatusLabel(statusFilter) : ''
   const selectionCount = selectedIds.size
   const isBulkPending = grokMutation.isPending || sheetMutation.isPending
 
@@ -441,7 +441,7 @@ export default function StoriesPage() {
     <div className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="text-xl font-semibold text-white">Câu chuyện</h1>
+          <h1 className="text-xl font-semibold text-white">Video ngắn</h1>
           <p className="mt-1 text-sm text-slate-400">{pageHint}</p>
         </div>
       </div>
@@ -570,17 +570,17 @@ export default function StoriesPage() {
         </div>
       ) : items.length === 0 ? (
         <EmptyState
-          title={statusFilter || searchQuery ? 'Không có câu chuyện khớp bộ lọc' : 'Chưa có câu chuyện nào'}
+          title={statusFilter || searchQuery ? 'Không có video ngắn khớp bộ lọc' : 'Chưa có video ngắn nào'}
           description={
             statusFilter || searchQuery
               ? 'Thử bộ lọc khác hoặc xóa tìm kiếm.'
-              : 'Câu chuyện được tạo sau bước lưu ChatGPT trong quy trình đa bước hoặc extension.'
+              : 'Video ngắn được tạo sau bước lưu ChatGPT trong quy trình đa bước hoặc extension.'
           }
         />
       ) : (
         <>
           <p className="text-xs text-slate-500">
-            {pagination?.total ?? items.length} câu chuyện
+            {pagination?.total ?? items.length} video ngắn
             {searchQuery ? ` · tìm: "${searchQuery}"` : ''}
             {statusLabel ? ` · lọc: ${statusLabel}` : ''}
           </p>
@@ -605,7 +605,7 @@ export default function StoriesPage() {
             ) : null}
 
             {items.map((story) => (
-              <StoryCard
+              <VideoShortCard
                 key={story._id}
                 story={story}
                 selected={selectedIds.has(story._id)}
