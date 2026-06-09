@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { FiChevronDown, FiChevronRight } from 'react-icons/fi'
+import { FiChevronDown, FiChevronLeft, FiChevronRight } from 'react-icons/fi'
 import { useMemo, useState } from 'react'
 import EmptyState from '@/components/EmptyState'
 import PlatformBadge from '@/components/PlatformBadge'
@@ -22,13 +22,16 @@ function formatTrigger(raw: unknown) {
   return TRIGGER_LABELS[key] || key
 }
 
+const RUNS_PAGE_SIZE = 20
+
 export default function RunsPage() {
   const queryClient = useQueryClient()
+  const [page, setPage] = useState(1)
   const [expandedId, setExpandedId] = useState<string | null>(null)
 
   const runsQuery = useQuery({
-    queryKey: ['multi-workflow-runs-full'],
-    queryFn: () => listMultiWorkflowRuns({ limit: 50 }),
+    queryKey: ['multi-workflow-runs-full', page],
+    queryFn: () => listMultiWorkflowRuns({ page, limit: RUNS_PAGE_SIZE }),
     refetchInterval: 5000,
   })
 
@@ -52,7 +55,8 @@ export default function RunsPage() {
     refetchInterval: expandedId ? 5000 : false,
   })
 
-  const runs = runsQuery.data || []
+  const runs = runsQuery.data?.items || []
+  const pagination = runsQuery.data?.pagination
 
   const cancelMutation = useMutation({
     mutationFn: (runId: string) => cancelMultiWorkflowRun(runId),
@@ -68,7 +72,10 @@ export default function RunsPage() {
     <div className="space-y-6">
       <div>
         <h1 className="text-xl font-semibold text-white">Lịch sử chạy</h1>
-        <p className="mt-1 text-sm text-slate-400">Lịch sử và chi tiết từng lần chạy quy trình đa bước.</p>
+        <p className="mt-1 text-sm text-slate-400">
+          Lịch sử và chi tiết từng lần chạy quy trình đa bước
+          {pagination?.total ? ` — ${pagination.total} lần chạy` : ''}.
+        </p>
       </div>
 
       {runsQuery.isLoading ? (
@@ -168,6 +175,38 @@ export default function RunsPage() {
           })}
         </div>
       )}
+
+      {pagination && pagination.totalPages > 1 ? (
+        <div className="flex items-center justify-between gap-3">
+          <button
+            type="button"
+            disabled={page <= 1}
+            onClick={() => {
+              setExpandedId(null)
+              setPage((p) => Math.max(1, p - 1))
+            }}
+            className="inline-flex items-center gap-1 rounded-lg border border-white/10 px-3 py-1.5 text-xs text-slate-300 disabled:opacity-40"
+          >
+            <FiChevronLeft className="h-4 w-4" />
+            Trước
+          </button>
+          <span className="text-xs text-slate-500">
+            Trang {pagination.page} / {pagination.totalPages}
+          </span>
+          <button
+            type="button"
+            disabled={page >= pagination.totalPages}
+            onClick={() => {
+              setExpandedId(null)
+              setPage((p) => p + 1)
+            }}
+            className="inline-flex items-center gap-1 rounded-lg border border-white/10 px-3 py-1.5 text-xs text-slate-300 disabled:opacity-40"
+          >
+            Sau
+            <FiChevronRight className="h-4 w-4" />
+          </button>
+        </div>
+      ) : null}
     </div>
   )
 }

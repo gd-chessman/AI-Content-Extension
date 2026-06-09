@@ -43,7 +43,7 @@ export default function OverviewPage() {
     refetchInterval: 5000,
   })
 
-  const runs = runsQuery.data || []
+  const runs = runsQuery.data?.items || []
   const jobs = jobsQuery.data || []
 
   const activeRuns = runs.filter((r) => r.status === 'running' || r.status === 'queued').length

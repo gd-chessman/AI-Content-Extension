@@ -1,6 +1,6 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { FiExternalLink, FiRefreshCw } from 'react-icons/fi'
+import { FiChevronLeft, FiChevronRight, FiExternalLink, FiRefreshCw } from 'react-icons/fi'
 import { SiGooglesheets } from 'react-icons/si'
 import { Link } from 'react-router-dom'
 import EmptyState from '@/components/EmptyState'
@@ -8,6 +8,8 @@ import GgSheetSettingsPanel, { GgSheetSettingsButton } from '@/components/GgShee
 import { compareGgSheetWithStories, getMyGgSheetSetting } from '@/services/GgSheetService'
 
 type ViewFilter = 'all' | 'matched' | 'sheet_only' | 'db_only'
+
+const SHEET_ROWS_PAGE_SIZE = 20
 
 function MatchBadge({ status }: { status: 'matched' | 'sheet_only' | 'db_only' }) {
   if (status === 'matched') {
@@ -33,6 +35,7 @@ function MatchBadge({ status }: { status: 'matched' | 'sheet_only' | 'db_only' }
 
 export default function GgSheetPage() {
   const [viewFilter, setViewFilter] = useState<ViewFilter>('all')
+  const [sheetPage, setSheetPage] = useState(1)
   const [settingsOpen, setSettingsOpen] = useState(false)
 
   const settingQuery = useQuery({
@@ -52,13 +55,40 @@ export default function GgSheetPage() {
 
   const filteredSheetRows = useMemo(() => {
     if (!data) return []
-    if (viewFilter === 'matched') return data.rows.filter((row) => row.matchStatus === 'matched')
-    if (viewFilter === 'sheet_only') return data.rows.filter((row) => row.matchStatus === 'sheet_only')
-    if (viewFilter === 'db_only') return []
-    return data.rows
+    let rows = data.rows
+    if (viewFilter === 'matched') rows = rows.filter((row) => row.matchStatus === 'matched')
+    else if (viewFilter === 'sheet_only') rows = rows.filter((row) => row.matchStatus === 'sheet_only')
+    else if (viewFilter === 'db_only') rows = []
+    return [...rows].sort((a, b) => b.rowNumber - a.rowNumber)
   }, [data, viewFilter])
 
+  const sheetPagination = useMemo(() => {
+    const total = filteredSheetRows.length
+    const totalPages = Math.max(1, Math.ceil(total / SHEET_ROWS_PAGE_SIZE))
+    const page = Math.min(sheetPage, totalPages)
+    const start = (page - 1) * SHEET_ROWS_PAGE_SIZE
+    return {
+      page,
+      totalPages,
+      total,
+      items: filteredSheetRows.slice(start, start + SHEET_ROWS_PAGE_SIZE),
+      rangeStart: total === 0 ? 0 : start + 1,
+      rangeEnd: Math.min(start + SHEET_ROWS_PAGE_SIZE, total),
+    }
+  }, [filteredSheetRows, sheetPage])
+
+  useEffect(() => {
+    if (sheetPage > sheetPagination.totalPages) {
+      setSheetPage(sheetPagination.totalPages)
+    }
+  }, [sheetPage, sheetPagination.totalPages])
+
   const showDbOnly = viewFilter === 'all' || viewFilter === 'db_only'
+
+  const handleViewFilterChange = (next: ViewFilter) => {
+    setViewFilter(next)
+    setSheetPage(1)
+  }
 
   const filterButtons: Array<{ value: ViewFilter; label: string; count: number }> = [
     { value: 'all', label: 'Tất cả Sheet', count: data?.summary.sheetRows || 0 },
@@ -182,7 +212,7 @@ export default function GgSheetPage() {
               <button
                 key={item.value}
                 type="button"
-                onClick={() => setViewFilter(item.value)}
+                onClick={() => handleViewFilterChange(item.value)}
                 className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs transition-colors ${
                   active
                     ? 'border-blue-300/30 bg-blue-500/20 text-blue-100 ring-1 ring-blue-300/25'
@@ -210,12 +240,21 @@ export default function GgSheetPage() {
 
       {data?.configured && viewFilter !== 'db_only' ? (
         <section className="surface-card overflow-hidden rounded-2xl">
-          <div className="border-b border-white/10 px-4 py-3">
-            <h2 className="text-sm font-semibold text-white">Dữ liệu từ Google Sheet</h2>
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 px-4 py-3">
+            <div>
+              <h2 className="text-sm font-semibold text-white">Dữ liệu từ Google Sheet</h2>
+              <p className="mt-0.5 text-[11px] text-slate-500">Hiển thị từ dòng cuối Sheet lên đầu (mới nhất trước).</p>
+            </div>
+            {sheetPagination.total > 0 ? (
+              <span className="text-[11px] text-slate-500">
+                {sheetPagination.rangeStart}–{sheetPagination.rangeEnd} / {sheetPagination.total} dòng
+              </span>
+            ) : null}
           </div>
           {filteredSheetRows.length === 0 ? (
             <p className="p-4 text-sm text-slate-500">Không có dòng nào phù hợp bộ lọc.</p>
           ) : (
+            <>
             <div className="overflow-x-auto">
               <table className="w-full table-fixed text-left text-xs">
                 <colgroup>
@@ -235,7 +274,7 @@ export default function GgSheetPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-white/5">
-                  {filteredSheetRows.map((row) => (
+                  {sheetPagination.items.map((row) => (
                     <tr key={row.rowNumber} className="align-top hover:bg-white/2">
                       <td className="whitespace-nowrap px-4 py-3 text-slate-300">{row.rowNumber}</td>
                       <td className="px-4 py-3 font-medium leading-snug break-words text-white">
@@ -271,6 +310,32 @@ export default function GgSheetPage() {
                 </tbody>
               </table>
             </div>
+            {sheetPagination.totalPages > 1 ? (
+              <div className="flex items-center justify-between gap-3 border-t border-white/10 px-4 py-3">
+                <button
+                  type="button"
+                  disabled={sheetPagination.page <= 1}
+                  onClick={() => setSheetPage((p) => Math.max(1, p - 1))}
+                  className="inline-flex items-center gap-1 rounded-lg border border-white/10 px-3 py-1.5 text-xs text-slate-300 disabled:opacity-40"
+                >
+                  <FiChevronLeft className="h-4 w-4" />
+                  Trước
+                </button>
+                <span className="text-xs text-slate-500">
+                  Trang {sheetPagination.page} / {sheetPagination.totalPages}
+                </span>
+                <button
+                  type="button"
+                  disabled={sheetPagination.page >= sheetPagination.totalPages}
+                  onClick={() => setSheetPage((p) => p + 1)}
+                  className="inline-flex items-center gap-1 rounded-lg border border-white/10 px-3 py-1.5 text-xs text-slate-300 disabled:opacity-40"
+                >
+                  Sau
+                  <FiChevronRight className="h-4 w-4" />
+                </button>
+              </div>
+            ) : null}
+            </>
           )}
         </section>
       ) : null}
