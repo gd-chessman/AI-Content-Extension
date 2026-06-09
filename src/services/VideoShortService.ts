@@ -4,8 +4,8 @@ export type VideoShortItem = {
   _id: string
   userId: string
   videoShortTopicId: string
-  /** VideoShort nguồn (reel) — nhiều story có thể cùng một nguồn */
-  videoShortSourceId?: string
+  /** Nguồn video (reel) — nhiều video ngắn có thể cùng một nguồn */
+  videoSourceId?: string
   name: string
   sourceContent: string
   sourceReelUrl: string
@@ -13,7 +13,7 @@ export type VideoShortItem = {
   longContent?: string
   blogPostUrl?: string
   fbReelUrl?: string
-  /** Lượt ghi nhận trên story nguồn (reel) — chung cho mọi story cùng nguồn */
+  /** Lượt ghi nhận trên nguồn reel — chung cho mọi video ngắn cùng nguồn */
   usageCount?: number
   videoPrompts?: string[]
   imageUrls?: string[]
@@ -70,8 +70,8 @@ export const getMyVideoShorts = async (params?: GetMyVideoShortsParams) => {
   }) as PaginatedVideoShortsResponse
 }
 
-/** Một bản ghi VideoShortSource (API đã sắp: mới trước, usageCount thấp trước khi trùng thời điểm). */
-export type VideoShortSourceListItem = {
+/** Một bản ghi VideoSource (mới trước, usageCount thấp trước khi trùng thời điểm). */
+export type VideoSourceListItem = {
   _id: string
   sourceContent: string
   sourceReelUrl: string
@@ -82,23 +82,18 @@ export type VideoShortSourceListItem = {
   updatedAt?: string
 }
 
-/** Danh sách story nguồn (caption reel) — thứ tự ưu tiên mới & ít dùng. */
-export const getMyVideoShortSources = async () => {
-  const response = await axiosClient.get('/video-shorts/sources/my')
-  return (response.data || []) as VideoShortSourceListItem[]
+export const getMyVideoSources = async () => {
+  const response = await axiosClient.get('/video-sources/my')
+  return (response.data || []) as VideoSourceListItem[]
 }
 
-/** Kết quả GET /video-shorts/sources/check-reel — chỉ phản ánh VideoShortSource. */
-export type VideoShortSourceReelCheckResult = {
+export type VideoSourceReelCheckResult = {
   saved: boolean
-  videoShortSourceId?: string
+  videoSourceId?: string
   canonicalUrl?: string
   myUsageCount: number
   globalUsageCount: number
 }
-
-/** @deprecated Dùng VideoShortSourceReelCheckResult */
-export type VideoShortReelCheckResult = VideoShortSourceReelCheckResult
 
 export type IncrementVideoShortUsageResult = {
   videoShortId: string
@@ -107,15 +102,12 @@ export type IncrementVideoShortUsageResult = {
   globalUsageCount: number
 }
 
-export const checkVideoShortSourceForReel = async (sourceReelUrl: string) => {
-  const response = await axiosClient.get('/video-shorts/sources/check-reel', {
+export const checkVideoSourceForReel = async (sourceReelUrl: string) => {
+  const response = await axiosClient.get('/video-sources/check-reel', {
     params: { url: sourceReelUrl },
   })
-  return response.data as VideoShortSourceReelCheckResult
+  return response.data as VideoSourceReelCheckResult
 }
-
-/** @deprecated Dùng checkVideoShortSourceForReel */
-export const checkVideoShortReelSaved = checkVideoShortSourceForReel
 
 export const incrementVideoShortUsage = async (videoShortId: string) => {
   const response = await axiosClient.post(`/video-shorts/${videoShortId}/increment-usage`)
@@ -127,7 +119,7 @@ export const getVideoShortById = async (videoShortId: string) => {
   return response.data as VideoShortItem
 }
 
-/** VideoShort mới nhất có videoPrompts + imageUrls, mặc định không quá 1 giờ. */
+/** Video ngắn mới nhất có videoPrompts + imageUrls, mặc định không quá 1 giờ. */
 export const getLatestGrokReadyVideoShort = async (options?: { maxAgeMs?: number }) => {
   const response = await axiosClient.get('/video-shorts/my/latest-grok-ready', {
     params: {
@@ -145,12 +137,12 @@ export const patchVideoShort = async (
   return response.data as VideoShortItem
 }
 
-export const syncVideoShortSourceFromReel = async (payload: {
+export const syncVideoSourceFromReel = async (payload: {
   sourceContent: string
   sourceReelUrl: string
   name?: string
 }) => {
-  const response = await axiosClient.post('/video-shorts/sources/sync', payload)
+  const response = await axiosClient.post('/video-sources/sync', payload)
   return response.data as {
     _id: string
     userId: string
@@ -164,12 +156,11 @@ export const syncVideoShortSourceFromReel = async (payload: {
   }
 }
 
-/** Đánh dấu reel bỏ qua vĩnh viễn (caption timeout) — không chọn lại trong workflow. */
-export const skipVideoShortSourceFromReel = async (payload: {
+export const skipVideoSourceFromReel = async (payload: {
   sourceReelUrl: string
   name?: string
   reason?: string
 }) => {
-  const response = await axiosClient.post('/video-shorts/sources/skip', payload)
-  return response.data as VideoShortSourceListItem
+  const response = await axiosClient.post('/video-sources/skip', payload)
+  return response.data as VideoSourceListItem
 }

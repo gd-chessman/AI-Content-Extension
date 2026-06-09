@@ -2,7 +2,7 @@ import axiosClient from '@/utils/axiosClient'
 
 export const completeMultiWorkflowJob = async (
   jobId: string,
-  payload?: { videoShortId?: string; videoShortSourceId?: string; result?: Record<string, unknown> },
+  payload?: { videoShortId?: string; videoSourceId?: string; result?: Record<string, unknown> },
 ) => {
   const response = await axiosClient.patch(`/multi-workflows/jobs/${jobId}/complete`, payload || {})
   return response.data

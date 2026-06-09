@@ -31,10 +31,10 @@ import {
   updateFanpage,
 } from '@/services/FanpageService'
 import {
-  checkVideoShortSourceForReel,
-  getMyVideoShortSources,
-  skipVideoShortSourceFromReel,
-  syncVideoShortSourceFromReel,
+  checkVideoSourceForReel,
+  getMyVideoSources,
+  skipVideoSourceFromReel,
+  syncVideoSourceFromReel,
 } from '@/services/VideoShortService'
 import { normalizeStepDisplayMode } from '@/utils/stepDisplayMode'
 import {
@@ -356,41 +356,41 @@ export default function FacebookScreen() {
 
   const { data: reelSavedCheck } = useQuery({
     queryKey: ['video-shorts', 'sources', 'check-reel', checkReelQueryKey],
-    queryFn: () => checkVideoShortSourceForReel(selectedReel!.url.trim()),
+    queryFn: () => checkVideoSourceForReel(selectedReel!.url.trim()),
     enabled: Boolean(checkReelQueryKey),
     staleTime: 15_000,
     refetchOnMount: 'always',
   })
-  /** Đã có VideoShortSource cho reel (GET …/sources/check-reel). */
-  const hasVideoShortSourceSynced = reelSavedCheck?.saved === true
+  /** Đã có VideoSource cho reel (GET /video-sources/check-reel). */
+  const hasVideoSourceSynced = reelSavedCheck?.saved === true
   /** Hiển thị tick khi đã có nguồn trên server hoặc vừa lưu xong. */
-  const reelSaveHasSyncedState = hasVideoShortSourceSynced || storySaveStatus === 'ok'
+  const reelSaveHasSyncedState = hasVideoSourceSynced || storySaveStatus === 'ok'
 
-  const { data: myVideoShortSources = [] } = useQuery({
+  const { data: myVideoSources = [] } = useQuery({
     queryKey: ['video-shorts', 'sources', 'my'],
-    queryFn: getMyVideoShortSources,
+    queryFn: getMyVideoSources,
     enabled: activeView === 'reels' || activeView === 'content',
     staleTime: 30_000,
   })
 
   const savedCanonicalReelUrls = useMemo(() => {
     const next = new Set<string>()
-    for (const row of myVideoShortSources) {
+    for (const row of myVideoSources) {
       const u = (row.sourceReelUrl || '').trim()
       if (u) next.add(canonicalSourceReelUrl(u))
     }
     return next
-  }, [myVideoShortSources])
+  }, [myVideoSources])
 
   const skippedReelReasonByUrl = useMemo(() => {
     const next = new Map<string, string>()
-    for (const row of myVideoShortSources) {
+    for (const row of myVideoSources) {
       const reason = (row.skipReason || '').trim()
       const u = (row.sourceReelUrl || '').trim()
       if (reason && u) next.set(canonicalSourceReelUrl(u), reason)
     }
     return next
-  }, [myVideoShortSources])
+  }, [myVideoSources])
 
   const { data: fbWorkflowSteps = [], isLoading: isLoadingFbWorkflowSteps } = useQuery<FacebookProcessStep[]>({
     queryKey: ['facebook-workflow-steps'],
@@ -959,7 +959,7 @@ export default function FacebookScreen() {
     }
     setVideoShortSaveStatus('saving')
     try {
-      await syncVideoShortSourceFromReel({
+      await syncVideoSourceFromReel({
         sourceContent: contentText.trim(),
         sourceReelUrl: urlRaw,
         name: (selectedReel?.title || '').trim().slice(0, 200),
@@ -1193,7 +1193,7 @@ export default function FacebookScreen() {
           setIsContentTranslated(false)
         }
         if (isFbWorkflowRunningRef.current) {
-          void syncVideoShortSourceFromReel({
+          void syncVideoSourceFromReel({
             sourceReelUrl: targetReel.url.trim(),
             sourceContent: description.trim(),
             name: (targetReel.title || '').trim().slice(0, 200),
@@ -1660,7 +1660,7 @@ export default function FacebookScreen() {
   const fetchUnsavedScannedReels = async () => {
     const sources = await queryClient.fetchQuery({
       queryKey: ['video-shorts', 'sources', 'my'],
-      queryFn: getMyVideoShortSources,
+      queryFn: getMyVideoSources,
     })
     const handledSet = new Set<string>()
     for (const row of sources) {
@@ -1832,7 +1832,7 @@ export default function FacebookScreen() {
 
           const sources = await queryClient.fetchQuery({
             queryKey: ['video-shorts', 'sources', 'my'],
-            queryFn: getMyVideoShortSources,
+            queryFn: getMyVideoSources,
           })
           const savedSet = new Set<string>()
           for (const row of sources) {
@@ -1915,7 +1915,7 @@ export default function FacebookScreen() {
             throw new Error('Không có reel đang chọn để bỏ qua.')
           }
 
-          await skipVideoShortSourceFromReel({
+          await skipVideoSourceFromReel({
             sourceReelUrl: current.url.trim(),
             name: (current.title || '').trim().slice(0, 200),
             reason: 'caption_timeout',
@@ -1954,7 +1954,7 @@ export default function FacebookScreen() {
         const text = contentTextRef.current.trim()
         if (!sr?.url || !text) throw new Error('Thiếu reel hoặc nội dung để lưu')
         try {
-          const saved = await syncVideoShortSourceFromReel({
+          const saved = await syncVideoSourceFromReel({
             sourceContent: text,
             sourceReelUrl: sr.url.trim(),
             name: (sr.title || '').trim().slice(0, 200),
@@ -1962,7 +1962,7 @@ export default function FacebookScreen() {
           void queryClient.invalidateQueries({ queryKey: ['video-shorts', 'sources', 'check-reel'] })
           void queryClient.invalidateQueries({ queryKey: ['video-shorts', 'my'] })
           void queryClient.invalidateQueries({ queryKey: ['video-shorts', 'sources', 'my'] })
-          return { saved: true, videoShortSourceId: saved._id }
+          return { saved: true, videoSourceId: saved._id }
         } catch (e: unknown) {
           if (isAxiosError(e) && e.response?.status === 409) {
             return { skipped: true, reason: 'duplicate_reel' }
@@ -2027,7 +2027,7 @@ export default function FacebookScreen() {
     runningFbWorkflowRunIdRef.current = workflowRunId
     let mwOutcome: 'completed' | 'failed' | 'cancelled' | null = null
     let mwErrorMessage = ''
-    let mwVideoShortSourceId = ''
+    let mwVideoSourceId = ''
 
     let facebookCriteria = options?.facebookCriteria
     if (workflowRunId && facebookCriteria === undefined && options?.source === 'sse') {
@@ -2092,12 +2092,12 @@ export default function FacebookScreen() {
 
         try {
           const output = await executeFacebookWorkflowStep(effectiveStep, facebookCriteria)
-          const outputVideoShortSourceId =
-            output && typeof output === 'object' && 'videoShortSourceId' in output
-              ? String((output as { videoShortSourceId?: string }).videoShortSourceId || '').trim()
+          const outputVideoSourceId =
+            output && typeof output === 'object' && 'videoSourceId' in output
+              ? String((output as { videoSourceId?: string }).videoSourceId || '').trim()
               : ''
-          if (outputVideoShortSourceId) {
-            mwVideoShortSourceId = outputVideoShortSourceId
+          if (outputVideoSourceId) {
+            mwVideoSourceId = outputVideoSourceId
           }
           await updateStepRun(stepRun._id, {
             status: 'completed',
@@ -2163,7 +2163,7 @@ export default function FacebookScreen() {
       if (workflowRunId && mwOutcome && !workflowCancelledRemotelyRef.current) {
         try {
           await finalizeMultiWorkflowJobAfterWorkflowRun(workflowRunId, mwOutcome, {
-            videoShortSourceId: mwVideoShortSourceId || undefined,
+            videoSourceId: mwVideoSourceId || undefined,
             errorMessage: mwErrorMessage,
           })
         } catch {
@@ -2892,12 +2892,12 @@ export default function FacebookScreen() {
                   storySaveStatus === 'saving'
                 }
                 aria-label={
-                  hasVideoShortSourceSynced
+                  hasVideoSourceSynced
                     ? 'Lưu lại nguồn reel trên máy chủ (cập nhật nội dung nếu đã có)'
                     : 'Lưu nội dung và link reel vào máy chủ (nguồn reel)'
                 }
                 title={
-                  hasVideoShortSourceSynced
+                  hasVideoSourceSynced
                     ? 'Nguồn reel đã có. Bấm để cập nhật lại caption/URL mới nhất.'
                     : 'Lưu caption + URL reel làm nguồn reel (không tạo bản ghi video ngắn).'
                 }
@@ -2906,7 +2906,7 @@ export default function FacebookScreen() {
                     ? 'bg-amber-500/25 text-amber-100 disabled:opacity-40'
                     : storySaveStatus === 'error'
                       ? 'bg-rose-500/80 text-white disabled:opacity-40'
-                      : hasVideoShortSourceSynced
+                      : hasVideoSourceSynced
                         ? 'bg-amber-500/20 text-amber-100 hover:bg-amber-500/30'
                         : 'bg-amber-500/25 text-amber-100 hover:bg-amber-500/35 disabled:opacity-40'
                 }`}

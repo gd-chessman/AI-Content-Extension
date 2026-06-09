@@ -50,7 +50,7 @@ import {
 import {
   createVideoShortFromReel,
   getMyVideoShorts,
-  getMyVideoShortSources,
+  getMyVideoSources,
 } from '@/services/VideoShortService'
 import { uploadVideoShortImagesFromDataUrls } from '@/services/CloudinaryUploadService'
 import { chatgptExtractContent } from '@/utils/chatgptExtractContent'
@@ -210,11 +210,11 @@ const CHATGPT_PATTERNS = ['*://chatgpt.com/*', '*://chat.openai.com/*']
 const CHATGPT_SELECTED_WORKFLOW_STORAGE_KEY = 'chatgptSelectedWorkflowId'
 const CHATGPT_WORKFLOW_TAB_STORAGE_KEY = 'chatgptWorkflowTabId'
 
-/** VideoShort mới nhất cùng VideoShortSource (để gắn lưu videoPrompts cuối workflow). */
-async function resolveLatestVideoShortIdForSource(videoShortSourceId: string): Promise<string> {
+/** VideoShort mới nhất cùng VideoSource (để gắn lưu videoPrompts cuối workflow). */
+async function resolveLatestVideoShortIdForSource(videoSourceId: string): Promise<string> {
   const { items: stories } = await getMyVideoShorts({ page: 1, limit: 200 })
   const linked = stories
-    .filter((s) => (s.videoShortSourceId || '').trim() === videoShortSourceId.trim())
+    .filter((s) => (s.videoSourceId || '').trim() === videoSourceId.trim())
     .sort((a, b) => {
       const tb = new Date(b.createdAt || 0).getTime()
       const ta = new Date(a.createdAt || 0).getTime()
@@ -239,10 +239,10 @@ export type ChatgptVideoShortSaveBundle = {
 async function createVideoShortForPipelineRun(
   videoPrompts: string[],
   bundle: ChatgptVideoShortSaveBundle,
-  preferredVideoShortSourceId?: string,
+  preferredVideoSourceId?: string,
 ): Promise<{ videoShortId: string; error?: string }> {
-  const sources = await getMyVideoShortSources()
-  const preferredId = (preferredVideoShortSourceId || '').trim()
+  const sources = await getMyVideoSources()
+  const preferredId = (preferredVideoSourceId || '').trim()
   const top = preferredId
     ? sources.find((s) => s._id === preferredId) || sources[0]
     : sources[0]
@@ -583,8 +583,8 @@ export default function ChatgptScreen() {
   const runningWorkflowRunIdRef = useRef('')
   /** VideoShort đang chạy pipeline ChatGPT (tiến trình 1 — cùng story để lưu videoPrompts sau cùng). */
   const chatgptPipelineVideoShortIdRef = useRef('')
-  /** VideoShortSource từ multi-workflow (bước Facebook vừa lưu). */
-  const chatgptPipelineVideoShortSourceIdRef = useRef('')
+  /** VideoSource từ multi-workflow (bước Facebook vừa lưu). */
+  const chatgptPipelineVideoSourceIdRef = useRef('')
   /** Prompt VIDEO (1 hoặc nhiều) sau bước tách — commit DB ở bước save story. */
   const chatgptDraftVideoPromptsRef = useRef<string[] | null>(null)
   /** Workflow: gọi công cụ step_panel — gom text VIDEO, không copy clipboard. */
@@ -1311,8 +1311,8 @@ export default function ChatgptScreen() {
   }
 
   const resolveRewriteVideoShortCaption = async (): Promise<string> => {
-    const sources = await getMyVideoShortSources()
-    const pipelineSourceId = chatgptPipelineVideoShortSourceIdRef.current.trim()
+    const sources = await getMyVideoSources()
+    const pipelineSourceId = chatgptPipelineVideoSourceIdRef.current.trim()
     if (pipelineSourceId) {
       const picked = sources.find((s) => s._id === pipelineSourceId)
       const content = (picked?.sourceContent || '').trim()
@@ -1827,7 +1827,7 @@ export default function ChatgptScreen() {
       const created = await createVideoShortForPipelineRun(
         videoPrompts,
         bundle,
-        chatgptPipelineVideoShortSourceIdRef.current.trim() || undefined,
+        chatgptPipelineVideoSourceIdRef.current.trim() || undefined,
       )
       if (!created.videoShortId) {
         throw new Error(created.error || `${step.label}: Không tạo được video ngắn trên máy chủ.`)
@@ -1972,7 +1972,7 @@ export default function ChatgptScreen() {
     let mwErrorMessage = ''
     try {
       chatgptPipelineVideoShortIdRef.current = ''
-      chatgptPipelineVideoShortSourceIdRef.current = ''
+      chatgptPipelineVideoSourceIdRef.current = ''
       chatgptDraftVideoPromptsRef.current = null
 
       const lockedTab = await pickChatgptTab(await readStoredChatgptTabId())
@@ -1997,8 +1997,8 @@ export default function ChatgptScreen() {
         try {
           const existingRun = await getWorkflowRunById(workflowRunId)
           const mw = getMultiWorkflowPayload((existingRun.payload || {}) as Record<string, unknown>)
-          if (mw?.videoShortSourceId) {
-            chatgptPipelineVideoShortSourceIdRef.current = mw.videoShortSourceId.trim()
+          if (mw?.videoSourceId) {
+            chatgptPipelineVideoSourceIdRef.current = mw.videoSourceId.trim()
           }
         } catch {
           /* ignore */
@@ -2138,7 +2138,7 @@ export default function ChatgptScreen() {
       lockedWorkflowTabIdRef.current = 0
       runningWorkflowRunIdRef.current = ''
       chatgptPipelineVideoShortIdRef.current = ''
-      chatgptPipelineVideoShortSourceIdRef.current = ''
+      chatgptPipelineVideoSourceIdRef.current = ''
       chatgptDraftVideoPromptsRef.current = null
       setIsWorkflowRunning(false)
     }
@@ -2543,7 +2543,7 @@ export default function ChatgptScreen() {
       if (r) return r
     }
     try {
-      const sources = await getMyVideoShortSources()
+      const sources = await getMyVideoSources()
       const top = sources[0]
       if (!top?._id) return null
       const sid = await resolveLatestVideoShortIdForSource(top._id)
