@@ -6,8 +6,8 @@ import {
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
-import { CreateVideoShortDto, ListMyVideoShortsQuery, PatchVideoShortDto, SkipVideoShortSourceDto, UpsertVideoShortSourceDto } from './video-shorts.dto';
-import { VideoShortSource, VideoShortSourceDocument } from './video-short-source.schema';
+import { CreateVideoShortDto, ListMyVideoShortsQuery, PatchVideoShortDto, SkipVideoSourceDto, UpsertVideoSourceDto } from './video-shorts.dto';
+import { VideoSource, VideoSourceDocument } from './video-source.schema';
 import { VideoShort, VideoShortDocument } from './video-short.schema';
 import { VideoShortTopic, VideoShortTopicDocument } from './video-short-topic.schema';
 import { GgSheetService } from '../ggsheet/ggsheet.service';
@@ -29,19 +29,19 @@ export class VideoShortsService {
   constructor(
     @InjectModel(VideoShort.name)
     private readonly storyModel: Model<VideoShortDocument>,
-    @InjectModel(VideoShortSource.name)
-    private readonly videoShortSourceModel: Model<VideoShortSourceDocument>,
+    @InjectModel(VideoSource.name)
+    private readonly videoSourceModel: Model<VideoSourceDocument>,
     @InjectModel(VideoShortTopic.name)
     private readonly storyTopicModel: Model<VideoShortTopicDocument>,
     private readonly ggSheetService: GgSheetService,
   ) {}
 
   /**
-   * Danh sách VideoShortSource của user — mặc định:
+   * Danh sách VideoSource của user — mặc định:
    * mới nhất trước (`createdAt` desc), cùng thời điểm ưu tiên `usageCount` thấp.
    */
   async listSourcesForUser(userId: string) {
-    const rows = await this.videoShortSourceModel
+    const rows = await this.videoSourceModel
       .find({ userId: new Types.ObjectId(userId) })
       .select('_id sourceContent sourceReelUrl name usageCount skipReason createdAt updatedAt')
       .sort({ createdAt: -1, usageCount: 1 })
@@ -116,7 +116,7 @@ export class VideoShortsService {
     }
 
     const populate = {
-      path: 'videoShortSourceId',
+      path: 'videoSourceId',
       select: 'sourceContent sourceReelUrl name usageCount',
     };
 
@@ -168,7 +168,7 @@ export class VideoShortsService {
     limit: number,
   ) {
     const populate = {
-      path: 'videoShortSourceId',
+      path: 'videoSourceId',
       select: 'sourceContent sourceReelUrl name usageCount',
     };
 
@@ -219,7 +219,7 @@ export class VideoShortsService {
 
     const canonicalReelUrl = this.canonicalSourceReelUrl(sourceReelUrl);
     const userOid = new Types.ObjectId(userId);
-    const sourceDoc = await this.videoShortSourceModel
+    const sourceDoc = await this.videoSourceModel
       .findOne({ userId: userOid, sourceReelUrl: canonicalReelUrl })
       .select('_id')
       .lean();
@@ -251,7 +251,7 @@ export class VideoShortsService {
 
     const storyPayload: {
       userId: Types.ObjectId;
-      videoShortSourceId: Types.ObjectId;
+      videoSourceId: Types.ObjectId;
       name: string;
       shortContent: string;
       longContent: string;
@@ -260,7 +260,7 @@ export class VideoShortsService {
       videoPrompts?: string[];
     } = {
       userId: userOid,
-      videoShortSourceId: new Types.ObjectId(String(sourceDoc._id)),
+      videoSourceId: new Types.ObjectId(String(sourceDoc._id)),
       name,
       shortContent,
       longContent,
@@ -275,7 +275,7 @@ export class VideoShortsService {
 
     const created = await this.storyModel.create(storyPayload);
 
-    const sourceAfterUsage = await this.videoShortSourceModel.findOneAndUpdate(
+    const sourceAfterUsage = await this.videoSourceModel.findOneAndUpdate(
       { _id: sourceDoc._id, userId: userOid },
       { $inc: { usageCount: 1 } },
       { new: true },
@@ -283,12 +283,12 @@ export class VideoShortsService {
       .lean();
 
     const plain = created.toObject() as unknown as Record<string, unknown>;
-    plain.videoShortSourceId = (sourceAfterUsage || sourceDoc) as unknown as Record<string, unknown>;
+    plain.videoSourceId = (sourceAfterUsage || sourceDoc) as unknown as Record<string, unknown>;
     return this.serializeVideoShort(plain);
   }
 
   /** Lưu/cập nhật nội dung nguồn khi quét caption từ reel (không tạo VideoShort). */
-  async upsertVideoShortSourceForUser(userId: string, dto: UpsertVideoShortSourceDto) {
+  async upsertVideoSourceForUser(userId: string, dto: UpsertVideoSourceDto) {
     const sourceContent = (dto.sourceContent || '').trim();
     const sourceReelUrl = this.normalizeHttpUrl((dto.sourceReelUrl || '').trim());
 
@@ -305,17 +305,17 @@ export class VideoShortsService {
 
     const canonicalReelUrl = this.canonicalSourceReelUrl(sourceReelUrl);
     const userOid = new Types.ObjectId(userId);
-    const doc = await this.upsertVideoShortSourceDoc(userOid, {
+    const doc = await this.upsertVideoSourceDoc(userOid, {
       sourceReelUrl: canonicalReelUrl,
       sourceContent,
       name: (dto.name || '').trim().slice(0, 200),
     });
 
-    return this.serializeVideoShortSource(doc.toObject() as unknown as Record<string, unknown>);
+    return this.serializeVideoSource(doc.toObject() as unknown as Record<string, unknown>);
   }
 
   /** Đánh dấu reel bỏ qua (caption timeout, v.v.) — loại khỏi workflow chọn reel. */
-  async skipVideoShortSourceForUser(userId: string, dto: SkipVideoShortSourceDto) {
+  async skipVideoSourceForUser(userId: string, dto: SkipVideoSourceDto) {
     const sourceReelUrl = this.normalizeHttpUrl((dto.sourceReelUrl || '').trim());
     if (!sourceReelUrl) {
       throw new BadRequestException('Invalid reel URL.');
@@ -327,7 +327,7 @@ export class VideoShortsService {
     const reason = (dto.reason || 'caption_timeout').trim() || 'caption_timeout';
     const name = (dto.name || '').trim().slice(0, 200);
 
-    const existing = await this.videoShortSourceModel
+    const existing = await this.videoSourceModel
       .findOne({ userId: userOid, sourceReelUrl: canonicalReelUrl })
       .lean();
 
@@ -336,10 +336,10 @@ export class VideoShortsService {
       (existing.sourceContent || '').trim().length >= MIN_SOURCE_CONTENT_LENGTH &&
       !(existing.skipReason || '').trim()
     ) {
-      return this.serializeVideoShortSource(existing as unknown as Record<string, unknown>);
+      return this.serializeVideoSource(existing as unknown as Record<string, unknown>);
     }
 
-    const doc = await this.videoShortSourceModel.findOneAndUpdate(
+    const doc = await this.videoSourceModel.findOneAndUpdate(
       { userId: userOid, sourceReelUrl: canonicalReelUrl },
       {
         $set: {
@@ -354,7 +354,7 @@ export class VideoShortsService {
       throw new NotFoundException('Could not skip story source.');
     }
 
-    return this.serializeVideoShortSource(doc.toObject() as unknown as Record<string, unknown>);
+    return this.serializeVideoSource(doc.toObject() as unknown as Record<string, unknown>);
   }
 
   /** VideoShort mới nhất (≤ maxAgeMs) có ít nhất 1 videoPrompt và 1 imageUrl — dùng cho Grok khi thiếu videoShortId. */
@@ -372,7 +372,7 @@ export class VideoShortsService {
       .sort({ createdAt: -1 })
       .limit(20)
       .populate({
-        path: 'videoShortSourceId',
+        path: 'videoSourceId',
         select: 'sourceContent sourceReelUrl name usageCount',
       })
       .lean();
@@ -401,7 +401,7 @@ export class VideoShortsService {
     const row = await this.storyModel
       .findOne({ _id: new Types.ObjectId(videoShortId), userId: userOid })
       .populate({
-        path: 'videoShortSourceId',
+        path: 'videoSourceId',
         select: 'sourceContent sourceReelUrl name usageCount',
       })
       .lean();
@@ -436,7 +436,7 @@ export class VideoShortsService {
     const res = await this.storyModel
       .findOneAndUpdate({ _id: oid, userId: userOid }, { $set: update }, { new: true })
       .populate({
-        path: 'videoShortSourceId',
+        path: 'videoSourceId',
         select: 'sourceContent sourceReelUrl name usageCount',
       })
       .lean();
@@ -444,11 +444,11 @@ export class VideoShortsService {
       throw new NotFoundException('VideoShort not found.');
     }
 
-    const sourceOid = this.extractVideoShortSourceObjectId(res as Record<string, unknown>);
+    const sourceOid = this.extractVideoSourceObjectId(res as Record<string, unknown>);
     if (sourceOid) {
-      await this.videoShortSourceModel.updateOne({ _id: sourceOid, userId: userOid }, { $inc: { usageCount: 1 } });
+      await this.videoSourceModel.updateOne({ _id: sourceOid, userId: userOid }, { $inc: { usageCount: 1 } });
       const row = res as Record<string, unknown>;
-      const ss = row.videoShortSourceId;
+      const ss = row.videoSourceId;
       if (ss && typeof ss === 'object' && !Array.isArray(ss)) {
         const o = ss as Record<string, unknown>;
         o.usageCount = Number(o.usageCount || 0) + 1;
@@ -459,14 +459,14 @@ export class VideoShortsService {
   }
 
   /**
-   * Đã có **VideoShortSource** (story nguồn) cho URL reel này hay chưa — không đọc collection VideoShort.
+   * Đã có **VideoSource** (story nguồn) cho URL reel này hay chưa — không đọc collection VideoShort.
    */
-  async checkVideoShortSourceForReel(
+  async checkVideoSourceForReel(
     userId: string,
     rawUrl: string,
   ): Promise<{
     saved: boolean;
-    videoShortSourceId?: string;
+    videoSourceId?: string;
     canonicalUrl?: string;
     myUsageCount: number;
     globalUsageCount: number;
@@ -481,24 +481,24 @@ export class VideoShortsService {
       return { saved: false, myUsageCount: 0, globalUsageCount: 0 };
     }
     const canonical = this.canonicalSourceReelUrl(normalized);
-    const globalUsageCount = await this.sumUsageAcrossVideoShortSourcesForReel(canonical);
+    const globalUsageCount = await this.sumUsageAcrossVideoSourcesForReel(canonical);
     const userOid = new Types.ObjectId(userId);
 
-    const sourceDoc = await this.videoShortSourceModel
+    const sourceDoc = await this.videoSourceModel
       .findOne({ userId: userOid, sourceReelUrl: canonical })
       .select('_id usageCount')
       .lean();
 
     return {
       saved: Boolean(sourceDoc),
-      videoShortSourceId: sourceDoc ? String(sourceDoc._id) : undefined,
+      videoSourceId: sourceDoc ? String(sourceDoc._id) : undefined,
       canonicalUrl: canonical,
       myUsageCount: sourceDoc ? Number(sourceDoc.usageCount) || 0 : 0,
       globalUsageCount,
     };
   }
 
-  /** +1 vào VideoShortSource của user (theo story để xác định reel); tổng hệ thống = ∑ usageCount mọi VideoShortSource cùng URL chuẩn. */
+  /** +1 vào VideoSource của user (theo story để xác định reel); tổng hệ thống = ∑ usageCount mọi VideoSource cùng URL chuẩn. */
   async incrementUsage(userId: string, videoShortId: string) {
     if (!Types.ObjectId.isValid(videoShortId)) {
       throw new BadRequestException('Invalid story id.');
@@ -507,27 +507,27 @@ export class VideoShortsService {
     const userOid = new Types.ObjectId(userId);
     const story = await this.storyModel
       .findOne({ _id: oid, userId: userOid })
-      .populate({ path: 'videoShortSourceId', select: 'sourceReelUrl' })
+      .populate({ path: 'videoSourceId', select: 'sourceReelUrl' })
       .lean();
     const row = story as Record<string, unknown> | null;
 
     let sourceOid: Types.ObjectId | null = null;
     let canonical = '';
-    const src = row?.videoShortSourceId;
+    const src = row?.videoSourceId;
     if (src && typeof src === 'object' && !Array.isArray(src) && '_id' in src) {
       const so = src as Record<string, unknown>;
       sourceOid = new Types.ObjectId(String(so._id));
       canonical = this.canonicalSourceReelUrl(String(so.sourceReelUrl || ''));
-    } else if (row?.videoShortSourceId) {
-      sourceOid = new Types.ObjectId(String(row.videoShortSourceId));
-      const full = await this.videoShortSourceModel.findById(sourceOid).select('sourceReelUrl').lean();
+    } else if (row?.videoSourceId) {
+      sourceOid = new Types.ObjectId(String(row.videoSourceId));
+      const full = await this.videoSourceModel.findById(sourceOid).select('sourceReelUrl').lean();
       if (full?.sourceReelUrl) {
         canonical = this.canonicalSourceReelUrl(String(full.sourceReelUrl));
       }
     }
     if ((!sourceOid || !canonical) && row?.sourceReelUrl) {
       canonical = this.canonicalSourceReelUrl(String(row.sourceReelUrl));
-      const found = await this.videoShortSourceModel
+      const found = await this.videoSourceModel
         .findOne({ userId: userOid, sourceReelUrl: canonical })
         .select('_id')
         .lean();
@@ -539,13 +539,13 @@ export class VideoShortsService {
       throw new NotFoundException('VideoShort not found.');
     }
 
-    await this.videoShortSourceModel.updateOne(
+    await this.videoSourceModel.updateOne(
       { _id: sourceOid, userId: userOid },
       { $inc: { usageCount: 1 } },
     );
 
-    const updatedSrc = await this.videoShortSourceModel.findById(sourceOid).select('usageCount').lean();
-    const globalUsageCount = await this.sumUsageAcrossVideoShortSourcesForReel(canonical);
+    const updatedSrc = await this.videoSourceModel.findById(sourceOid).select('usageCount').lean();
+    const globalUsageCount = await this.sumUsageAcrossVideoSourcesForReel(canonical);
 
     return {
       videoShortId: String(oid),
@@ -555,9 +555,9 @@ export class VideoShortsService {
     };
   }
 
-  /** Tổng lượt dùng toàn hệ thống cho một reel = ∑ usageCount trên mọi VideoShortSource trùng sourceReelUrl. */
-  private async sumUsageAcrossVideoShortSourcesForReel(canonicalReelUrl: string): Promise<number> {
-    const agg = await this.videoShortSourceModel
+  /** Tổng lượt dùng toàn hệ thống cho một reel = ∑ usageCount trên mọi VideoSource trùng sourceReelUrl. */
+  private async sumUsageAcrossVideoSourcesForReel(canonicalReelUrl: string): Promise<number> {
+    const agg = await this.videoSourceModel
       .aggregate<{ total?: number }>([
         { $match: { sourceReelUrl: canonicalReelUrl } },
         { $group: { _id: null, total: { $sum: '$usageCount' } } },
@@ -566,12 +566,12 @@ export class VideoShortsService {
     return Number(agg[0]?.total) || 0;
   }
 
-  private async upsertVideoShortSourceDoc(
+  private async upsertVideoSourceDoc(
     userOid: Types.ObjectId,
     params: { sourceReelUrl: string; sourceContent: string; name: string },
   ) {
     const name = params.name.slice(0, 200);
-    const doc = await this.videoShortSourceModel.findOneAndUpdate(
+    const doc = await this.videoSourceModel.findOneAndUpdate(
       { userId: userOid, sourceReelUrl: params.sourceReelUrl },
       {
         $set: {
@@ -588,8 +588,8 @@ export class VideoShortsService {
     return doc;
   }
 
-  private extractVideoShortSourceObjectId(row: Record<string, unknown>): Types.ObjectId | null {
-    const ss = row.videoShortSourceId;
+  private extractVideoSourceObjectId(row: Record<string, unknown>): Types.ObjectId | null {
+    const ss = row.videoSourceId;
     if (ss && typeof ss === 'object' && !Array.isArray(ss) && '_id' in ss) {
       const id = (ss as Record<string, unknown>)._id;
       if (id && Types.ObjectId.isValid(String(id))) {
@@ -602,7 +602,7 @@ export class VideoShortsService {
     return null;
   }
 
-  private serializeVideoShortSource(row: Record<string, unknown>) {
+  private serializeVideoSource(row: Record<string, unknown>) {
     const id = String(row._id || '');
     const userId = row.userId ? String(row.userId) : '';
     return {
@@ -622,19 +622,19 @@ export class VideoShortsService {
     const id = String(row._id || '');
     const userId = row.userId ? String(row.userId) : '';
     const videoShortTopicId = row.videoShortTopicId ? String(row.videoShortTopicId) : '';
-    const ss = row.videoShortSourceId;
-    let videoShortSourceIdStr = '';
+    const ss = row.videoSourceId;
+    let videoSourceIdStr = '';
     let sourceContent = '';
     let sourceReelUrl = '';
     let usageCount = 0;
     if (ss && typeof ss === 'object' && !Array.isArray(ss)) {
       const o = ss as Record<string, unknown>;
-      videoShortSourceIdStr = o._id ? String(o._id) : '';
+      videoSourceIdStr = o._id ? String(o._id) : '';
       sourceContent = (o.sourceContent as string) || '';
       sourceReelUrl = (o.sourceReelUrl as string) || '';
       usageCount = Number(o.usageCount) || 0;
     } else if (ss) {
-      videoShortSourceIdStr = String(ss);
+      videoSourceIdStr = String(ss);
     }
     if (!sourceContent && row.sourceContent) {
       sourceContent = (row.sourceContent as string) || '';
@@ -646,7 +646,7 @@ export class VideoShortsService {
       _id: id,
       userId,
       videoShortTopicId,
-      videoShortSourceId: videoShortSourceIdStr,
+      videoSourceId: videoSourceIdStr,
       name: (row.name as string) || '',
       shortContent: (row.shortContent as string) || '',
       longContent: (row.longContent as string) || '',

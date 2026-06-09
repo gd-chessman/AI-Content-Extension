@@ -12,7 +12,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
-import { VideoShortSource, VideoShortSourceDocument } from '../video-shorts/video-short-source.schema';
+import { VideoSource, VideoSourceDocument } from '../video-shorts/video-source.schema';
 import { WorkflowRunsService } from '../workflow-runs/workflow-runs.service';
 import { ExtensionPresenceService } from '../workflow-runs/extension-presence.service';
 import { WorkflowRunStatus } from '../workflow-runs/workflow-run.schema';
@@ -60,8 +60,8 @@ export class MultiWorkflowsService implements OnModuleInit {
     private readonly multiWorkflowRunModel: Model<MultiWorkflowRunDocument>,
     @InjectModel(MultiWorkflowJob.name)
     private readonly multiWorkflowJobModel: Model<MultiWorkflowJobDocument>,
-    @InjectModel(VideoShortSource.name)
-    private readonly videoShortSourceModel: Model<VideoShortSourceDocument>,
+    @InjectModel(VideoSource.name)
+    private readonly videoSourceModel: Model<VideoSourceDocument>,
     @InjectModel(Workflow.name)
     private readonly workflowModel: Model<WorkflowDocument>,
     private readonly workflowRunsService: WorkflowRunsService,
@@ -323,17 +323,17 @@ export class MultiWorkflowsService implements OnModuleInit {
 
     const config = await this.resolveMultiWorkflow(userOid, dto.multiWorkflowId);
 
-    const videoShortSourceIdRaw = (dto.videoShortSourceId || '').trim();
-    let videoShortSourceId: Types.ObjectId | null = null;
+    const videoSourceIdRaw = (dto.videoSourceId || '').trim();
+    let videoSourceId: Types.ObjectId | null = null;
     let multiWorkflowKey = `config:${String(config._id)}`;
 
-    if (videoShortSourceIdRaw) {
-      videoShortSourceId = this.normalizeObjectId(videoShortSourceIdRaw, 'Invalid videoShortSourceId.');
-      const source = await this.videoShortSourceModel.findOne({ _id: videoShortSourceId, userId: userOid });
+    if (videoSourceIdRaw) {
+      videoSourceId = this.normalizeObjectId(videoSourceIdRaw, 'Invalid videoSourceId.');
+      const source = await this.videoSourceModel.findOne({ _id: videoSourceId, userId: userOid });
       if (!source) {
-        throw new NotFoundException('VideoShortSource not found.');
+        throw new NotFoundException('VideoSource not found.');
       }
-      multiWorkflowKey = String(videoShortSourceId);
+      multiWorkflowKey = String(videoSourceId);
     }
 
     const activeRun = await this.multiWorkflowRunModel.findOne({
@@ -343,7 +343,7 @@ export class MultiWorkflowsService implements OnModuleInit {
     });
     if (activeRun) {
       throw new ConflictException(
-        videoShortSourceId
+        videoSourceId
           ? 'Multi workflow run already in progress for this story source.'
           : 'Multi workflow run already in progress for this configuration.',
       );
@@ -379,7 +379,7 @@ export class MultiWorkflowsService implements OnModuleInit {
       userId: userOid,
       multiWorkflowId: config._id,
       multiWorkflowKey,
-      videoShortSourceId,
+      videoSourceId,
       videoShortId: null,
       status: MultiWorkflowRunStatus.QUEUED,
       currentOrder: 0,
@@ -396,7 +396,7 @@ export class MultiWorkflowsService implements OnModuleInit {
       source: 'multi_workflow',
       multiWorkflowRunId: String(run._id),
       trigger,
-      ...(videoShortSourceId ? { videoShortSourceId: String(videoShortSourceId) } : {}),
+      ...(videoSourceId ? { videoSourceId: String(videoSourceId) } : {}),
       ...(dto.payload || {}),
     };
 
@@ -533,9 +533,9 @@ export class MultiWorkflowsService implements OnModuleInit {
 
     const result = dto.result || {};
     const videoShortIdRaw = (dto.videoShortId || (result.videoShortId as string) || '').trim();
-    const videoShortSourceIdRaw = (
-      dto.videoShortSourceId ||
-      (result.videoShortSourceId as string) ||
+    const videoSourceIdRaw = (
+      dto.videoSourceId ||
+      (result.videoSourceId as string) ||
       ''
     ).trim();
     job.status = MultiWorkflowJobStatus.COMPLETED;
@@ -550,7 +550,7 @@ export class MultiWorkflowsService implements OnModuleInit {
 
     const runPatch: {
       videoShortId?: Types.ObjectId;
-      videoShortSourceId?: Types.ObjectId;
+      videoSourceId?: Types.ObjectId;
       multiWorkflowKey?: string;
       currentOrder?: number;
     } = {
@@ -559,9 +559,9 @@ export class MultiWorkflowsService implements OnModuleInit {
     if (videoShortIdRaw && Types.ObjectId.isValid(videoShortIdRaw)) {
       runPatch.videoShortId = new Types.ObjectId(videoShortIdRaw);
     }
-    if (videoShortSourceIdRaw && Types.ObjectId.isValid(videoShortSourceIdRaw)) {
-      runPatch.videoShortSourceId = new Types.ObjectId(videoShortSourceIdRaw);
-      runPatch.multiWorkflowKey = videoShortSourceIdRaw;
+    if (videoSourceIdRaw && Types.ObjectId.isValid(videoSourceIdRaw)) {
+      runPatch.videoSourceId = new Types.ObjectId(videoSourceIdRaw);
+      runPatch.multiWorkflowKey = videoSourceIdRaw;
     }
     await this.multiWorkflowRunModel.updateOne(
       { _id: job.multiWorkflowRunId },
@@ -740,11 +740,11 @@ export class MultiWorkflowsService implements OnModuleInit {
     );
 
     const videoShortId = run.videoShortId ? String(run.videoShortId) : '';
-    const videoShortSourceId = run.videoShortSourceId ? String(run.videoShortSourceId) : '';
+    const videoSourceId = run.videoSourceId ? String(run.videoSourceId) : '';
     const payload = {
       ...job.payload,
       multiWorkflowJobId: String(job._id),
-      ...(videoShortSourceId ? { videoShortSourceId } : {}),
+      ...(videoSourceId ? { videoSourceId } : {}),
       ...(videoShortId ? { videoShortId } : {}),
     };
     job.payload = payload;
@@ -765,9 +765,9 @@ export class MultiWorkflowsService implements OnModuleInit {
       source: 'multi_workflow',
       multiWorkflowRunId: String(job.multiWorkflowRunId),
       multiWorkflowJobId: String(job._id),
-      ...(run?.videoShortSourceId || job.payload?.videoShortSourceId
+      ...(run?.videoSourceId || job.payload?.videoSourceId
         ? {
-            videoShortSourceId: String(job.payload?.videoShortSourceId || run?.videoShortSourceId || ''),
+            videoSourceId: String(job.payload?.videoSourceId || run?.videoSourceId || ''),
           }
         : {}),
       platform: job.platform,

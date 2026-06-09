@@ -12,9 +12,9 @@ export class VideoShort {
   @Prop({ type: Types.ObjectId, ref: 'VideoShortTopic', required: false, index: true })
   videoShortTopicId?: Types.ObjectId;
 
-  /** Nguồn reel (caption đồng bộ); nhiều VideoShort có thể trỏ cùng một VideoShortSource. */
-  @Prop({ type: Types.ObjectId, ref: 'VideoShortSource', required: false, index: true })
-  videoShortSourceId?: Types.ObjectId;
+  /** Nguồn video (reel); nhiều VideoShort có thể trỏ cùng một VideoSource. */
+  @Prop({ type: Types.ObjectId, ref: 'VideoSource', required: false, index: true })
+  videoSourceId?: Types.ObjectId;
 
   @Prop({ default: '', trim: true })
   name: string;
@@ -53,4 +53,4 @@ export class VideoShort {
 export const VideoShortSchema = SchemaFactory.createForClass(VideoShort);
 VideoShortSchema.index({ userId: 1, createdAt: -1 });
 VideoShortSchema.index({ videoShortTopicId: 1, createdAt: -1 });
-VideoShortSchema.index({ userId: 1, videoShortSourceId: 1, createdAt: -1 });
+VideoShortSchema.index({ userId: 1, videoSourceId: 1, createdAt: -1 });

@@ -1,6 +1,6 @@
 import { Module, forwardRef } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
-import { VideoShortSource, VideoShortSourceSchema } from '../video-shorts/video-short-source.schema';
+import { VideoSource, VideoSourceSchema } from '../video-shorts/video-source.schema';
 import { WorkflowRunsModule } from '../workflow-runs/workflow-runs.module';
 import { WorkflowSchedulesModule } from '../workflow-schedules/workflow-schedules.module';
 import { Workflow, WorkflowSchema } from '../workflows/workflow.schema';
@@ -17,7 +17,7 @@ import { MultiWorkflowsService } from './multi-workflows.service';
       { name: MultiWorkflow.name, schema: MultiWorkflowSchema },
       { name: MultiWorkflowRun.name, schema: MultiWorkflowRunSchema },
       { name: MultiWorkflowJob.name, schema: MultiWorkflowJobSchema },
-      { name: VideoShortSource.name, schema: VideoShortSourceSchema },
+      { name: VideoSource.name, schema: VideoSourceSchema },
       { name: Workflow.name, schema: WorkflowSchema },
     ]),
     forwardRef(() => WorkflowRunsModule),

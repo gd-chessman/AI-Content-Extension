@@ -21,15 +21,15 @@ export class CreateVideoShortDto {
   imageUrls?: string[];
 }
 
-/** Đồng bộ / cập nhật story nguồn khi lấy caption từ reel (không tạo VideoShort). */
-export class UpsertVideoShortSourceDto {
+/** Đồng bộ / cập nhật nguồn video khi lấy caption từ reel (không tạo VideoShort). */
+export class UpsertVideoSourceDto {
   sourceContent: string;
   sourceReelUrl: string;
   name?: string;
 }
 
 /** Đánh dấu reel bỏ qua — không tạo VideoShort, loại khỏi danh sách reel chưa xử lý. */
-export class SkipVideoShortSourceDto {
+export class SkipVideoSourceDto {
   sourceReelUrl: string;
   name?: string;
   reason?: string;

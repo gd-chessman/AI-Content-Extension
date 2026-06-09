@@ -21,7 +21,7 @@ export class UpdateMultiWorkflowDto {
 
 export class CreateMultiWorkflowRunDto {
   /** Tuỳ chọn — chạy lại trên reel đã lưu. Bỏ trống = chạy pipeline mới. */
-  videoShortSourceId?: string;
+  videoSourceId?: string;
   multiWorkflowId?: string;
   trigger?: string;
   payload?: Record<string, unknown>;
@@ -35,7 +35,7 @@ export class ClaimMultiWorkflowJobDto {
 export class CompleteMultiWorkflowJobDto {
   result?: Record<string, unknown>;
   videoShortId?: string;
-  videoShortSourceId?: string;
+  videoSourceId?: string;
 }
 
 export class FailMultiWorkflowJobDto {
