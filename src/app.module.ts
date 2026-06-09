@@ -19,7 +19,7 @@ import { StepRunsModule } from './modules/step-runs/step-runs.module';
 import { WorkflowRunsModule } from './modules/workflow-runs/workflow-runs.module';
 import { WorkflowsModule } from './modules/workflows/workflows.module';
 import { TelegramBotModule } from './modules/telegram-bot/telegram-bot.module';
-import { StoriesModule } from './modules/stories/stories.module';
+import { VideoShortsModule } from './modules/video-shorts/video-shorts.module';
 import { DataCleanupModule } from './modules/data-cleanup/data-cleanup.module';
 import { MultiWorkflowsModule } from './modules/multi-workflows/multi-workflows.module';
 import { WorkflowSchedulesModule } from './modules/workflow-schedules/workflow-schedules.module';
@@ -45,7 +45,7 @@ import { WorkflowSchedulesModule } from './modules/workflow-schedules/workflow-s
     WorkflowRunsModule,
     WorkflowsModule,
     TelegramBotModule,
-    StoriesModule,
+    VideoShortsModule,
     DataCleanupModule,
     MultiWorkflowsModule,
     WorkflowSchedulesModule,

@@ -15,12 +15,12 @@ export type GrokWorkflowStepSeed = {
   inputSchema?: Record<string, unknown>;
 };
 
-export const GROK_WORKFLOW_SEED_NAME = 'Grok Imagine từ Story';
+export const GROK_WORKFLOW_SEED_NAME = 'Grok Imagine từ VideoShort';
 
 export const GROK_WORKFLOW_SEED = {
   name: GROK_WORKFLOW_SEED_NAME,
   description:
-    'Đọc Story (imageUrls + videoPrompts từ ChatGPT), điền Grok Imagine, Enter, chờ video và lưu file local.',
+    'Đọc VideoShort (imageUrls + videoPrompts từ ChatGPT), điền Grok Imagine, Enter, chờ video và lưu file local.',
   platform: WorkflowPlatform.GROK,
   category: WorkflowCategory.AI_VIDEO_CREATION,
   status: WorkflowStatus.ACTIVE,
@@ -30,9 +30,9 @@ export const GROK_WORKFLOW_SEED = {
       stepNo: 1,
       title: 'Điền ảnh + VIDEO và Enter',
       instruction:
-        'Lấy imageUrls[index] và videoPrompts[index] từ Story (storyId từ multi workflow), paste Grok Imagine và gửi.',
+        'Lấy imageUrls[index] và videoPrompts[index] từ VideoShort (videoShortId từ multi workflow), paste Grok Imagine và gửi.',
       prompt: '',
-      actionType: StepActionType.GROK_FILL_FROM_STORY,
+      actionType: StepActionType.GROK_FILL_FROM_VIDEO_SHORT,
       displayMode: StepDisplayMode.VISIBLE,
       inputSchema: { index: 0 },
     },
@@ -40,7 +40,7 @@ export const GROK_WORKFLOW_SEED = {
       stepNo: 2,
       title: 'Chờ video và tải về local',
       instruction:
-        'Chờ Grok render, tải MP4 trong tab Grok, ghi vào workspace stories/.../videos/, lưu đường dẫn local: vào Story.videoStorageAddresses.',
+        'Chờ Grok render, tải MP4 trong tab Grok, ghi vào workspace stories/.../videos/, lưu đường dẫn local: vào VideoShort.videoStorageAddresses.',
       prompt: '',
       actionType: StepActionType.GROK_CAPTURE_VIDEO_LINK,
       displayMode: StepDisplayMode.BACKGROUND,

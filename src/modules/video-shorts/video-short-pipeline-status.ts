@@ -1,5 +1,5 @@
-/** Trạng thái pipeline story — dùng lọc GET /stories/my. */
-export const STORY_PIPELINE_STATUSES = [
+/** Trạng thái pipeline story — dùng lọc GET /video-shorts/my. */
+export const VIDEO_SHORT_PIPELINE_STATUSES = [
   'complete',
   'in_progress',
   'missing_chatgpt',
@@ -8,11 +8,11 @@ export const STORY_PIPELINE_STATUSES = [
   'ggsheet_pushed',
 ] as const;
 
-export type StoryPipelineStatus = (typeof STORY_PIPELINE_STATUSES)[number];
+export type VideoShortPipelineStatus = (typeof VIDEO_SHORT_PIPELINE_STATUSES)[number];
 
 const LEGACY_CHATGPT_STATUSES = new Set(['missing_images', 'missing_prompts', 'missing_content']);
 
-export type StoryPipelineListItem = {
+export type VideoShortPipelineListItem = {
   imageUrls?: string[];
   videoPrompts?: string[];
   videoStorageAddresses?: string[];
@@ -20,17 +20,17 @@ export type StoryPipelineListItem = {
   ggsheetPush?: { pushed?: boolean };
 };
 
-export function parseStoryPipelineStatus(raw: string | undefined): StoryPipelineStatus | '' {
+export function parseVideoShortPipelineStatus(raw: string | undefined): VideoShortPipelineStatus | '' {
   const key = (raw || '').trim().toLowerCase();
   if (!key || key === 'all') return '';
   if (LEGACY_CHATGPT_STATUSES.has(key)) return 'missing_chatgpt';
-  if ((STORY_PIPELINE_STATUSES as readonly string[]).includes(key)) {
-    return key as StoryPipelineStatus;
+  if ((VIDEO_SHORT_PIPELINE_STATUSES as readonly string[]).includes(key)) {
+    return key as VideoShortPipelineStatus;
   }
   return '';
 }
 
-export function isChatgptPipelineIncomplete(item: StoryPipelineListItem): boolean {
+export function isChatgptPipelineIncomplete(item: VideoShortPipelineListItem): boolean {
   return (
     !hasNonEmptyStrings(item.imageUrls) ||
     !hasNonEmptyStrings(item.videoPrompts) ||
@@ -42,7 +42,7 @@ export function hasNonEmptyStrings(values?: string[]): boolean {
   return (values || []).some((value) => (value || '').trim().length > 0);
 }
 
-export function isStoryPipelineComplete(item: StoryPipelineListItem): boolean {
+export function isVideoShortPipelineComplete(item: VideoShortPipelineListItem): boolean {
   return (
     hasNonEmptyStrings(item.imageUrls) &&
     hasNonEmptyStrings(item.videoPrompts) &&
@@ -52,13 +52,13 @@ export function isStoryPipelineComplete(item: StoryPipelineListItem): boolean {
   );
 }
 
-export function matchesStoryPipelineStatus(
-  item: StoryPipelineListItem,
-  status: StoryPipelineStatus,
+export function matchesVideoShortPipelineStatus(
+  item: VideoShortPipelineListItem,
+  status: VideoShortPipelineStatus,
 ): boolean {
   const hasVideos = hasNonEmptyStrings(item.videoStorageAddresses);
   const ggsheetPushed = Boolean(item.ggsheetPush?.pushed);
-  const complete = isStoryPipelineComplete(item);
+  const complete = isVideoShortPipelineComplete(item);
 
   switch (status) {
     case 'complete':
@@ -79,8 +79,8 @@ export function matchesStoryPipelineStatus(
 }
 
 /** Lọc MongoDB cho trạng thái không phụ thuộc GG Sheet. */
-export function buildStoryPipelineMongoFilter(
-  status: StoryPipelineStatus,
+export function buildVideoShortPipelineMongoFilter(
+  status: VideoShortPipelineStatus,
 ): Record<string, unknown> | null {
   const nonEmpty = (field: string) => ({ [field]: { $elemMatch: { $regex: /\S/ } } });
   const missing = (field: string) => ({ $nor: [nonEmpty(field)] });
@@ -102,7 +102,7 @@ export function buildStoryPipelineMongoFilter(
   }
 }
 
-export function isPostFilterPipelineStatus(status: StoryPipelineStatus | ''): status is StoryPipelineStatus {
+export function isPostFilterPipelineStatus(status: VideoShortPipelineStatus | ''): status is VideoShortPipelineStatus {
   if (!status) return false;
   return ['complete', 'in_progress', 'ggsheet_pending', 'ggsheet_pushed'].includes(status);
 }

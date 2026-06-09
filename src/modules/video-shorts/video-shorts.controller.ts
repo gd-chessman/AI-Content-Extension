@@ -6,27 +6,27 @@ import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
 import { UserRole } from '../users/users.schema';
 import {
-  CreateStoryDto,
-  LatestGrokReadyStoryQueryDto,
-  ListMyStoriesQueryDto,
-  PatchStoryDto,
-  SkipStorySourceDto,
-  UpsertStorySourceDto,
-} from './stories.dto';
-import { StoriesService } from './stories.service';
+  CreateVideoShortDto,
+  LatestGrokReadyVideoShortQueryDto,
+  ListMyVideoShortsQueryDto,
+  PatchVideoShortDto,
+  SkipVideoShortSourceDto,
+  UpsertVideoShortSourceDto,
+} from './video-shorts.dto';
+import { VideoShortsService } from './video-shorts.service';
 
-@Controller('stories')
+@Controller('video-shorts')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(UserRole.USER, UserRole.USER_VIP, UserRole.ADMIN)
-export class StoriesController {
-  constructor(private readonly storiesService: StoriesService) {}
+export class VideoShortsController {
+  constructor(private readonly storiesService: VideoShortsService) {}
 
   @Get('my/latest-grok-ready')
-  getLatestGrokReady(@Req() req: Request, @Query() query: LatestGrokReadyStoryQueryDto) {
+  getLatestGrokReady(@Req() req: Request, @Query() query: LatestGrokReadyVideoShortQueryDto) {
     const user = req.user as JwtPayload;
     return this.storiesService.getLatestGrokReadyForUser(
       user.sub,
-      LatestGrokReadyStoryQueryDto.parse(query),
+      LatestGrokReadyVideoShortQueryDto.parse(query),
     );
   }
 
@@ -37,9 +37,9 @@ export class StoriesController {
   }
 
   @Get('my')
-  listMy(@Req() req: Request, @Query() query: ListMyStoriesQueryDto) {
+  listMy(@Req() req: Request, @Query() query: ListMyVideoShortsQueryDto) {
     const user = req.user as JwtPayload;
-    return this.storiesService.listForUser(user.sub, ListMyStoriesQueryDto.parse(query));
+    return this.storiesService.listForUser(user.sub, ListMyVideoShortsQueryDto.parse(query));
   }
 
   @Get('sources/my')
@@ -48,33 +48,33 @@ export class StoriesController {
     return this.storiesService.listSourcesForUser(user.sub);
   }
 
-  /** Đã có StorySource cho reel này chưa (chỉ story nguồn, không kiểm tra Story). */
+  /** Đã có VideoShortSource cho reel này chưa (chỉ story nguồn, không kiểm tra VideoShort). */
   @Get('sources/check-reel')
-  checkStorySourceForReel(@Req() req: Request, @Query('url') url?: string) {
+  checkVideoShortSourceForReel(@Req() req: Request, @Query('url') url?: string) {
     const user = req.user as JwtPayload;
-    return this.storiesService.checkStorySourceForReel(user.sub, url || '');
+    return this.storiesService.checkVideoShortSourceForReel(user.sub, url || '');
   }
 
   @Post('sources/sync')
-  syncStorySource(@Req() req: Request, @Body() dto: UpsertStorySourceDto) {
+  syncVideoShortSource(@Req() req: Request, @Body() dto: UpsertVideoShortSourceDto) {
     const user = req.user as JwtPayload;
-    return this.storiesService.upsertStorySourceForUser(user.sub, dto);
+    return this.storiesService.upsertVideoShortSourceForUser(user.sub, dto);
   }
 
   @Post('sources/skip')
-  skipStorySource(@Req() req: Request, @Body() dto: SkipStorySourceDto) {
+  skipVideoShortSource(@Req() req: Request, @Body() dto: SkipVideoShortSourceDto) {
     const user = req.user as JwtPayload;
-    return this.storiesService.skipStorySourceForUser(user.sub, dto);
+    return this.storiesService.skipVideoShortSourceForUser(user.sub, dto);
   }
 
   @Post()
-  create(@Req() req: Request, @Body() dto: CreateStoryDto) {
+  create(@Req() req: Request, @Body() dto: CreateVideoShortDto) {
     const user = req.user as JwtPayload;
     return this.storiesService.createForUser(user.sub, dto);
   }
 
   @Patch(':id')
-  patchStory(@Req() req: Request, @Param('id') id: string, @Body() dto: PatchStoryDto) {
+  patchVideoShort(@Req() req: Request, @Param('id') id: string, @Body() dto: PatchVideoShortDto) {
     const user = req.user as JwtPayload;
     return this.storiesService.patchForUser(user.sub, id, dto);
   }

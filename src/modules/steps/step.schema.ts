@@ -27,12 +27,12 @@ export enum StepActionType {
   CHATGPT_GENERATE_IMAGE = 'chatgpt_generate_image',
   CHATGPT_GENERATE_IMAGES = 'chatgpt_generate_images',
   CHATGPT_EXTRACT_CONTENT = 'chatgpt_extract_content',
-  /** Extension ChatGPT — tạo Story + videoPrompts (chạy nền, không mở ChatGPT). */
-  CHATGPT_SAVE_STORY = 'chatgpt_save_story',
+  /** Extension ChatGPT — tạo VideoShort + videoPrompts (chạy nền, không mở ChatGPT). */
+  CHATGPT_SAVE_VIDEO_SHORT = 'chatgpt_save_video_short',
   FILL_GROK = 'fill_grok',
-  /** Grok — đọc Story (imageUrls + videoPrompts), điền Imagine và Enter. */
-  GROK_FILL_FROM_STORY = 'grok_fill_from_story',
-  /** Grok — chờ video render, lấy link, lưu videoStorageAddresses vào Story. */
+  /** Grok — đọc VideoShort (imageUrls + videoPrompts), điền Imagine và Enter. */
+  GROK_FILL_FROM_VIDEO_SHORT = 'grok_fill_from_video_short',
+  /** Grok — chờ video render, lấy link, lưu videoStorageAddresses vào VideoShort. */
   GROK_CAPTURE_VIDEO_LINK = 'grok_capture_video_link',
   COPY_TO_CLIPBOARD = 'copy_to_clipboard',
   PUSH_GGSHEET = 'push_ggsheet',
@@ -48,8 +48,8 @@ export enum StepActionType {
   FACEBOOK_SELECT_REEL = 'facebook_select_reel',
   /** Facebook — chờ caption/nội dung đủ dài sau khi vào Chi tiết */
   FACEBOOK_WAIT_CONTENT = 'facebook_wait_content',
-  /** Facebook — lưu story (API) */
-  FACEBOOK_SAVE_STORY = 'facebook_save_story',
+  /** Facebook — lưu video short (API) */
+  FACEBOOK_SAVE_VIDEO_SHORT = 'facebook_save_video_short',
 }
 
 @Schema({ timestamps: true })

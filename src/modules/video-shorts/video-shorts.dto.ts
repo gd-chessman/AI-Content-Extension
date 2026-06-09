@@ -1,12 +1,12 @@
-export class CreateStoryDto {
+export class CreateVideoShortDto {
   /** URL reel Facebook */
   sourceReelUrl: string;
 
   /** Tiêu đề hiển thị (tuỳ chọn, ví dụ tiêu đề reel) */
   name?: string;
 
-  /** StoryTopic id (tuỳ chọn) */
-  topicId?: string;
+  /** VideoShortTopic id (tuỳ chọn) */
+  videoShortTopicId?: string;
 
   /** Prompt/script video (một hoặc nhiều khối VIDEO) — gửi khi tạo, không cần PATCH sau. */
   videoPrompts?: string[];
@@ -21,21 +21,21 @@ export class CreateStoryDto {
   imageUrls?: string[];
 }
 
-/** Đồng bộ / cập nhật story nguồn khi lấy caption từ reel (không tạo Story). */
-export class UpsertStorySourceDto {
+/** Đồng bộ / cập nhật story nguồn khi lấy caption từ reel (không tạo VideoShort). */
+export class UpsertVideoShortSourceDto {
   sourceContent: string;
   sourceReelUrl: string;
   name?: string;
 }
 
-/** Đánh dấu reel bỏ qua — không tạo Story, loại khỏi danh sách reel chưa xử lý. */
-export class SkipStorySourceDto {
+/** Đánh dấu reel bỏ qua — không tạo VideoShort, loại khỏi danh sách reel chưa xử lý. */
+export class SkipVideoShortSourceDto {
   sourceReelUrl: string;
   name?: string;
   reason?: string;
 }
 
-export class PatchStoryDto {
+export class PatchVideoShortDto {
   /** Prompt/script video (một hoặc nhiều khối VIDEO). */
   videoPrompts?: string[];
 
@@ -43,8 +43,8 @@ export class PatchStoryDto {
   videoStorageAddresses?: string[];
 }
 
-/** Query GET /stories/my — Nest trả plain object, parse qua `parse()`. */
-export class ListMyStoriesQueryDto {
+/** Query GET /video-shorts/my — Nest trả plain object, parse qua `parse()`. */
+export class ListMyVideoShortsQueryDto {
   page?: string;
   limit?: string;
   q?: string;
@@ -53,7 +53,7 @@ export class ListMyStoriesQueryDto {
   /** Lọc theo bước pipeline: complete, in_progress, missing_chatgpt, … */
   status?: string;
 
-  static parse(raw: ListMyStoriesQueryDto): ListMyStoriesQuery {
+  static parse(raw: ListMyVideoShortsQueryDto): ListMyVideoShortsQuery {
     return {
       page: Math.max(1, Number.parseInt(raw.page || '1', 10) || 1),
       limit: Math.min(100, Math.max(1, Number.parseInt(raw.limit || '20', 10) || 20)),
@@ -64,7 +64,7 @@ export class ListMyStoriesQueryDto {
   }
 }
 
-export type ListMyStoriesQuery = {
+export type ListMyVideoShortsQuery = {
   page: number;
   limit: number;
   q: string;
@@ -72,12 +72,12 @@ export type ListMyStoriesQuery = {
   status: string;
 };
 
-/** Query GET /stories/my/latest-grok-ready */
-export class LatestGrokReadyStoryQueryDto {
+/** Query GET /video-shorts/my/latest-grok-ready */
+export class LatestGrokReadyVideoShortQueryDto {
   /** Tuổi tối đa (ms), mặc định 1 giờ. */
   maxAgeMs?: string;
 
-  static parse(raw: LatestGrokReadyStoryQueryDto): { maxAgeMs: number } {
+  static parse(raw: LatestGrokReadyVideoShortQueryDto): { maxAgeMs: number } {
     const parsed = Number.parseInt(raw.maxAgeMs || '3600000', 10);
     const maxAgeMs = Number.isFinite(parsed) ? Math.min(Math.max(parsed, 60_000), 86_400_000) : 3_600_000;
     return { maxAgeMs };

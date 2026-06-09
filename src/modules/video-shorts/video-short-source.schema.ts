@@ -1,15 +1,15 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Types } from 'mongoose';
 
-export type StorySourceDocument = HydratedDocument<StorySource>;
+export type VideoShortSourceDocument = HydratedDocument<VideoShortSource>;
 
-/** Bản ghi "nguồn" theo reel — một reel có thể sinh nhiều Story; Story liên kết qua storySourceId. */
-@Schema({ timestamps: true })
-export class StorySource {
+/** Bản ghi "nguồn" theo reel — một reel có thể sinh nhiều VideoShort; VideoShort liên kết qua videoShortSourceId. */
+@Schema({ timestamps: true, collection: 'video_short_sources' })
+export class VideoShortSource {
   @Prop({ type: Types.ObjectId, required: true, index: true })
   userId: Types.ObjectId;
 
-  /** URL reel đã chuẩn hoá (một nguồn — nhiều Story qua storySourceId). */
+  /** URL reel đã chuẩn hoá (một nguồn — nhiều VideoShort qua videoShortSourceId). */
   @Prop({ required: true, trim: true })
   sourceReelUrl: string;
 
@@ -20,7 +20,7 @@ export class StorySource {
   @Prop({ default: '', trim: true })
   sourceContent: string;
 
-  /** Lượt ghi nhận (copy/vận hành) trên reel nguồn này — dùng chung cho mọi Story cùng nguồn. */
+  /** Lượt ghi nhận (copy/vận hành) trên reel nguồn này — dùng chung cho mọi VideoShort cùng nguồn. */
   @Prop({ default: 0 })
   usageCount: number;
 
@@ -29,9 +29,9 @@ export class StorySource {
   skipReason: string;
 }
 
-export const StorySourceSchema = SchemaFactory.createForClass(StorySource);
-StorySourceSchema.index({ userId: 1, createdAt: -1 });
-StorySourceSchema.index(
+export const VideoShortSourceSchema = SchemaFactory.createForClass(VideoShortSource);
+VideoShortSourceSchema.index({ userId: 1, createdAt: -1 });
+VideoShortSourceSchema.index(
   { userId: 1, sourceReelUrl: 1 },
   {
     unique: true,

@@ -4,7 +4,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { CloudinaryService } from '../../shared/cloudinary/cloudinary.service';
 import { StepRun, StepRunDocument } from '../step-runs/step-run.schema';
-import { Story, StoryDocument } from '../stories/story.schema';
+import { VideoShort, VideoShortDocument } from '../video-shorts/video-short.schema';
 import { WorkflowRun, WorkflowRunDocument } from '../workflow-runs/workflow-run.schema';
 
 export type DataCleanupSummary = {
@@ -37,8 +37,8 @@ export class DataCleanupService {
     private readonly stepRunModel: Model<StepRunDocument>,
     @InjectModel(WorkflowRun.name)
     private readonly workflowRunModel: Model<WorkflowRunDocument>,
-    @InjectModel(Story.name)
-    private readonly storyModel: Model<StoryDocument>,
+    @InjectModel(VideoShort.name)
+    private readonly storyModel: Model<VideoShortDocument>,
   ) {}
 
   isEnabled(): boolean {

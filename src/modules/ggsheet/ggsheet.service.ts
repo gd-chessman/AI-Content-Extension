@@ -4,7 +4,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { google } from 'googleapis';
 import { normalizeStyledTextToPlain } from '../../shared/text/text-search-normalize';
-import { Story, StoryDocument } from '../stories/story.schema';
+import { VideoShort, VideoShortDocument } from '../video-shorts/video-short.schema';
 import { PushGgSheetDto, UpdateGgSheetDto } from './ggsheet.dto';
 import { GgSheetPushLog, GgSheetPushLogDocument } from './ggsheet-push-log.schema';
 import { GgSheet, GgSheetDocument } from './ggsheet.schema';
@@ -52,8 +52,8 @@ export class GgSheetService {
     private readonly ggSheetModel: Model<GgSheetDocument>,
     @InjectModel(GgSheetPushLog.name)
     private readonly ggSheetPushLogModel: Model<GgSheetPushLogDocument>,
-    @InjectModel(Story.name)
-    private readonly storyModel: Model<StoryDocument>,
+    @InjectModel(VideoShort.name)
+    private readonly storyModel: Model<VideoShortDocument>,
   ) {}
 
   async getMySetting(userId: string) {
@@ -274,16 +274,16 @@ export class GgSheetService {
       };
     });
 
-    const matchedStoryIds = new Set<string>();
+    const matchedVideoShortIds = new Set<string>();
     const compareRows: GgSheetCompareRow[] = sheetRows.map((sheetRow) => {
-      const matchedStory = storyItems.find(
+      const matchedVideoShort = storyItems.find(
         (story) =>
           this.titleMatches(story.name, sheetRow.title) &&
           this.shortContentMatchesPrefix(story.shortContent, sheetRow.shortContent),
       );
 
-      if (matchedStory) {
-        matchedStoryIds.add(matchedStory.id);
+      if (matchedVideoShort) {
+        matchedVideoShortIds.add(matchedVideoShort.id);
       }
 
       return {
@@ -291,25 +291,25 @@ export class GgSheetService {
         title: sheetRow.title,
         shortContent: sheetRow.shortContent,
         shortContentPreview: this.previewText(sheetRow.shortContent),
-        matchStatus: matchedStory ? 'matched' : 'sheet_only',
-        titleMatch: matchedStory
-          ? this.titleMatches(matchedStory.name, sheetRow.title)
+        matchStatus: matchedVideoShort ? 'matched' : 'sheet_only',
+        titleMatch: matchedVideoShort
+          ? this.titleMatches(matchedVideoShort.name, sheetRow.title)
           : false,
-        shortMatch: matchedStory
-          ? this.shortContentMatchesPrefix(matchedStory.shortContent, sheetRow.shortContent)
+        shortMatch: matchedVideoShort
+          ? this.shortContentMatchesPrefix(matchedVideoShort.shortContent, sheetRow.shortContent)
           : false,
-        story: matchedStory
+        story: matchedVideoShort
           ? {
-              id: matchedStory.id,
-              name: matchedStory.name,
-              shortContentPreview: this.previewText(matchedStory.shortContent),
+              id: matchedVideoShort.id,
+              name: matchedVideoShort.name,
+              shortContentPreview: this.previewText(matchedVideoShort.shortContent),
             }
           : undefined,
       };
     });
 
     const unmatchedStories = storyItems
-      .filter((story) => !matchedStoryIds.has(story.id))
+      .filter((story) => !matchedVideoShortIds.has(story.id))
       .map((story) => ({
         id: story.id,
         name: story.name,
@@ -367,24 +367,24 @@ export class GgSheetService {
     };
   }
 
-  async getPushStatusForStory(
+  async getPushStatusForVideoShort(
     userId: string,
     title = '',
     shortContent = '',
   ) {
     const map = await this.getPushStatusMapForStories(userId, [
-      { storyId: '__single__', title, shortContent },
+      { videoShortId: '__single__', title, shortContent },
     ]);
     return map.get('__single__') || { pushed: false };
   }
 
   async getPushStatusMapForStories(
     userId: string,
-    stories: Array<{ storyId: string; title?: string; shortContent?: string }>,
+    stories: Array<{ videoShortId: string; title?: string; shortContent?: string }>,
   ) {
     const result = new Map<string, { pushed: boolean; targetRow?: number }>();
     for (const story of stories) {
-      result.set(story.storyId, { pushed: false });
+      result.set(story.videoShortId, { pushed: false });
     }
     if (!stories.length) return result;
 
@@ -401,7 +401,7 @@ export class GgSheetService {
           this.titleMatches(storyTitle, row.title) &&
           this.shortContentMatchesPrefix(storyShort, row.shortContent)
         ) {
-          result.set(story.storyId, { pushed: true, targetRow: row.rowNumber });
+          result.set(story.videoShortId, { pushed: true, targetRow: row.rowNumber });
           break;
         }
       }

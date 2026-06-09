@@ -57,16 +57,16 @@ export class MultiWorkflowRun {
   @Prop({ type: Types.ObjectId, required: true, index: true })
   multiWorkflowId: Types.ObjectId;
 
-  /** Gom các job cùng một story/reel — thường là storySourceId. */
+  /** Gom các job cùng một story/reel — thường là videoShortSourceId. */
   @Prop({ required: true, trim: true, index: true })
   multiWorkflowKey: string;
 
   /** Điền sau khi bước Facebook lưu reel — không bắt buộc lúc khởi chạy. */
   @Prop({ type: Types.ObjectId, default: null, index: true })
-  storySourceId: Types.ObjectId | null;
+  videoShortSourceId: Types.ObjectId | null;
 
   @Prop({ type: Types.ObjectId, default: null })
-  storyId: Types.ObjectId | null;
+  videoShortId: Types.ObjectId | null;
 
   @Prop({
     default: MultiWorkflowRunStatus.QUEUED,

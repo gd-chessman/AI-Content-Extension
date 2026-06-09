@@ -12,7 +12,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
-import { StorySource, StorySourceDocument } from '../stories/story-source.schema';
+import { VideoShortSource, VideoShortSourceDocument } from '../video-shorts/video-short-source.schema';
 import { WorkflowRunsService } from '../workflow-runs/workflow-runs.service';
 import { ExtensionPresenceService } from '../workflow-runs/extension-presence.service';
 import { WorkflowRunStatus } from '../workflow-runs/workflow-run.schema';
@@ -60,8 +60,8 @@ export class MultiWorkflowsService implements OnModuleInit {
     private readonly multiWorkflowRunModel: Model<MultiWorkflowRunDocument>,
     @InjectModel(MultiWorkflowJob.name)
     private readonly multiWorkflowJobModel: Model<MultiWorkflowJobDocument>,
-    @InjectModel(StorySource.name)
-    private readonly storySourceModel: Model<StorySourceDocument>,
+    @InjectModel(VideoShortSource.name)
+    private readonly videoShortSourceModel: Model<VideoShortSourceDocument>,
     @InjectModel(Workflow.name)
     private readonly workflowModel: Model<WorkflowDocument>,
     private readonly workflowRunsService: WorkflowRunsService,
@@ -304,17 +304,17 @@ export class MultiWorkflowsService implements OnModuleInit {
 
     const config = await this.resolveMultiWorkflow(userOid, dto.multiWorkflowId);
 
-    const storySourceIdRaw = (dto.storySourceId || '').trim();
-    let storySourceId: Types.ObjectId | null = null;
+    const videoShortSourceIdRaw = (dto.videoShortSourceId || '').trim();
+    let videoShortSourceId: Types.ObjectId | null = null;
     let multiWorkflowKey = `config:${String(config._id)}`;
 
-    if (storySourceIdRaw) {
-      storySourceId = this.normalizeObjectId(storySourceIdRaw, 'Invalid storySourceId.');
-      const source = await this.storySourceModel.findOne({ _id: storySourceId, userId: userOid });
+    if (videoShortSourceIdRaw) {
+      videoShortSourceId = this.normalizeObjectId(videoShortSourceIdRaw, 'Invalid videoShortSourceId.');
+      const source = await this.videoShortSourceModel.findOne({ _id: videoShortSourceId, userId: userOid });
       if (!source) {
-        throw new NotFoundException('StorySource not found.');
+        throw new NotFoundException('VideoShortSource not found.');
       }
-      multiWorkflowKey = String(storySourceId);
+      multiWorkflowKey = String(videoShortSourceId);
     }
 
     const activeRun = await this.multiWorkflowRunModel.findOne({
@@ -324,7 +324,7 @@ export class MultiWorkflowsService implements OnModuleInit {
     });
     if (activeRun) {
       throw new ConflictException(
-        storySourceId
+        videoShortSourceId
           ? 'Multi workflow run already in progress for this story source.'
           : 'Multi workflow run already in progress for this configuration.',
       );
@@ -360,8 +360,8 @@ export class MultiWorkflowsService implements OnModuleInit {
       userId: userOid,
       multiWorkflowId: config._id,
       multiWorkflowKey,
-      storySourceId,
-      storyId: null,
+      videoShortSourceId,
+      videoShortId: null,
       status: MultiWorkflowRunStatus.QUEUED,
       currentOrder: 0,
       items: runItems,
@@ -377,7 +377,7 @@ export class MultiWorkflowsService implements OnModuleInit {
       source: 'multi_workflow',
       multiWorkflowRunId: String(run._id),
       trigger,
-      ...(storySourceId ? { storySourceId: String(storySourceId) } : {}),
+      ...(videoShortSourceId ? { videoShortSourceId: String(videoShortSourceId) } : {}),
       ...(dto.payload || {}),
     };
 
@@ -513,10 +513,10 @@ export class MultiWorkflowsService implements OnModuleInit {
     if (!job) throw new NotFoundException('Multi workflow job not found or not processing.');
 
     const result = dto.result || {};
-    const storyIdRaw = (dto.storyId || (result.storyId as string) || '').trim();
-    const storySourceIdRaw = (
-      dto.storySourceId ||
-      (result.storySourceId as string) ||
+    const videoShortIdRaw = (dto.videoShortId || (result.videoShortId as string) || '').trim();
+    const videoShortSourceIdRaw = (
+      dto.videoShortSourceId ||
+      (result.videoShortSourceId as string) ||
       ''
     ).trim();
     job.status = MultiWorkflowJobStatus.COMPLETED;
@@ -530,19 +530,19 @@ export class MultiWorkflowsService implements OnModuleInit {
     await this.syncRunItemFromJob(job, MultiWorkflowRunItemStatus.COMPLETED);
 
     const runPatch: {
-      storyId?: Types.ObjectId;
-      storySourceId?: Types.ObjectId;
+      videoShortId?: Types.ObjectId;
+      videoShortSourceId?: Types.ObjectId;
       multiWorkflowKey?: string;
       currentOrder?: number;
     } = {
       currentOrder: job.order,
     };
-    if (storyIdRaw && Types.ObjectId.isValid(storyIdRaw)) {
-      runPatch.storyId = new Types.ObjectId(storyIdRaw);
+    if (videoShortIdRaw && Types.ObjectId.isValid(videoShortIdRaw)) {
+      runPatch.videoShortId = new Types.ObjectId(videoShortIdRaw);
     }
-    if (storySourceIdRaw && Types.ObjectId.isValid(storySourceIdRaw)) {
-      runPatch.storySourceId = new Types.ObjectId(storySourceIdRaw);
-      runPatch.multiWorkflowKey = storySourceIdRaw;
+    if (videoShortSourceIdRaw && Types.ObjectId.isValid(videoShortSourceIdRaw)) {
+      runPatch.videoShortSourceId = new Types.ObjectId(videoShortSourceIdRaw);
+      runPatch.multiWorkflowKey = videoShortSourceIdRaw;
     }
     await this.multiWorkflowRunModel.updateOne(
       { _id: job.multiWorkflowRunId },
@@ -720,13 +720,13 @@ export class MultiWorkflowsService implements OnModuleInit {
       },
     );
 
-    const storyId = run.storyId ? String(run.storyId) : '';
-    const storySourceId = run.storySourceId ? String(run.storySourceId) : '';
+    const videoShortId = run.videoShortId ? String(run.videoShortId) : '';
+    const videoShortSourceId = run.videoShortSourceId ? String(run.videoShortSourceId) : '';
     const payload = {
       ...job.payload,
       multiWorkflowJobId: String(job._id),
-      ...(storySourceId ? { storySourceId } : {}),
-      ...(storyId ? { storyId } : {}),
+      ...(videoShortSourceId ? { videoShortSourceId } : {}),
+      ...(videoShortId ? { videoShortId } : {}),
     };
     job.payload = payload;
     await job.save();
@@ -740,19 +740,19 @@ export class MultiWorkflowsService implements OnModuleInit {
 
   private async createWorkflowRunForJob(userId: string, job: MultiWorkflowJobDocument) {
     const run = await this.multiWorkflowRunModel.findById(job.multiWorkflowRunId).lean();
-    const storyId = run?.storyId ? String(run.storyId) : '';
+    const videoShortId = run?.videoShortId ? String(run.videoShortId) : '';
     const payload = {
       ...job.payload,
       source: 'multi_workflow',
       multiWorkflowRunId: String(job.multiWorkflowRunId),
       multiWorkflowJobId: String(job._id),
-      ...(run?.storySourceId || job.payload?.storySourceId
+      ...(run?.videoShortSourceId || job.payload?.videoShortSourceId
         ? {
-            storySourceId: String(job.payload?.storySourceId || run?.storySourceId || ''),
+            videoShortSourceId: String(job.payload?.videoShortSourceId || run?.videoShortSourceId || ''),
           }
         : {}),
       platform: job.platform,
-      ...(storyId ? { storyId } : {}),
+      ...(videoShortId ? { videoShortId } : {}),
     };
 
     const workflowRun = await this.workflowRunsService.createForUser(userId, {

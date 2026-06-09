@@ -1,20 +1,20 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Types } from 'mongoose';
 
-export type StoryDocument = HydratedDocument<Story>;
+export type VideoShortDocument = HydratedDocument<VideoShort>;
 
-@Schema({ timestamps: true })
-export class Story {
+@Schema({ timestamps: true, collection: 'video_shorts' })
+export class VideoShort {
   @Prop({ type: Types.ObjectId, required: false, index: true })
   userId?: Types.ObjectId;
 
-  /** Tham chiếu chủ đề (StoryTopic) */
-  @Prop({ type: Types.ObjectId, ref: 'StoryTopic', required: false, index: true })
-  topicId?: Types.ObjectId;
+  /** Tham chiếu chủ đề (VideoShortTopic) */
+  @Prop({ type: Types.ObjectId, ref: 'VideoShortTopic', required: false, index: true })
+  videoShortTopicId?: Types.ObjectId;
 
-  /** Nguồn reel (caption đồng bộ); nhiều Story có thể trỏ cùng một StorySource. */
-  @Prop({ type: Types.ObjectId, ref: 'StorySource', required: false, index: true })
-  storySourceId?: Types.ObjectId;
+  /** Nguồn reel (caption đồng bộ); nhiều VideoShort có thể trỏ cùng một VideoShortSource. */
+  @Prop({ type: Types.ObjectId, ref: 'VideoShortSource', required: false, index: true })
+  videoShortSourceId?: Types.ObjectId;
 
   @Prop({ default: '', trim: true })
   name: string;
@@ -50,7 +50,7 @@ export class Story {
   videoStorageAddresses: string[];
 }
 
-export const StorySchema = SchemaFactory.createForClass(Story);
-StorySchema.index({ userId: 1, createdAt: -1 });
-StorySchema.index({ topicId: 1, createdAt: -1 });
-StorySchema.index({ userId: 1, storySourceId: 1, createdAt: -1 });
+export const VideoShortSchema = SchemaFactory.createForClass(VideoShort);
+VideoShortSchema.index({ userId: 1, createdAt: -1 });
+VideoShortSchema.index({ videoShortTopicId: 1, createdAt: -1 });
+VideoShortSchema.index({ userId: 1, videoShortSourceId: 1, createdAt: -1 });

@@ -79,7 +79,7 @@ export class CloudinaryService {
     };
   }
 
-  createSignedStoryImageUploadParams(userId: string): CloudinarySignedUploadParams {
+  createSignedVideoShortImageUploadParams(userId: string): CloudinarySignedUploadParams {
     return this.createSignedUploadParams(userId, { subfolder: 'stories', resourceType: 'image' });
   }
 

@@ -34,14 +34,14 @@ export type FacebookWaitContentInput = {
   timeoutMs?: number;
 };
 
-export type FacebookSaveStoryInput = Record<string, never>;
+export type FacebookSaveVideoShortInput = Record<string, never>;
 
 const FACEBOOK_ACTIONS = new Set<string>([
   StepActionType.FACEBOOK_OPEN_FANPAGE,
   StepActionType.FACEBOOK_SCAN_REELS,
   StepActionType.FACEBOOK_SELECT_REEL,
   StepActionType.FACEBOOK_WAIT_CONTENT,
-  StepActionType.FACEBOOK_SAVE_STORY,
+  StepActionType.FACEBOOK_SAVE_VIDEO_SHORT,
 ]);
 
 export function isFacebookStepAction(actionType: string): boolean {
@@ -118,7 +118,7 @@ export function sanitizeFacebookWaitContentInput(raw: Record<string, unknown>): 
   return out as Record<string, unknown>
 }
 
-export function sanitizeFacebookSaveStoryInput(_raw: Record<string, unknown>): Record<string, unknown> {
+export function sanitizeFacebookSaveVideoShortInput(_raw: Record<string, unknown>): Record<string, unknown> {
   return {}
 }
 
@@ -138,8 +138,8 @@ export function sanitizeFacebookStepInputSchema(
       return sanitizeFacebookSelectReelInput(raw)
     case StepActionType.FACEBOOK_WAIT_CONTENT:
       return sanitizeFacebookWaitContentInput(raw)
-    case StepActionType.FACEBOOK_SAVE_STORY:
-      return sanitizeFacebookSaveStoryInput(raw)
+    case StepActionType.FACEBOOK_SAVE_VIDEO_SHORT:
+      return sanitizeFacebookSaveVideoShortInput(raw)
     default:
       return raw
   }
