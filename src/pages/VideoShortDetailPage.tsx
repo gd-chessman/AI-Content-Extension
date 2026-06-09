@@ -112,7 +112,14 @@ export default function VideoShortDetailPage() {
   const [grokMessage, setGrokMessage] = useState('')
   const [videoActionMessage, setVideoActionMessage] = useState('')
   const [deleteVideoIndex, setDeleteVideoIndex] = useState<number | null>(null)
-  const { workspaceRoot, workspaceLabel, pickingWorkspace, pickWorkspace } = useWorkspaceRoot()
+  const {
+    workspaceRoot,
+    workspaceLabel,
+    needsPermissionRestore,
+    pickingWorkspace,
+    pickWorkspace,
+    restoreWorkspace,
+  } = useWorkspaceRoot()
 
   const storyQuery = useQuery({
     queryKey: ['video-shorts', 'detail', id],
@@ -320,7 +327,7 @@ export default function VideoShortDetailPage() {
         </Link>
         <button
           type="button"
-          onClick={() => void pickWorkspace()}
+          onClick={() => void (needsPermissionRestore ? restoreWorkspace() : pickWorkspace())}
           disabled={pickingWorkspace}
           className="inline-flex items-center gap-2 rounded-xl border border-teal-500/30 bg-teal-500/10 px-3 py-2 text-xs text-teal-100 hover:bg-teal-500/20 disabled:opacity-50"
         >
@@ -328,8 +335,10 @@ export default function VideoShortDetailPage() {
           {workspaceRoot
             ? `Thư mục: ${workspaceLabel || 'đã chọn'}`
             : pickingWorkspace
-              ? 'Đang chọn…'
-              : 'Chọn thư mục để xem video trên máy'}
+              ? 'Đang khôi phục…'
+              : needsPermissionRestore
+                ? `Khôi phục quyền: ${workspaceLabel || 'thư mục đã lưu'}`
+                : 'Chọn thư mục để xem video trên máy'}
         </button>
       </div>
 
@@ -465,7 +474,9 @@ export default function VideoShortDetailPage() {
                       <VideoShortVideoPlayer
                         entry={entry}
                         workspaceRoot={workspaceRoot}
-                        onPickWorkspace={() => void pickWorkspace()}
+                        workspaceLabel={workspaceLabel}
+                        needsPermissionRestore={needsPermissionRestore}
+                        onPickWorkspace={() => void (needsPermissionRestore ? restoreWorkspace() : pickWorkspace())}
                         pickingWorkspace={pickingWorkspace}
                       />
                     </div>

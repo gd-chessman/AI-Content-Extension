@@ -10,6 +10,8 @@ import {
 type VideoShortVideoPlayerProps = {
   entry: string
   workspaceRoot: FileSystemDirectoryHandle | null
+  workspaceLabel?: string
+  needsPermissionRestore?: boolean
   onPickWorkspace: () => void
   pickingWorkspace?: boolean
 }
@@ -17,6 +19,8 @@ type VideoShortVideoPlayerProps = {
 export default function VideoShortVideoPlayer({
   entry,
   workspaceRoot,
+  workspaceLabel = '',
+  needsPermissionRestore = false,
   onPickWorkspace,
   pickingWorkspace = false,
 }: VideoShortVideoPlayerProps) {
@@ -87,7 +91,9 @@ export default function VideoShortVideoPlayer({
     return (
       <div className="rounded-xl border border-amber-500/25 bg-amber-500/10 p-3">
         <p className="text-xs text-amber-100">
-          Video lưu trên máy — chọn thư mục làm việc (cùng thư mục extension dùng khi lưu Grok) để xem.
+          {needsPermissionRestore
+            ? `Video lưu trên máy — sau khi reload trang cần bấm khôi phục quyền thư mục${workspaceLabel ? ` (${workspaceLabel})` : ''} (không cần chọn lại đường dẫn).`
+            : 'Video lưu trên máy — chọn thư mục làm việc (cùng thư mục extension dùng khi lưu Grok) để xem.'}
         </p>
         <button
           type="button"
@@ -96,7 +102,11 @@ export default function VideoShortVideoPlayer({
           className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-amber-500/30 bg-amber-500/15 px-3 py-1.5 text-xs text-amber-50 hover:bg-amber-500/25 disabled:opacity-50"
         >
           <FiFolder className="h-3.5 w-3.5" />
-          {pickingWorkspace ? 'Đang chọn…' : 'Chọn thư mục làm việc'}
+          {pickingWorkspace
+            ? 'Đang khôi phục…'
+            : needsPermissionRestore
+              ? 'Khôi phục quyền xem video'
+              : 'Chọn thư mục làm việc'}
         </button>
       </div>
     )
