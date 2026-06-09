@@ -140,7 +140,7 @@ export default function RunsPage() {
                     <dl className="grid gap-2 text-xs sm:grid-cols-2">
                       <div>
                         <dt className="text-slate-500">Nguồn reel</dt>
-                        <dd className="font-mono text-slate-300">{detail.videoShortSourceId}</dd>
+                        <dd className="font-mono text-slate-300">{detail.videoSourceId}</dd>
                       </div>
                       <div>
                         <dt className="text-slate-500">Video ngắn (sau ChatGPT)</dt>

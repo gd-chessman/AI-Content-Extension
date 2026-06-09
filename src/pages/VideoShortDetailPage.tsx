@@ -473,7 +473,7 @@ export default function VideoShortDetailPage() {
             <dl className="space-y-3 text-xs">
               <div>
                 <dt className="text-slate-500">Nguồn reel</dt>
-                <dd className="mt-0.5 break-all font-mono text-slate-300">{story.videoShortSourceId || '—'}</dd>
+                <dd className="mt-0.5 break-all font-mono text-slate-300">{story.videoSourceId || '—'}</dd>
               </div>
               <div>
                 <dt className="text-slate-500">Chủ đề</dt>

@@ -116,7 +116,7 @@ export default function OverviewPage() {
                       {run.createdAt ? new Date(run.createdAt).toLocaleString('vi-VN') : '—'}
                     </td>
                     <td className="py-3 pr-4 font-mono text-xs text-slate-300">
-                      {String(run.videoShortSourceId).slice(-8)}
+                      {String(run.videoSourceId).slice(-8)}
                     </td>
                     <td className="py-3 pr-4">
                       <StatusBadge status={run.status} />

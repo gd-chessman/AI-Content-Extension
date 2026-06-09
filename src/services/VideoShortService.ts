@@ -4,7 +4,7 @@ export type VideoShortItem = {
   _id: string
   userId: string
   videoShortTopicId: string
-  videoShortSourceId?: string
+  videoSourceId?: string
   name: string
   sourceContent: string
   sourceReelUrl: string
