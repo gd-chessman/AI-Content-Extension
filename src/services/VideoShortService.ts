@@ -64,3 +64,11 @@ export const getVideoShortById = async (videoShortId: string) => {
   const response = await axiosClient.get(`/video-shorts/my/${videoShortId}`)
   return response.data as VideoShortItem
 }
+
+export const patchVideoShort = async (
+  videoShortId: string,
+  payload: { videoPrompts?: string[]; videoStorageAddresses?: string[] },
+) => {
+  const response = await axiosClient.patch(`/video-shorts/${videoShortId}`, payload)
+  return response.data as VideoShortItem
+}

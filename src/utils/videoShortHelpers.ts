@@ -102,3 +102,20 @@ export function isGgSheetPushable(story: VideoShortItem): boolean {
   const body = (story.shortContent || story.longContent || '').trim()
   return Boolean(title && body && isGgSheetPending(story))
 }
+
+/** Xóa đường dẫn video tại vị trí index (giữ nguyên độ dài mảng). */
+export function clearVideoStorageAtIndex(addresses: string[] | undefined, index: number): string[] {
+  const merged = [...(addresses || [])]
+  while (merged.length <= index) merged.push('')
+  merged[index] = ''
+  return merged
+}
+
+/** Đủ ảnh + prompt tại index để chạy lại Grok cho một video. */
+export function canRegenerateGrokVideoAtIndex(story: VideoShortItem, index: number): boolean {
+  const prompts = (story.videoPrompts || []).map((s) => s.trim()).filter(Boolean)
+  const images = (story.imageUrls || []).map((s) => s.trim()).filter(Boolean)
+  const prompt = prompts[index] || prompts[0] || ''
+  const imageUrl = images[index] || images[0] || ''
+  return Boolean(prompt && imageUrl)
+}
