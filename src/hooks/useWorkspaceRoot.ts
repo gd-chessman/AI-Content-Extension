@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from 'react'
 import {
-  ensureDirectoryReadable,
+  getWorkspaceRootNameFromStorage,
   loadContentRootDirectoryHandle,
-  pickContentRootDirectory,
+  persistContentRootDirectoryHandle,
+  resolveContentRootDirectoryAccess,
 } from '@/utils/localWorkspace'
 
 export function useWorkspaceRoot() {
@@ -11,20 +12,22 @@ export function useWorkspaceRoot() {
   const [pickingWorkspace, setPickingWorkspace] = useState(false)
 
   useEffect(() => {
-    void loadContentRootDirectoryHandle().then(async (handle) => {
-      if (!handle) return
-      const ok = await ensureDirectoryReadable(handle)
-      if (ok) {
-        setWorkspaceRoot(handle)
+    void (async () => {
+      const storedName = getWorkspaceRootNameFromStorage()
+      const handle = await loadContentRootDirectoryHandle()
+      if (handle?.name) {
         setWorkspaceLabel(handle.name)
+        if (!storedName) await persistContentRootDirectoryHandle(handle)
+      } else if (storedName) {
+        setWorkspaceLabel(storedName)
       }
-    })
+    })()
   }, [])
 
   const pickWorkspace = useCallback(async () => {
     setPickingWorkspace(true)
     try {
-      const handle = await pickContentRootDirectory()
+      const handle = await resolveContentRootDirectoryAccess({ allowPicker: true, allowRequest: true })
       if (handle) {
         setWorkspaceRoot(handle)
         setWorkspaceLabel(handle.name)
