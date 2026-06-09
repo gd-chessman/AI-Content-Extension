@@ -18,8 +18,9 @@ import {
 import {
   captureAndSaveGrokVideoLocally,
   fillGrokFromVideoShortPair,
-  listGrokVideoUrlsOnPage,
+  mergeGrokMediaBaseline,
   pickGrokTab,
+  type GrokMediaBaseline,
 } from '@/utils/grokAutomation'
 import {
   ensureVideoShortWorkspaceLayout,
@@ -37,6 +38,7 @@ import {
   isGrokCaptureVideoLinkStep,
   isGrokFillFromVideoShortStep,
   readGrokPairIndex,
+  readGrokRunPairIndex,
   readGrokTimeoutMs,
 } from '@/utils/grokWorkflowSteps'
 
@@ -142,7 +144,15 @@ export default function GrokScreen() {
   const lockedGrokTabIdRef = useRef(0)
   const grokPipelineVideoShortIdRef = useRef('')
   const grokCapturedVideoUrlsRef = useRef<string[]>([])
-  const grokVideoBaselineRef = useRef<string[]>([])
+  const grokVideoBaselineRef = useRef<GrokMediaBaseline>({
+    videoUrls: [],
+    postUrls: [],
+    videoCards: [],
+    postCards: [],
+    visibleVideoCount: 0,
+    submittedAt: 0,
+  })
+  const grokRunPairIndexRef = useRef<number | null>(null)
   const pendingGrokRunsRef = useRef<Array<{ runId: string; workflowId: string }>>([])
 
   const enqueueGrokWorkflowRun = (run: { _id: string; workflowId: string }) => {
@@ -317,16 +327,28 @@ export default function GrokScreen() {
       )
     }
 
-    const pairIndex = readGrokPairIndex(step.inputSchema)
+    const pairIndex = grokRunPairIndexRef.current ?? readGrokPairIndex(step.inputSchema)
 
     if (isGrokFillFromVideoShortStep(step)) {
       const { prompt, imageUrl } = await loadVideoShortPair(videoShortId, pairIndex)
       setLastPrompt(prompt)
       setLastImageDataUrl(imageUrl)
       setGrokWorkflowStatus(`${step.label}: điền ảnh + VIDEO ${pairIndex + 1} và Enter…`)
-      await fillGrokFromVideoShortPair(tabId, prompt, imageUrl, { submit: true })
-      grokVideoBaselineRef.current = await listGrokVideoUrlsOnPage(tabId)
-      return { filled: true, pairIndex, imageUrl, promptLength: prompt.length }
+      const filled = await fillGrokFromVideoShortPair(tabId, prompt, imageUrl, { submit: true })
+      grokVideoBaselineRef.current = {
+        ...filled.videoBaseline,
+        submittedAt: filled.submittedAt || filled.videoBaseline.submittedAt || Date.now(),
+        submittedImageUrl: filled.submittedImageUrl || imageUrl,
+      }
+      return {
+        filled: true,
+        pairIndex,
+        imageUrl,
+        promptLength: prompt.length,
+        baselineVideoCount: filled.videoBaseline.videoUrls.length,
+        baselinePostCount: filled.videoBaseline.postUrls.length,
+        submittedAt: filled.submittedAt,
+      }
     }
 
     if (isGrokCaptureVideoLinkStep(step)) {
@@ -350,18 +372,20 @@ export default function GrokScreen() {
       const filename = `video-${pairIndex + 1}.mp4`
       const relativePath = `${videoShortsSeg}/${folderSegment}/videos/${filename}`
 
-      setGrokWorkflowStatus(`${step.label}: chờ video Grok (tối đa ${Math.round(timeoutMs / 1000)}s)…`)
+      setGrokWorkflowStatus(
+        `${step.label}: chờ video mới (so khớp ảnh nguồn, tối đa ${Math.round(timeoutMs / 1000)}s)…`,
+      )
       const { grokUrl, localPath, byteLength } = await captureAndSaveGrokVideoLocally(
         tabId,
         timeoutMs,
         { dirHandle: dirs.videosDir, filename, relativePath },
-        { baselineUrls: grokVideoBaselineRef.current },
+        { mediaBaseline: grokVideoBaselineRef.current },
       )
       if (!grokUrl || !localPath) {
         throw new Error('Hết thời gian chờ — chưa tải được video Grok.')
       }
 
-      grokVideoBaselineRef.current = [...grokVideoBaselineRef.current, grokUrl].filter(Boolean)
+      grokVideoBaselineRef.current = mergeGrokMediaBaseline(grokVideoBaselineRef.current, grokUrl)
 
       const story = await getVideoShortById(videoShortId)
       const merged = [...(story.videoStorageAddresses || [])]
@@ -416,7 +440,15 @@ export default function GrokScreen() {
     grokWorkflowStopRef.current = false
     workflowCancelledRemotelyRef.current = false
     grokCapturedVideoUrlsRef.current = []
-    grokVideoBaselineRef.current = []
+    grokVideoBaselineRef.current = {
+      videoUrls: [],
+      postUrls: [],
+      videoCards: [],
+      postCards: [],
+      visibleVideoCount: 0,
+      submittedAt: 0,
+    }
+    grokRunPairIndexRef.current = null
 
     let workflowRunId = options?.runId || ''
     runningGrokWorkflowRunIdRef.current = workflowRunId
@@ -446,7 +478,17 @@ export default function GrokScreen() {
           const existingRun = await getWorkflowRunById(workflowRunId)
           const payload = (existingRun.payload || {}) as Record<string, unknown>
           const videoShortId = String(payload.videoShortId || '').trim()
-          if (videoShortId) grokPipelineVideoShortIdRef.current = videoShortId
+          if (videoShortId) {
+            grokPipelineVideoShortIdRef.current = videoShortId
+            try {
+              const story = await getVideoShortById(videoShortId)
+              grokCapturedVideoUrlsRef.current = [...(story.videoStorageAddresses || [])]
+            } catch {
+              grokCapturedVideoUrlsRef.current = []
+            }
+          }
+          const runPairIndex = readGrokRunPairIndex(payload)
+          if (runPairIndex !== null) grokRunPairIndexRef.current = runPairIndex
         } catch {
           /* ignore */
         }
@@ -559,6 +601,7 @@ export default function GrokScreen() {
       runningGrokWorkflowRunIdRef.current = ''
       grokPipelineVideoShortIdRef.current = ''
       grokCapturedVideoUrlsRef.current = []
+      grokRunPairIndexRef.current = null
       isGrokWorkflowRunningRef.current = false
       setIsGrokWorkflowRunning(false)
       setIsGrokWorkflowStopping(false)

@@ -1,9 +1,11 @@
 import {
+  grokCaptureMediaBaselinePageScript,
   grokFillImaginePageScript,
   grokDownloadVideoBufferPageScript,
   grokListVideoUrlsPageScript,
   grokProbeImageReadyPageScript,
-  grokProbeVideoLinkPageScript,
+  grokComparePreviewImagesPageScript,
+  grokProbeVideoCandidatesPageScript,
   grokSaveVideoToDirectoryPageScript,
   grokSubmitImaginePageScript,
 } from '@/utils/grokPageScripts'
@@ -24,6 +26,7 @@ type ExtensionChrome = {
       queryInfo: { url?: string[]; currentWindow?: boolean; active?: boolean },
       callback: (tabs: GrokBrowserTab[]) => void,
     ) => void
+    get?: (tabId: number, callback: (tab: GrokBrowserTab) => void) => void
     create?: (createProperties: { url: string; active?: boolean }, callback?: (tab: GrokBrowserTab) => void) => void
     update?: (tabId: number, updateProperties: { url?: string; active?: boolean }, callback?: (tab: GrokBrowserTab) => void) => void
   }
@@ -34,6 +37,213 @@ type ExtensionChrome = {
 
 export const GROK_URL = 'https://grok.com/imagine/saved'
 export const GROK_PATTERNS = ['*://grok.com/imagine*']
+
+export type GrokBaselineCard = {
+  cardKey: string
+  urls: string[]
+  /** Thứ tự <video> hiển thị trong DOM lúc submit (0 = trên cùng). */
+  orderIndex: number
+}
+
+export type GrokMediaBaseline = {
+  videoUrls: string[]
+  postUrls: string[]
+  /** Vị trí thẻ <video> lúc submit — chặn hover làm URL cũ bị coi là video mới. */
+  videoCards: GrokBaselineCard[]
+  postCards: GrokBaselineCard[]
+  visibleVideoCount: number
+  submittedAt: number
+  /** Ảnh đã paste lên Grok — dùng so khớp preview cạnh video trước khi lưu. */
+  submittedImageUrl?: string
+}
+
+export const GROK_PREVIEW_MATCH_MIN_SCORE = 0.68
+export const GROK_FRAME_MATCH_MIN_SCORE = 0.5
+
+export type GrokVideoProbeContext = {
+  nowMs: number
+  minWaitAfterSubmitMs: number
+}
+
+/** Chờ ngắn sau submit — chính vẫn là đếm slot DOM mới; 10s đủ chặn hover ngay sau Enter. */
+export const GROK_MIN_WAIT_AFTER_SUBMIT_MS = 10_000
+/** Poll nhanh sau grace; rút ngắn thời gian ghi nhận khi video đã render. */
+export const GROK_PROBE_INTERVAL_MS = 800
+export const GROK_PROBE_INTERVAL_CANDIDATE_MS = 450
+
+export class GrokVideoAmbiguousError extends Error {
+  urls: string[]
+
+  constructor(urls: string[]) {
+    super(
+      `Phát hiện ${urls.length} video Grok mới cùng lúc — không thể xác định video đúng. Tránh tạo video song song trên tab này.`,
+    )
+    this.name = 'GrokVideoAmbiguousError'
+    this.urls = urls
+  }
+}
+
+const emptyGrokMediaBaseline = (): GrokMediaBaseline => ({
+  videoUrls: [],
+  postUrls: [],
+  videoCards: [],
+  postCards: [],
+  visibleVideoCount: 0,
+  submittedAt: 0,
+})
+
+const normalizeGrokMediaBaseline = (raw?: Partial<GrokMediaBaseline> | null): GrokMediaBaseline => {
+  const videoCards = Array.isArray(raw?.videoCards)
+    ? raw.videoCards
+        .map((card, index) => ({
+          cardKey: String(card?.cardKey || '').trim(),
+          urls: Array.isArray(card?.urls) ? card.urls.map((u) => u.trim()).filter(Boolean) : [],
+          orderIndex: Number.isFinite(Number(card?.orderIndex)) ? Math.floor(Number(card?.orderIndex)) : index,
+        }))
+        .filter((card) => card.cardKey)
+    : []
+
+  return {
+    videoUrls: Array.isArray(raw?.videoUrls) ? raw.videoUrls.map((u) => u.trim()).filter(Boolean) : [],
+    postUrls: Array.isArray(raw?.postUrls) ? raw.postUrls.map((u) => u.trim()).filter(Boolean) : [],
+    videoCards,
+    postCards: Array.isArray(raw?.postCards)
+      ? raw.postCards
+          .map((card, index) => ({
+            cardKey: String(card?.cardKey || '').trim(),
+            urls: Array.isArray(card?.urls) ? card.urls.map((u) => u.trim()).filter(Boolean) : [],
+            orderIndex: Number.isFinite(Number(card?.orderIndex)) ? Math.floor(Number(card?.orderIndex)) : index,
+          }))
+          .filter((card) => card.cardKey)
+      : [],
+    visibleVideoCount: Math.max(
+      0,
+      Number.isFinite(Number(raw?.visibleVideoCount))
+        ? Math.floor(Number(raw?.visibleVideoCount))
+        : videoCards.length,
+    ),
+    submittedAt: Number(raw?.submittedAt) || 0,
+    ...(String(raw?.submittedImageUrl || '').trim()
+      ? { submittedImageUrl: String(raw?.submittedImageUrl || '').trim() }
+      : {}),
+  }
+}
+
+type GrokVideoCardProbe = {
+  cardKey: string
+  orderIndex: number
+  top: number
+  left: number
+  width: number
+  height: number
+  readyState: number
+  urls: string[]
+  previewImageUrls?: string[]
+  hasMp4: boolean
+  isReady: boolean
+  isNew: boolean
+  imageMatchScore?: number
+}
+
+type GrokPostLinkProbe = {
+  url: string
+  top: number
+  left: number
+  isNew: boolean
+}
+
+const isGrokGeneratedMp4Url = (url: string) =>
+  /assets\.grok\.com/i.test(url) && /generated_video\.mp4/i.test(url)
+
+const pickGrokCaptureUrl = (urls: string[], baseline: Set<string>) => {
+  const fresh = urls.map((u) => u.trim()).filter(Boolean).filter((url) => !baseline.has(url))
+  const generated = fresh.find(isGrokGeneratedMp4Url)
+  if (generated) return generated
+  const blob = fresh.find((url) => url.startsWith('blob:'))
+  if (blob) return blob
+  return ''
+}
+
+const selectGrokVideoProbe = (
+  cards: GrokVideoCardProbe[],
+  postLinks: GrokPostLinkProbe[],
+  mediaBaseline: GrokMediaBaseline,
+  probeContext?: GrokVideoProbeContext,
+) => {
+  const baseline = new Set(
+    [...mediaBaseline.videoUrls, ...mediaBaseline.postUrls].map((u) => u.trim()).filter(Boolean),
+  )
+
+  const submittedAt = mediaBaseline.submittedAt || 0
+  const nowMs = probeContext?.nowMs || Date.now()
+  const minWaitAfterSubmitMs = probeContext?.minWaitAfterSubmitMs ?? GROK_MIN_WAIT_AFTER_SUBMIT_MS
+  if (submittedAt > 0 && nowMs < submittedAt + minWaitAfterSubmitMs) {
+    return { ready: false, url: '', kind: '', ambiguous: false, ambiguousUrls: [] as string[] }
+  }
+
+  const readyNewCards = cards
+    .filter((card) => card.isNew && card.isReady)
+    .sort((a, b) => a.orderIndex - b.orderIndex || a.top - b.top || a.left - b.left)
+
+  if (readyNewCards.length > 1) {
+    return {
+      ready: false,
+      url: '',
+      kind: '',
+      ambiguous: true,
+      ambiguousUrls: readyNewCards.flatMap((card) => card.urls.filter((url) => !baseline.has(url))),
+    }
+  }
+
+  if (readyNewCards.length === 1) {
+    const card = readyNewCards[0]
+    const url = pickGrokCaptureUrl(card.urls, baseline)
+    if (url) {
+      return {
+        ready: true,
+        url,
+        kind: url.startsWith('blob:') ? 'blob' : isGrokGeneratedMp4Url(url) ? 'mp4' : 'http',
+        ambiguous: false,
+        ambiguousUrls: [] as string[],
+      }
+    }
+  }
+
+  const newPosts = postLinks
+    .filter((post) => post.isNew)
+    .sort((a, b) => a.top - b.top || a.left - b.left)
+
+  if (newPosts.length > 1) {
+    return {
+      ready: false,
+      url: '',
+      kind: '',
+      ambiguous: true,
+      ambiguousUrls: newPosts.map((post) => post.url),
+    }
+  }
+
+  if (newPosts.length === 1) {
+    return {
+      ready: true,
+      url: newPosts[0].url,
+      kind: 'post_link',
+      ambiguous: false,
+      ambiguousUrls: [] as string[],
+    }
+  }
+
+  return { ready: false, url: '', kind: '', ambiguous: false, ambiguousUrls: [] as string[] }
+}
+
+export const mergeGrokMediaBaseline = (baseline: GrokMediaBaseline, capturedUrl: string): GrokMediaBaseline => {
+  const url = capturedUrl.trim()
+  if (!url) return baseline
+  if (/imagine\/post/i.test(url)) {
+    return { ...baseline, postUrls: [...new Set([...baseline.postUrls, url])] }
+  }
+  return { ...baseline, videoUrls: [...new Set([...baseline.videoUrls, url])] }
+}
 
 const getChrome = () => (globalThis as { chrome?: ExtensionChrome }).chrome
 
@@ -79,29 +289,19 @@ const parseGrokPath = (raw?: string) => {
   }
 }
 
-const isPreferredGrokUrl = (raw?: string) => {
-  const path = parseGrokPath(raw)
-  return path === '/imagine' || path === '/imagine/saved'
-}
-
 const isSavedGrokUrl = (raw?: string) => parseGrokPath(raw) === '/imagine/saved'
-const isImagineRootUrl = (raw?: string) => parseGrokPath(raw) === '/imagine'
 
+/** Tab Grok thuộc nhánh Imagine (dùng khi tìm tab — điền prompt chỉ trên /imagine/saved). */
 export const isSupportedGrokUrl = (raw?: string) => {
   const path = parseGrokPath(raw)
   if (!path) return false
   return path === '/imagine' || path === '/imagine/saved' || path.startsWith('/imagine/post')
 }
 
-const isImaginePostUrl = (raw?: string) => {
-  const path = parseGrokPath(raw)
-  return Boolean(path && path.startsWith('/imagine/post'))
-}
-
-const shouldRedirectPostToImagine = (raw?: string) => {
-  const path = parseGrokPath(raw)
-  return Boolean(path && path.startsWith('/imagine/post/') && path !== '/imagine/post')
-}
+const getGrokTabById = (tabId: number) =>
+  new Promise<GrokBrowserTab | null>((resolve) => {
+    getChrome()?.tabs?.get?.(tabId, (tab) => resolve(tab || null))
+  })
 
 export const queryGrokTabs = (urlPatterns?: string[], currentWindow?: boolean, active?: boolean) =>
   new Promise<GrokBrowserTab[]>((resolve) => {
@@ -127,47 +327,46 @@ export async function pickGrokTab(preferActive = true): Promise<GrokBrowserTab |
   const grokTabsRaw = await queryGrokTabs(GROK_PATTERNS, true)
   const grokTabs = grokTabsRaw.filter((t) => isSupportedGrokUrl(t.url))
 
-  const pickBest = (tabs: GrokBrowserTab[]) => {
-    const saved = tabs.find((t) => isSavedGrokUrl(t.url))
-    if (saved) return saved
-    const imagineRoot = tabs.find((t) => isImagineRootUrl(t.url))
-    if (imagineRoot) return imagineRoot
-    const post = tabs.find((t) => isImaginePostUrl(t.url))
-    if (post) return post
-    return tabs[0] || null
-  }
-
-  let target: GrokBrowserTab | null | undefined = pickBest(grokTabs)
-
-  if (target?.id && target.url && isImaginePostUrl(target.url) && shouldRedirectPostToImagine(target.url)) {
-    target = await updateGrokTab(target.id, GROK_URL, preferActive)
-  } else if (target?.id && target.url && isPreferredGrokUrl(target.url)) {
-    target = await updateGrokTab(target.id, undefined, preferActive)
-  } else if (target?.id) {
-    target = await updateGrokTab(target.id, undefined, preferActive)
-  }
+  let target: GrokBrowserTab | null | undefined =
+    grokTabs.find((t) => isSavedGrokUrl(t.url)) || grokTabs[0] || null
 
   if (!target?.id) {
     target = await createGrokTab(GROK_URL, preferActive)
-  } else if (!isSupportedGrokUrl(target.url || '')) {
-    target = await updateGrokTab(target.id, GROK_URL, preferActive)
   } else {
-    target = await updateGrokTab(target.id, undefined, preferActive)
+    target = await ensureGrokSavedTab(target.id, preferActive)
   }
 
   return target?.id ? target : null
 }
 
-export async function waitForGrokComposer(tabId: number, options?: { allowPost?: boolean }) {
-  const allowPost = options?.allowPost !== false
-  const attempts = 14
+/** Chỉ điền prompt trên /imagine/saved — chuyển hướng nếu tab đang ở URL Imagine khác. */
+export async function ensureGrokSavedTab(tabId: number, active = false): Promise<GrokBrowserTab | null> {
+  const current = await getGrokTabById(tabId)
+  if (!current?.id) return null
+
+  if (isSavedGrokUrl(current.url || '')) {
+    if (active) return updateGrokTab(tabId, undefined, true)
+    return current
+  }
+
+  const updated = await updateGrokTab(tabId, GROK_URL, active)
+  for (let i = 0; i < 20; i += 1) {
+    await sleep(i === 0 ? 400 : 300)
+    const tab = await getGrokTabById(tabId)
+    if (isSavedGrokUrl(tab?.url || '')) return tab
+  }
+  return updated
+}
+
+export async function waitForGrokComposer(tabId: number) {
+  const attempts = 18
   for (let i = 0; i < attempts; i += 1) {
     await sleep(i === 0 ? 120 : 220)
     const payload = (await runGrokPageScript(
       tabId,
-      ((canUsePost: boolean) => {
+      (() => {
         const path = location.pathname.replace(/\/+$/, '')
-        const okPath = path === '/imagine' || path === '/imagine/saved' || (canUsePost && path === '/imagine/post')
+        const okPath = path === '/imagine/saved'
         if (!okPath) return { ok: false, path, hasInput: false }
 
         const isVisible = (el: Element | null): el is HTMLElement => {
@@ -185,7 +384,6 @@ export async function waitForGrokComposer(tabId: number, options?: { allowPost?:
         const hasInput = candidates.some((el) => isVisible(el))
         return { ok: okPath, path, hasInput }
       }) as (...args: unknown[]) => unknown,
-      [allowPost],
     )) as { ok?: boolean; hasInput?: boolean } | null
 
     if (payload?.ok && payload?.hasInput) return true
@@ -194,6 +392,7 @@ export async function waitForGrokComposer(tabId: number, options?: { allowPost?:
 }
 
 export async function injectPromptToGrok(tabId: number, prompt: string, imageUrl?: string) {
+  await ensureGrokSavedTab(tabId, true)
   let imagePayload = ''
   if (imageUrl?.trim()) {
     try {
@@ -262,47 +461,173 @@ export async function submitGrokImagine(tabId: number, options?: { timeoutMs?: n
   return false
 }
 
-export async function listGrokVideoUrlsOnPage(tabId: number) {
+export async function listGrokMediaBaselineOnPage(tabId: number): Promise<GrokMediaBaseline> {
   const result = (await runGrokPageScript(
     tabId,
-    grokListVideoUrlsPageScript as (...args: unknown[]) => unknown,
-  )) as string[] | null
-  return Array.isArray(result) ? result.map((u) => u.trim()).filter(Boolean) : []
+    grokCaptureMediaBaselinePageScript as (...args: unknown[]) => unknown,
+  )) as GrokMediaBaseline | null
+
+  if (!result || typeof result !== 'object') return emptyGrokMediaBaseline()
+  return normalizeGrokMediaBaseline(result)
 }
 
-export async function probeGrokVideoLink(tabId: number, baselineUrls: string[] = []) {
-  return (await runGrokPageScript(
+export async function listGrokVideoUrlsOnPage(tabId: number) {
+  const baseline = await listGrokMediaBaselineOnPage(tabId)
+  return baseline.videoUrls
+}
+
+const verifyGrokCardsWithSubmittedImage = async (
+  tabId: number,
+  cards: GrokVideoCardProbe[],
+  submittedImageSrc: string,
+) => {
+  const verified: GrokVideoCardProbe[] = []
+
+  for (const card of cards) {
+    if (!card.isNew || !card.isReady) {
+      verified.push(card)
+      continue
+    }
+
+    const previews = (card.previewImageUrls || []).map((u) => u.trim()).filter(Boolean)
+    const match = (await runGrokPageScript(
+      tabId,
+      grokComparePreviewImagesPageScript as (...args: unknown[]) => unknown,
+      [submittedImageSrc, previews, card.urls],
+    )) as {
+      matched?: boolean
+      score?: number
+      previewScore?: number
+      frameScore?: number
+      reason?: string
+    } | null
+
+    const previewScore = Number(match?.previewScore) || 0
+    const frameScore = Number(match?.frameScore) || 0
+    const score = Math.max(previewScore, frameScore, Number(match?.score) || 0)
+    let matched = Boolean(match?.matched)
+
+    // So khớp kỹ thuật lỗi (ảnh quá lớn, CORS…) — giữ logic slot DOM thay vì chờ mãi.
+    if (!matched && card.hasMp4) {
+      const compareBroken =
+        match?.reason === 'submitted_load_failed' ||
+        match?.reason === 'submitted_hash_failed' ||
+        match == null
+      if (compareBroken) matched = true
+    }
+
+    verified.push({ ...card, isNew: matched, imageMatchScore: score })
+  }
+
+  return verified
+}
+
+export async function probeGrokVideoLink(
+  tabId: number,
+  mediaBaseline: GrokMediaBaseline = emptyGrokMediaBaseline(),
+  probeContext?: GrokVideoProbeContext & { submittedImageSrc?: string; skipImageVerify?: boolean },
+) {
+  const raw = (await runGrokPageScript(
     tabId,
-    grokProbeVideoLinkPageScript as (...args: unknown[]) => unknown,
-    [baselineUrls],
-  )) as { ready?: boolean; url?: string; kind?: string } | null
+    grokProbeVideoCandidatesPageScript as (...args: unknown[]) => unknown,
+    [
+      {
+        ...mediaBaseline,
+        probeNowMs: probeContext?.nowMs || Date.now(),
+        minWaitAfterSubmitMs: probeContext?.minWaitAfterSubmitMs ?? GROK_MIN_WAIT_AFTER_SUBMIT_MS,
+      },
+    ],
+  )) as { cards?: GrokVideoCardProbe[]; postLinks?: GrokPostLinkProbe[] } | null
+
+  if (!raw || !Array.isArray(raw.cards) || !Array.isArray(raw.postLinks)) return null
+
+  let cards = raw.cards
+  const submittedImageSrc = probeContext?.submittedImageSrc?.trim() || ''
+  if (submittedImageSrc && !probeContext?.skipImageVerify) {
+    cards = await verifyGrokCardsWithSubmittedImage(tabId, cards, submittedImageSrc)
+  }
+
+  return selectGrokVideoProbe(cards, raw.postLinks, mediaBaseline, probeContext)
 }
 
 export async function waitForGrokVideoLink(
   tabId: number,
   timeoutMs: number,
-  options?: { baselineUrls?: string[] },
+  options?: { mediaBaseline?: GrokMediaBaseline; minWaitAfterSubmitMs?: number },
 ) {
-  const baselineUrls = options?.baselineUrls || []
+  const mediaBaseline = options?.mediaBaseline || emptyGrokMediaBaseline()
+  const minWaitAfterSubmitMs = options?.minWaitAfterSubmitMs ?? GROK_MIN_WAIT_AFTER_SUBMIT_MS
   const started = Date.now()
   let lastUrl = ''
   let stableHits = 0
+  let ambiguousStreak = 0
+  let lastAmbiguousUrls: string[] = []
+
+  const submittedImageSrc = mediaBaseline.submittedImageUrl?.trim() || ''
 
   while (Date.now() - started < timeoutMs) {
-    const probe = await probeGrokVideoLink(tabId, baselineUrls)
-    const url = probe?.ready && probe.url ? probe.url.trim() : ''
+    let probe = await probeGrokVideoLink(tabId, mediaBaseline, {
+      nowMs: Date.now(),
+      minWaitAfterSubmitMs,
+      submittedImageSrc,
+      skipImageVerify: Boolean(submittedImageSrc),
+    })
+
+    if (probe?.ambiguous) {
+      ambiguousStreak += 1
+      lastAmbiguousUrls = Array.isArray(probe.ambiguousUrls)
+        ? probe.ambiguousUrls.map((u) => u.trim()).filter(Boolean)
+        : []
+      if (ambiguousStreak >= 2 && lastAmbiguousUrls.length > 1) {
+        throw new GrokVideoAmbiguousError(lastAmbiguousUrls)
+      }
+      lastUrl = ''
+      stableHits = 0
+      await sleep(GROK_PROBE_INTERVAL_MS)
+      continue
+    }
+
+    ambiguousStreak = 0
+    lastAmbiguousUrls = []
+
+    let url = probe?.ready && probe.url ? probe.url.trim() : ''
+    if (url && submittedImageSrc) {
+      const confirmed = await probeGrokVideoLink(tabId, mediaBaseline, {
+        nowMs: Date.now(),
+        minWaitAfterSubmitMs,
+        submittedImageSrc,
+        skipImageVerify: false,
+      })
+      if (confirmed?.ready && confirmed.url?.trim()) {
+        url = confirmed.url.trim()
+        probe = confirmed
+      } else {
+        lastUrl = ''
+        stableHits = 0
+        await sleep(GROK_PROBE_INTERVAL_CANDIDATE_MS)
+        continue
+      }
+    }
+
     if (url) {
+      if (isGrokGeneratedMp4Url(url) || probe?.kind === 'post_link') {
+        return url
+      }
+
       if (url === lastUrl) stableHits += 1
       else {
         lastUrl = url
         stableHits = 1
       }
-      if (stableHits >= 2) return lastUrl
-    } else {
-      lastUrl = ''
-      stableHits = 0
+      const needStableHits = url.startsWith('blob:') ? 2 : 1
+      if (stableHits >= needStableHits) return lastUrl
+      await sleep(GROK_PROBE_INTERVAL_CANDIDATE_MS)
+      continue
     }
-    await sleep(2500)
+
+    lastUrl = ''
+    stableHits = 0
+    await sleep(GROK_PROBE_INTERVAL_MS)
   }
   return ''
 }
@@ -364,7 +689,7 @@ export async function captureAndSaveGrokVideoLocally(
   tabId: number,
   timeoutMs: number,
   saveTarget: GrokVideoLocalSaveTarget,
-  options?: { baselineUrls?: string[] },
+  options?: { mediaBaseline?: GrokMediaBaseline },
 ) {
   const grokUrl = await waitForGrokVideoLink(tabId, timeoutMs, options)
   if (!grokUrl) return { grokUrl: '', localPath: '', byteLength: 0 }
@@ -383,8 +708,9 @@ export async function fillGrokFromVideoShortPair(
   imageUrl: string,
   options?: { submit?: boolean },
 ) {
-  const ready = await waitForGrokComposer(tabId, { allowPost: true })
-  if (!ready) throw new Error('Grok composer chưa sẵn sàng.')
+  await ensureGrokSavedTab(tabId, true)
+  const ready = await waitForGrokComposer(tabId)
+  if (!ready) throw new Error('Grok composer chưa sẵn sàng trên grok.com/imagine/saved.')
 
   let imagePayload = ''
   if (imageUrl?.trim()) {
@@ -408,6 +734,8 @@ export async function fillGrokFromVideoShortPair(
     reason?: string
     hasPreview?: boolean
     hasSubmitButton?: boolean
+    videoBaseline?: GrokMediaBaseline
+    submittedAt?: number
   } | null
 
   if (!payload?.ok) {
@@ -425,9 +753,24 @@ export async function fillGrokFromVideoShortPair(
     throw new Error('Không gửi được prompt Grok (nút Gửi).')
   }
 
+  const videoBaseline = payload.videoBaseline
+    ? normalizeGrokMediaBaseline({
+        ...payload.videoBaseline,
+        submittedImageUrl: imageUrl.trim(),
+      })
+    : shouldSubmit
+      ? {
+          ...(await listGrokMediaBaselineOnPage(tabId)),
+          submittedImageUrl: imageUrl.trim(),
+        }
+      : emptyGrokMediaBaseline()
+
   return {
     foundInput: true,
     wroteText: Boolean(payload.wroteText),
     pastedImage: Boolean(payload.pastedImage),
+    videoBaseline,
+    submittedAt: Number(payload.submittedAt) || Date.now(),
+    submittedImageUrl: imageUrl.trim(),
   }
 }

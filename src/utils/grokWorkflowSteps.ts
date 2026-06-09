@@ -32,6 +32,16 @@ export function readGrokPairIndex(inputSchema?: Record<string, unknown>): number
   return n
 }
 
+/** pairIndex từ payload workflow run (WEB gửi khi tạo lại một video). */
+export function readGrokRunPairIndex(payload?: Record<string, unknown>): number | null {
+  if (!payload) return null
+  const raw = payload.pairIndex ?? payload.videoIndex ?? payload.index
+  if (raw === undefined || raw === null || raw === '') return null
+  const n = Math.floor(Number(raw))
+  if (!Number.isFinite(n) || n < 0) return null
+  return n
+}
+
 export function readGrokTimeoutMs(inputSchema?: Record<string, unknown>, fallback = 600_000): number {
   const raw = inputSchema?.timeoutMs ?? inputSchema?.timeout
   const n = Math.floor(Number(raw))
