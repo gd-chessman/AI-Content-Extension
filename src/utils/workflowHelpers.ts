@@ -21,10 +21,10 @@ const CATEGORY_LABELS: Record<string, string> = {
 
 const ACTION_TYPE_LABELS: Record<string, string> = {
   custom: 'Tùy chỉnh',
-  grok_fill_from_story: 'Grok — điền từ câu chuyện',
+  grok_fill_from_video_short: 'Grok — điền từ video ngắn',
   grok_capture_video_link: 'Grok — lưu video',
   fill_grok: 'Grok — điền form',
-  chatgpt_save_story: 'ChatGPT — lưu câu chuyện',
+  chatgpt_save_video_short: 'ChatGPT — lưu video ngắn',
   chatgpt_extract_content: 'ChatGPT — trích nội dung',
   chatgpt_generate_image: 'ChatGPT — tạo ảnh',
   chatgpt_generate_images: 'ChatGPT — tạo nhiều ảnh',
@@ -32,7 +32,7 @@ const ACTION_TYPE_LABELS: Record<string, string> = {
   facebook_scan_reels: 'Facebook — quét reel',
   facebook_select_reel: 'Facebook — chọn reel',
   facebook_wait_content: 'Facebook — chờ nội dung',
-  facebook_save_story: 'Facebook — lưu câu chuyện',
+  facebook_save_video_short: 'Facebook — lưu nguồn reel',
 }
 
 export function formatWorkflowCategory(category?: string) {

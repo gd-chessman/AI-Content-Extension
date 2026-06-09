@@ -6,8 +6,8 @@ import MultiWorkflowPage from '@/pages/MultiWorkflowPage'
 import WorkflowsPage from '@/pages/WorkflowsPage'
 import WorkflowDetailPage from '@/pages/WorkflowDetailPage'
 import RunsPage from '@/pages/RunsPage'
-import StoriesPage from '@/pages/StoriesPage'
-import StoryDetailPage from '@/pages/StoryDetailPage'
+import VideoShortsPage from '@/pages/VideoShortsPage'
+import VideoShortDetailPage from '@/pages/VideoShortDetailPage'
 import GgSheetPage from '@/pages/GgSheetPage'
 import WorkflowSchedulesPage from '@/pages/WorkflowSchedulesPage'
 import { GuestOnly, RequireAuth } from '@/routers/AuthGuards'
@@ -23,8 +23,8 @@ export default function AppRouter() {
         <Route element={<DashboardLayout />}>
           <Route index element={<Navigate to="/overview" replace />} />
           <Route path="overview" element={<OverviewPage />} />
-          <Route path="stories" element={<StoriesPage />} />
-          <Route path="stories/:id" element={<StoryDetailPage />} />
+          <Route path="video-shorts" element={<VideoShortsPage />} />
+          <Route path="video-shorts/:id" element={<VideoShortDetailPage />} />
           <Route path="ggsheet" element={<GgSheetPage />} />
           <Route path="workflows" element={<WorkflowsPage />} />
           <Route path="workflows/:id" element={<WorkflowDetailPage />} />

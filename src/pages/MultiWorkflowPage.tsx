@@ -333,7 +333,7 @@ export default function MultiWorkflowPage() {
 
   const activeRunByConfigId = useMemo(() => {
     const map = new Map<string, MultiWorkflowRun>()
-    for (const run of activeRunsQuery.data || []) {
+    for (const run of activeRunsQuery.data?.items || []) {
       if (run.status !== 'running' && run.status !== 'queued') continue
       if (run.multiWorkflowId) map.set(run.multiWorkflowId, run)
     }

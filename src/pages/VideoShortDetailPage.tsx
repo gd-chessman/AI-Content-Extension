@@ -10,27 +10,32 @@ import {
   FiFolder,
   FiImage,
   FiLink,
+  FiRefreshCw,
   FiTable,
+  FiTrash2,
   FiType,
   FiVideo,
 } from 'react-icons/fi'
+import ConfirmModal from '@/components/ConfirmModal'
 import EmptyState from '@/components/EmptyState'
 import GgSheetPushButton from '@/components/GgSheetPushButton'
 import GrokRunButton from '@/components/GrokRunButton'
-import StoryVideoPlayer from '@/components/StoryVideoPlayer'
+import VideoShortVideoPlayer from '@/components/VideoShortVideoPlayer'
 import { useWorkspaceRoot } from '@/hooks/useWorkspaceRoot'
-import { buildGgSheetPushPayloadFromStory, pushGgSheetContent } from '@/services/GgSheetService'
-import { getStoryById, type StoryItem } from '@/services/StoryService'
+import { buildGgSheetPushPayloadFromVideoShort, pushGgSheetContent } from '@/services/GgSheetService'
+import { getVideoShortById, patchVideoShort, type VideoShortItem } from '@/services/VideoShortService'
 import { createWorkflowRun, getExtensionPresence, getUserWorkflows } from '@/services/WorkflowService'
 import {
-  formatStoryDate,
+  canRegenerateGrokVideoAtIndex,
+  clearVideoStorageAtIndex,
+  formatVideoShortDate,
   getPipelineSteps,
-  getStoryStats,
+  getVideoShortStats,
   isGgSheetPushable,
   isGrokIncomplete,
   isGrokReady,
   pipelineProgress,
-} from '@/utils/storyHelpers'
+} from '@/utils/videoShortHelpers'
 
 function Section({
   title,
@@ -57,7 +62,7 @@ function Section({
   )
 }
 
-function PipelineTimeline({ story, stats }: { story: StoryItem; stats: ReturnType<typeof getStoryStats> }) {
+function PipelineTimeline({ story, stats }: { story: VideoShortItem; stats: ReturnType<typeof getVideoShortStats> }) {
   const steps = getPipelineSteps(story, stats)
   const progress = pipelineProgress(story, stats)
 
@@ -98,18 +103,27 @@ function PipelineTimeline({ story, stats }: { story: StoryItem; stats: ReturnTyp
   )
 }
 
-export default function StoryDetailPage() {
+export default function VideoShortDetailPage() {
   const { id = '' } = useParams()
   const queryClient = useQueryClient()
   const [contentTab, setContentTab] = useState<'short' | 'long'>('short')
   const [selectedImage, setSelectedImage] = useState(0)
   const [sheetMessage, setSheetMessage] = useState('')
   const [grokMessage, setGrokMessage] = useState('')
-  const { workspaceRoot, workspaceLabel, pickingWorkspace, pickWorkspace } = useWorkspaceRoot()
+  const [videoActionMessage, setVideoActionMessage] = useState('')
+  const [deleteVideoIndex, setDeleteVideoIndex] = useState<number | null>(null)
+  const {
+    workspaceRoot,
+    workspaceLabel,
+    needsPermissionRestore,
+    pickingWorkspace,
+    pickWorkspace,
+    restoreWorkspace,
+  } = useWorkspaceRoot()
 
   const storyQuery = useQuery({
-    queryKey: ['stories', 'detail', id],
-    queryFn: () => getStoryById(id),
+    queryKey: ['video-shorts', 'detail', id],
+    queryFn: () => getVideoShortById(id),
     enabled: Boolean(id.trim()),
     refetchInterval: 15_000,
   })
@@ -131,7 +145,7 @@ export default function StoryDetailPage() {
   const story = storyQuery.data
 
   const grokMutation = useMutation({
-    mutationFn: async (item: StoryItem) => {
+    mutationFn: async (item: VideoShortItem) => {
       if (!grokWorkflowId) throw new Error('Chưa có workflow Grok trên hệ thống.')
       if (!extensionOnline) {
         throw new Error('Extension chưa online — mở extension tab Grok và đăng nhập.')
@@ -139,15 +153,15 @@ export default function StoryDetailPage() {
       await createWorkflowRun({
         workflowId: grokWorkflowId,
         payload: {
-          storyId: item._id,
+          videoShortId: item._id,
           source: 'web_story_detail',
           trigger: 'web_console',
         },
       })
     },
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['stories', 'detail', id] })
-      void queryClient.invalidateQueries({ queryKey: ['stories', 'my'] })
+      void queryClient.invalidateQueries({ queryKey: ['video-shorts', 'detail', id] })
+      void queryClient.invalidateQueries({ queryKey: ['video-shorts', 'my'] })
       setGrokMessage('Đã gửi lệnh Grok — extension xử lý trên tab Grok.')
     },
     onError: (error: unknown) => {
@@ -159,11 +173,63 @@ export default function StoryDetailPage() {
     },
   })
 
+  const deleteVideoMutation = useMutation({
+    mutationFn: async ({ item, index }: { item: VideoShortItem; index: number }) => {
+      return patchVideoShort(item._id, {
+        videoStorageAddresses: clearVideoStorageAtIndex(item.videoStorageAddresses, index),
+      })
+    },
+    onSuccess: () => {
+      setDeleteVideoIndex(null)
+      void queryClient.invalidateQueries({ queryKey: ['video-shorts', 'detail', id] })
+      void queryClient.invalidateQueries({ queryKey: ['video-shorts', 'my'] })
+      setVideoActionMessage('Đã xóa video khỏi video ngắn (file trên máy vẫn giữ nguyên nếu đã tải).')
+    },
+    onError: (error: unknown) => {
+      setVideoActionMessage(error instanceof Error ? error.message : 'Không thể xóa video.')
+    },
+  })
+
+  const regenerateVideoMutation = useMutation({
+    mutationFn: async ({ item, index }: { item: VideoShortItem; index: number }) => {
+      if (!grokWorkflowId) throw new Error('Chưa có workflow Grok trên hệ thống.')
+      if (!extensionOnline) {
+        throw new Error('Extension chưa online — mở extension tab Grok và đăng nhập.')
+      }
+      if (!canRegenerateGrokVideoAtIndex(item, index)) {
+        throw new Error('Thiếu ảnh hoặc prompt video cho vị trí này.')
+      }
+      await createWorkflowRun({
+        workflowId: grokWorkflowId,
+        payload: {
+          videoShortId: item._id,
+          pairIndex: index,
+          source: 'web_story_detail',
+          trigger: 'regenerate_video',
+        },
+      })
+    },
+    onSuccess: (_data, variables) => {
+      void queryClient.invalidateQueries({ queryKey: ['video-shorts', 'detail', id] })
+      void queryClient.invalidateQueries({ queryKey: ['video-shorts', 'my'] })
+      setVideoActionMessage(
+        `Đã gửi lệnh tạo lại video ${variables.index + 1} — extension xử lý trên tab Grok.`,
+      )
+    },
+    onError: (error: unknown) => {
+      if (isAxiosError(error) && error.response?.status === 503) {
+        setVideoActionMessage('Extension chưa online — mở tab Grok trong extension.')
+        return
+      }
+      setVideoActionMessage(error instanceof Error ? error.message : 'Không thể tạo lại video.')
+    },
+  })
+
   const sheetPushMutation = useMutation({
-    mutationFn: async (item: StoryItem) => pushGgSheetContent(buildGgSheetPushPayloadFromStory(item)),
+    mutationFn: async (item: VideoShortItem) => pushGgSheetContent(buildGgSheetPushPayloadFromVideoShort(item)),
     onSuccess: (result) => {
-      void queryClient.invalidateQueries({ queryKey: ['stories', 'detail', id] })
-      void queryClient.invalidateQueries({ queryKey: ['stories', 'my'] })
+      void queryClient.invalidateQueries({ queryKey: ['video-shorts', 'detail', id] })
+      void queryClient.invalidateQueries({ queryKey: ['video-shorts', 'my'] })
       void queryClient.invalidateQueries({ queryKey: ['ggsheet', 'compare'] })
       setSheetMessage(
         result.targetRow
@@ -193,14 +259,14 @@ export default function StoryDetailPage() {
 
   useEffect(() => {
     if (!story) return
-    const s = getStoryStats(story)
+    const s = getVideoShortStats(story)
     if (!s.hasShortContent && s.hasLongContent) setContentTab('long')
     else if (s.hasShortContent) setContentTab('short')
   }, [story])
 
   if (!id.trim()) {
     return (
-      <EmptyState title="Thiếu mã câu chuyện" description="Quay lại danh sách câu chuyện để chọn một câu chuyện." />
+      <EmptyState title="Thiếu mã video ngắn" description="Quay lại danh sách video ngắn để chọn một video ngắn." />
     )
   }
 
@@ -221,24 +287,27 @@ export default function StoryDetailPage() {
     return (
       <div className="space-y-4">
         <Link
-          to="/stories"
+          to="/video-shorts"
           className="inline-flex items-center gap-2 text-sm text-slate-400 hover:text-white"
         >
           <FiArrowLeft className="h-4 w-4" />
           Quay lại danh sách
         </Link>
         <EmptyState
-          title="Không tìm thấy câu chuyện"
-          description="Câu chuyện có thể đã bị xóa hoặc bạn không có quyền truy cập."
+          title="Không tìm thấy video ngắn"
+          description="Video ngắn có thể đã bị xóa hoặc bạn không có quyền truy cập."
         />
       </div>
     )
   }
 
-  const stats = getStoryStats(story)
+  const stats = getVideoShortStats(story)
   const images = (story.imageUrls || []).filter(Boolean)
-  const videos = (story.videoStorageAddresses || []).filter(Boolean)
+  const videoAddresses = story.videoStorageAddresses || []
+  const videos = videoAddresses.filter(Boolean)
+  const videoSlotCount = Math.max(videoAddresses.length, stats.promptCount, 1)
   const prompts = (story.videoPrompts || []).filter(Boolean)
+  const isVideoActionPending = deleteVideoMutation.isPending || regenerateVideoMutation.isPending
   const heroImage = images[selectedImage] || stats.firstImage
   const canPushSheet = isGgSheetPushable(story)
   const sheetPushed = Boolean(story.ggsheetPush?.pushed)
@@ -250,15 +319,15 @@ export default function StoryDetailPage() {
       {/* Top bar */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <Link
-          to="/stories"
+          to="/video-shorts"
           className="inline-flex w-fit items-center gap-2 rounded-lg border border-white/10 px-3 py-1.5 text-sm text-slate-300 transition hover:bg-white/5 hover:text-white"
         >
           <FiArrowLeft className="h-4 w-4" />
-          Câu chuyện
+          Video ngắn
         </Link>
         <button
           type="button"
-          onClick={() => void pickWorkspace()}
+          onClick={() => void (needsPermissionRestore ? restoreWorkspace() : pickWorkspace())}
           disabled={pickingWorkspace}
           className="inline-flex items-center gap-2 rounded-xl border border-teal-500/30 bg-teal-500/10 px-3 py-2 text-xs text-teal-100 hover:bg-teal-500/20 disabled:opacity-50"
         >
@@ -266,8 +335,10 @@ export default function StoryDetailPage() {
           {workspaceRoot
             ? `Thư mục: ${workspaceLabel || 'đã chọn'}`
             : pickingWorkspace
-              ? 'Đang chọn…'
-              : 'Chọn thư mục để xem video trên máy'}
+              ? 'Đang khôi phục…'
+              : needsPermissionRestore
+                ? `Khôi phục quyền: ${workspaceLabel || 'thư mục đã lưu'}`
+                : 'Chọn thư mục để xem video trên máy'}
         </button>
       </div>
 
@@ -303,10 +374,10 @@ export default function StoryDetailPage() {
 
           <div className="flex flex-col gap-4 p-5 lg:col-span-3 lg:p-6">
             <div>
-              <p className="text-[11px] font-medium uppercase tracking-wider text-violet-400">Câu chuyện</p>
+              <p className="text-[11px] font-medium uppercase tracking-wider text-violet-400">Video ngắn</p>
               <h1 className="mt-1 text-2xl font-semibold text-white">{story.name || 'Không tên'}</h1>
               <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
-                <span>{formatStoryDate(story.createdAt)}</span>
+                <span>{formatVideoShortDate(story.createdAt)}</span>
                 {story.usageCount != null ? (
                   <>
                     <span>·</span>
@@ -341,17 +412,82 @@ export default function StoryDetailPage() {
           {videos.length > 0 ? (
             <Section title="Video Grok" icon={<FiFilm className="h-4 w-4" />} count={videos.length}>
               <div className="space-y-5">
-                {videos.map((entry, idx) => (
-                  <div key={`${entry}-${idx}`}>
-                    <p className="mb-2 text-xs font-medium text-slate-400">Video {idx + 1}</p>
-                    <StoryVideoPlayer
-                      entry={entry}
-                      workspaceRoot={workspaceRoot}
-                      onPickWorkspace={() => void pickWorkspace()}
-                      pickingWorkspace={pickingWorkspace}
-                    />
-                  </div>
-                ))}
+                {Array.from({ length: videoSlotCount }, (_, idx) => {
+                  const entry = (videoAddresses[idx] || '').trim()
+                  const canRegenerate = canRegenerateGrokVideoAtIndex(story, idx)
+
+                  if (!entry) {
+                    if (!canRegenerate) return null
+                    return (
+                      <div
+                        key={`missing-video-slot-${idx}`}
+                        className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-dashed border-white/15 bg-black/15 p-3"
+                      >
+                        <p className="text-xs text-slate-500">Video {idx + 1} chưa có</p>
+                        <GrokRunButton
+                          size="sm"
+                          disabled={isVideoActionPending || !grokWorkflowId || !extensionOnline}
+                          onClick={() => {
+                            setVideoActionMessage('')
+                            regenerateVideoMutation.mutate({ item: story, index: idx })
+                          }}
+                        >
+                          {regenerateVideoMutation.isPending ? 'Đang gửi…' : `Tạo video ${idx + 1}`}
+                        </GrokRunButton>
+                      </div>
+                    )
+                  }
+
+                  return (
+                    <div key={`video-slot-${idx}`} className="rounded-xl border border-white/10 bg-black/20 p-3">
+                      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                        <p className="text-xs font-medium text-slate-400">Video {idx + 1}</p>
+                        <div className="flex flex-wrap items-center gap-2">
+                          {canRegenerate ? (
+                            <button
+                              type="button"
+                              disabled={isVideoActionPending || !grokWorkflowId || !extensionOnline}
+                              onClick={() => {
+                                setVideoActionMessage('')
+                                regenerateVideoMutation.mutate({ item: story, index: idx })
+                              }}
+                              className="inline-flex items-center gap-1.5 rounded-lg border border-sky-500/35 bg-sky-500/12 px-2.5 py-1 text-[11px] font-medium text-sky-50 transition hover:bg-sky-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+                            >
+                              <FiRefreshCw className="h-3 w-3" />
+                              {regenerateVideoMutation.isPending ? 'Đang gửi…' : 'Tạo lại'}
+                            </button>
+                          ) : null}
+                          <button
+                            type="button"
+                            disabled={isVideoActionPending}
+                            onClick={() => {
+                              setVideoActionMessage('')
+                              setDeleteVideoIndex(idx)
+                            }}
+                            className="inline-flex items-center gap-1.5 rounded-lg border border-rose-500/30 bg-rose-500/10 px-2.5 py-1 text-[11px] font-medium text-rose-100 transition hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+                          >
+                            <FiTrash2 className="h-3 w-3" />
+                            Xóa
+                          </button>
+                        </div>
+                      </div>
+                      <VideoShortVideoPlayer
+                        entry={entry}
+                        workspaceRoot={workspaceRoot}
+                        workspaceLabel={workspaceLabel}
+                        needsPermissionRestore={needsPermissionRestore}
+                        onPickWorkspace={() => void (needsPermissionRestore ? restoreWorkspace() : pickWorkspace())}
+                        pickingWorkspace={pickingWorkspace}
+                      />
+                    </div>
+                  )
+                })}
+                {!extensionOnline ? (
+                  <p className="text-[11px] text-amber-300/90">
+                    Extension đang offline — mở tab Grok trong extension trước khi tạo lại video.
+                  </p>
+                ) : null}
+                {videoActionMessage ? <p className="text-[11px] text-slate-300">{videoActionMessage}</p> : null}
               </div>
             </Section>
           ) : (
@@ -382,6 +518,29 @@ export default function StoryDetailPage() {
                   </p>
                 ) : null}
                 {grokMessage ? <p className="text-[11px] text-slate-300">{grokMessage}</p> : null}
+                {Array.from({ length: videoSlotCount }, (_, idx) => {
+                  const entry = (videoAddresses[idx] || '').trim()
+                  if (entry || !canRegenerateGrokVideoAtIndex(story, idx)) return null
+                  return (
+                    <div
+                      key={`missing-video-slot-${idx}`}
+                      className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-dashed border-white/15 bg-black/15 p-3"
+                    >
+                      <p className="text-xs text-slate-500">Video {idx + 1} chưa có</p>
+                      <GrokRunButton
+                        size="sm"
+                        disabled={regenerateVideoMutation.isPending || !grokWorkflowId || !extensionOnline}
+                        onClick={() => {
+                          setVideoActionMessage('')
+                          regenerateVideoMutation.mutate({ item: story, index: idx })
+                        }}
+                      >
+                        {regenerateVideoMutation.isPending ? 'Đang gửi…' : `Tạo video ${idx + 1}`}
+                      </GrokRunButton>
+                    </div>
+                  )
+                })}
+                {videoActionMessage ? <p className="text-[11px] text-slate-300">{videoActionMessage}</p> : null}
               </div>
             </Section>
           )}
@@ -413,7 +572,7 @@ export default function StoryDetailPage() {
 
           {/* Content tabs */}
           {(stats.hasShortContent || stats.hasLongContent) ? (
-            <Section title="Nội dung câu chuyện" icon={<FiType className="h-4 w-4" />}>
+            <Section title="Nội dung video ngắn" icon={<FiType className="h-4 w-4" />}>
               <div className="mb-3 flex gap-1 rounded-lg border border-white/10 bg-black/20 p-1">
                 {stats.hasShortContent ? (
                   <button
@@ -473,11 +632,11 @@ export default function StoryDetailPage() {
             <dl className="space-y-3 text-xs">
               <div>
                 <dt className="text-slate-500">Nguồn reel</dt>
-                <dd className="mt-0.5 break-all font-mono text-slate-300">{story.storySourceId || '—'}</dd>
+                <dd className="mt-0.5 break-all font-mono text-slate-300">{story.videoSourceId || '—'}</dd>
               </div>
               <div>
                 <dt className="text-slate-500">Chủ đề</dt>
-                <dd className="mt-0.5 break-all font-mono text-slate-300">{story.topicId || '—'}</dd>
+                <dd className="mt-0.5 break-all font-mono text-slate-300">{story.videoShortTopicId || '—'}</dd>
               </div>
               {story.blogPostUrl ? (
                 <div>
@@ -545,12 +704,28 @@ export default function StoryDetailPage() {
               </div>
               <div>
                 <dt className="text-slate-500">Cập nhật</dt>
-                <dd className="mt-0.5 text-slate-300">{formatStoryDate(story.updatedAt)}</dd>
+                <dd className="mt-0.5 text-slate-300">{formatVideoShortDate(story.updatedAt)}</dd>
               </div>
             </dl>
           </Section>
         </div>
       </div>
+
+      <ConfirmModal
+        open={deleteVideoIndex !== null}
+        title={deleteVideoIndex !== null ? `Xóa video ${deleteVideoIndex + 1}?` : 'Xóa video?'}
+        message="Video sẽ bị gỡ khỏi video ngắn này. File trên máy (nếu đã tải) vẫn giữ nguyên."
+        confirmLabel="Xóa"
+        tone="danger"
+        loading={deleteVideoMutation.isPending}
+        onClose={() => {
+          if (!deleteVideoMutation.isPending) setDeleteVideoIndex(null)
+        }}
+        onConfirm={() => {
+          if (deleteVideoIndex === null) return
+          deleteVideoMutation.mutate({ item: story, index: deleteVideoIndex })
+        }}
+      />
     </div>
   )
 }

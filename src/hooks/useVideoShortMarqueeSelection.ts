@@ -35,7 +35,7 @@ function rectsIntersect(a: DOMRect, b: ReturnType<typeof boxToBounds>) {
 
 const DRAG_THRESHOLD_PX = 6
 
-export function useStoryMarqueeSelection(options: {
+export function useVideoShortMarqueeSelection(options: {
   enabled: boolean
   onToggleId: (id: string) => void
   onSelectIds: (ids: string[], mode: 'add' | 'replace') => void
@@ -148,7 +148,7 @@ export function useStoryMarqueeSelection(options: {
       if (target.closest('a, button, input, textarea, select, [data-no-marquee]')) return
 
       const cardEl = target.closest('[data-story-id]') as HTMLElement | null
-      const startedOnCardId = cardEl?.dataset.storyId || null
+      const startedOnCardId = cardEl?.dataset.videoShortId || null
 
       dragRef.current = {
         active: true,

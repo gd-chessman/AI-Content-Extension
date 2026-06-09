@@ -1,5 +1,5 @@
 import axiosClient from '@/utils/axiosClient'
-import type { StoryItem } from '@/services/StoryService'
+import type { VideoShortItem } from '@/services/VideoShortService'
 import { stylizeTitleForDisplay } from '@/utils/textSearchNormalize'
 
 export type GgSheetPushPayload = {
@@ -72,7 +72,7 @@ export const compareGgSheetWithStories = async () => {
   return response.data as GgSheetCompareResult
 }
 
-export function buildGgSheetPushPayloadFromStory(story: Pick<StoryItem, 'name' | 'shortContent' | 'longContent'>): GgSheetPushPayload {
+export function buildGgSheetPushPayloadFromVideoShort(story: Pick<VideoShortItem, 'name' | 'shortContent' | 'longContent'>): GgSheetPushPayload {
   return {
     title: stylizeTitleForDisplay((story.name || '').trim()),
     shortContent: (story.shortContent || '').trim(),

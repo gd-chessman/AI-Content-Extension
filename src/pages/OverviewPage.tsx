@@ -43,7 +43,7 @@ export default function OverviewPage() {
     refetchInterval: 5000,
   })
 
-  const runs = runsQuery.data || []
+  const runs = runsQuery.data?.items || []
   const jobs = jobsQuery.data || []
 
   const activeRuns = runs.filter((r) => r.status === 'running' || r.status === 'queued').length
@@ -116,7 +116,7 @@ export default function OverviewPage() {
                       {run.createdAt ? new Date(run.createdAt).toLocaleString('vi-VN') : '—'}
                     </td>
                     <td className="py-3 pr-4 font-mono text-xs text-slate-300">
-                      {String(run.storySourceId).slice(-8)}
+                      {String(run.videoSourceId).slice(-8)}
                     </td>
                     <td className="py-3 pr-4">
                       <StatusBadge status={run.status} />

@@ -4,6 +4,7 @@ const DB_NAME = 'aicontent-web-workspace-fs'
 const STORE = 'handles'
 export const CONTENT_ROOT_HANDLE_KEY = 'contentRootDirectory'
 export const WORKSPACE_ROOT_PICKER_ID = 'aicontent-web-workspace-root'
+export const WORKSPACE_ROOT_NAME_STORAGE_KEY = 'aicontent-web-workspace-root-name'
 
 let cachedRoot: FileSystemDirectoryHandle | null = null
 
@@ -54,6 +55,19 @@ export async function loadContentRootDirectoryHandle(): Promise<FileSystemDirect
 export async function persistContentRootDirectoryHandle(handle: FileSystemDirectoryHandle): Promise<void> {
   cachedRoot = handle
   await idbPutHandle(CONTENT_ROOT_HANDLE_KEY, handle)
+  try {
+    localStorage.setItem(WORKSPACE_ROOT_NAME_STORAGE_KEY, handle.name)
+  } catch {
+    /* ignore */
+  }
+}
+
+export function getWorkspaceRootNameFromStorage(): string {
+  try {
+    return localStorage.getItem(WORKSPACE_ROOT_NAME_STORAGE_KEY)?.trim() || ''
+  } catch {
+    return ''
+  }
 }
 
 export async function queryDirectoryReadable(handle: FileSystemDirectoryHandle): Promise<boolean> {
@@ -64,8 +78,12 @@ export async function queryDirectoryReadable(handle: FileSystemDirectoryHandle):
   return (await h.queryPermission({ mode: 'read' })) === 'granted'
 }
 
-export async function ensureDirectoryReadable(handle: FileSystemDirectoryHandle): Promise<boolean> {
+export async function ensureDirectoryReadable(
+  handle: FileSystemDirectoryHandle,
+  options?: { allowRequest?: boolean },
+): Promise<boolean> {
   if (await queryDirectoryReadable(handle)) return true
+  if (options?.allowRequest === false) return false
   const h = handle as FileSystemDirectoryHandle & {
     requestPermission?: (options: { mode: 'read' }) => Promise<PermissionState>
   }
@@ -75,6 +93,22 @@ export async function ensureDirectoryReadable(handle: FileSystemDirectoryHandle)
   } catch {
     return false
   }
+}
+
+/** Khôi phục quyền thư mục đã lưu — gọi trong user gesture (click). */
+export async function resolveContentRootDirectoryAccess(options?: {
+  allowPicker?: boolean
+  allowRequest?: boolean
+}): Promise<FileSystemDirectoryHandle | null> {
+  const allowPicker = options?.allowPicker !== false
+  const allowRequest = options?.allowRequest !== false
+  const handle = await loadContentRootDirectoryHandle()
+  if (!handle) return allowPicker ? pickContentRootDirectory() : null
+  if ((await ensureDirectoryReadable(handle)) || (await ensureDirectoryReadable(handle, { allowRequest: true }))) {
+    return handle
+  }
+  if (!allowPicker) return null
+  return pickContentRootDirectory()
 }
 
 export async function pickContentRootDirectory(): Promise<FileSystemDirectoryHandle | null> {
@@ -102,7 +136,8 @@ export async function readFileFromWorkspace(
   const segments = relativePath.split('/').map((s) => s.trim()).filter(Boolean)
   if (segments.length === 0) return null
 
-  const readable = await ensureDirectoryReadable(root)
+  let readable = await ensureDirectoryReadable(root)
+  if (!readable) readable = await ensureDirectoryReadable(root, { allowRequest: true })
   if (!readable) return null
 
   let dir = root

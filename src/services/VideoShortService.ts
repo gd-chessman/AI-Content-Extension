@@ -1,10 +1,10 @@
 import axiosClient from '@/utils/axiosClient'
 
-export type StoryItem = {
+export type VideoShortItem = {
   _id: string
   userId: string
-  topicId: string
-  storySourceId?: string
+  videoShortTopicId: string
+  videoSourceId?: string
   name: string
   sourceContent: string
   sourceReelUrl: string
@@ -24,19 +24,19 @@ export type StoryItem = {
   updatedAt?: string
 }
 
-export type StoriesPagination = {
+export type VideoShortsPagination = {
   total: number
   page: number
   limit: number
   totalPages: number
 }
 
-export type PaginatedStoriesResponse = {
-  items: StoryItem[]
-  pagination: StoriesPagination
+export type PaginatedVideoShortsResponse = {
+  items: VideoShortItem[]
+  pagination: VideoShortsPagination
 }
 
-export type GetMyStoriesParams = {
+export type GetMyVideoShortsParams = {
   page?: number
   limit?: number
   q?: string
@@ -44,8 +44,8 @@ export type GetMyStoriesParams = {
   status?: string
 }
 
-export const getMyStories = async (params?: GetMyStoriesParams) => {
-  const response = await axiosClient.get('/stories/my', {
+export const getMyVideoShorts = async (params?: GetMyVideoShortsParams) => {
+  const response = await axiosClient.get('/video-shorts/my', {
     params: {
       page: params?.page ?? 1,
       limit: params?.limit ?? 20,
@@ -57,10 +57,18 @@ export const getMyStories = async (params?: GetMyStoriesParams) => {
   return (response.data || {
     items: [],
     pagination: { total: 0, page: 1, limit: 20, totalPages: 1 },
-  }) as PaginatedStoriesResponse
+  }) as PaginatedVideoShortsResponse
 }
 
-export const getStoryById = async (storyId: string) => {
-  const response = await axiosClient.get(`/stories/my/${storyId}`)
-  return response.data as StoryItem
+export const getVideoShortById = async (videoShortId: string) => {
+  const response = await axiosClient.get(`/video-shorts/my/${videoShortId}`)
+  return response.data as VideoShortItem
+}
+
+export const patchVideoShort = async (
+  videoShortId: string,
+  payload: { videoPrompts?: string[]; videoStorageAddresses?: string[] },
+) => {
+  const response = await axiosClient.patch(`/video-shorts/${videoShortId}`, payload)
+  return response.data as VideoShortItem
 }

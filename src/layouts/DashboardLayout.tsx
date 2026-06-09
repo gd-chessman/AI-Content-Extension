@@ -6,7 +6,7 @@ import { canUseMultiWorkflow, useAuth } from '@/hooks/useAuth'
 
 const NAV = [
   { to: '/overview', label: 'Tổng quan', icon: FiActivity, iconClass: 'text-sky-400' },
-  { to: '/stories', label: 'Câu chuyện', icon: FiBookOpen, iconClass: 'text-emerald-400' },
+  { to: '/video-shorts', label: 'Video ngắn', icon: FiBookOpen, iconClass: 'text-emerald-400' },
   { to: '/ggsheet', label: 'GG Sheet', icon: SiGooglesheets, iconClass: 'text-green-500' },
   { to: '/workflows', label: 'Quy trình', icon: FiGitBranch, iconClass: 'text-sky-400' },
   { to: '/workflow-schedules', label: 'Lịch quy trình', icon: FiCalendar, iconClass: 'text-blue-400' },

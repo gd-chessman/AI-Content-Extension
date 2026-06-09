@@ -40,8 +40,8 @@ export type MultiWorkflowRun = {
   _id: string
   multiWorkflowId?: string
   multiWorkflowKey: string
-  storySourceId?: string | null
-  storyId?: string | null
+  videoSourceId?: string | null
+  videoShortId?: string | null
   status: MultiWorkflowRunStatus
   currentOrder: number
   items: MultiWorkflowRunItem[]
@@ -121,7 +121,7 @@ export const setDefaultMultiWorkflow = async (id: string) => {
 }
 
 export const createMultiWorkflowRun = async (payload: {
-  storySourceId?: string
+  videoSourceId?: string
   multiWorkflowId?: string
   trigger?: string
 }) => {
@@ -134,9 +134,34 @@ export const cancelMultiWorkflowRun = async (id: string) => {
   return response.data as MultiWorkflowRun
 }
 
-export const listMultiWorkflowRuns = async (params?: { status?: string; limit?: number }) => {
-  const response = await axiosClient.get('/multi-workflows/runs', { params })
-  return (response.data || []) as MultiWorkflowRun[]
+export type MultiWorkflowRunsPagination = {
+  total: number
+  page: number
+  limit: number
+  totalPages: number
+}
+
+export type PaginatedMultiWorkflowRunsResponse = {
+  items: MultiWorkflowRun[]
+  pagination: MultiWorkflowRunsPagination
+}
+
+export const listMultiWorkflowRuns = async (params?: {
+  status?: string
+  page?: number
+  limit?: number
+}) => {
+  const response = await axiosClient.get('/multi-workflows/runs', {
+    params: {
+      page: params?.page ?? 1,
+      limit: params?.limit ?? 20,
+      ...(params?.status?.trim() ? { status: params.status.trim() } : {}),
+    },
+  })
+  return (response.data || {
+    items: [],
+    pagination: { total: 0, page: 1, limit: 20, totalPages: 1 },
+  }) as PaginatedMultiWorkflowRunsResponse
 }
 
 export const getMultiWorkflowRun = async (id: string) => {
