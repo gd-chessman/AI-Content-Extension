@@ -104,7 +104,10 @@ export async function resolveContentRootDirectoryAccess(options?: {
   const allowRequest = options?.allowRequest !== false
   const handle = await loadContentRootDirectoryHandle()
   if (!handle) return allowPicker ? pickContentRootDirectory() : null
-  if ((await ensureDirectoryReadable(handle)) || (await ensureDirectoryReadable(handle, { allowRequest: true }))) {
+  if (
+    (await ensureDirectoryReadable(handle)) ||
+    (allowRequest && (await ensureDirectoryReadable(handle, { allowRequest: true })))
+  ) {
     return handle
   }
   if (!allowPicker) return null
