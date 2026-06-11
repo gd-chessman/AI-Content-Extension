@@ -32,6 +32,7 @@ export async function runFacebookReelScanBatch(
   stagnantRoundsIn: number,
   stagnantNeeded: number,
   waitMs: number,
+  resetExcluded: boolean,
 ): Promise<FacebookReelScanBatchResult> {
   const maxViews = maxViewsArgInner > 0 ? maxViewsArgInner : Number.POSITIVE_INFINITY
   const maxPlausibleViews = 10_000_000_000
@@ -41,7 +42,18 @@ export async function runFacebookReelScanBatch(
   const control = (window as unknown as { __aiContentScanControl: Record<string, { stop?: boolean }> })
     .__aiContentScanControl
   control[token] = { stop: false }
-  const excludedSet = new Set(excludedUrls || [])
+
+  type ExcludedStore = Record<string, Set<string>>
+  const win = window as unknown as { __aiContentScanExcluded?: ExcludedStore }
+  win.__aiContentScanExcluded ??= {}
+  if (resetExcluded || !win.__aiContentScanExcluded[token]) {
+    win.__aiContentScanExcluded[token] = new Set(excludedUrls || [])
+  } else {
+    for (const u of excludedUrls || []) {
+      if (u) win.__aiContentScanExcluded[token].add(u)
+    }
+  }
+  const excludedSet = win.__aiContentScanExcluded[token]
 
   const parseLocalizedViewNumber = (raw: string) => {
     const s = (raw || '').trim()
@@ -355,6 +367,10 @@ export async function runFacebookReelScanBatch(
   const sorted = Array.from(uniqueByUrl.values()).sort((a, b) => b.viewCount - a.viewCount)
   const foundCount = sorted.length
   const rows = unlimited || limit <= 0 ? sorted : sorted.slice(0, limit)
+
+  for (const row of rows) {
+    if (row.url) excludedSet.add(row.url)
+  }
 
   return {
     rows,

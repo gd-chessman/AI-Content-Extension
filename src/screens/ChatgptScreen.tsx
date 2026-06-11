@@ -1441,7 +1441,25 @@ export default function ChatgptScreen() {
     return Number(result?.[0]?.result || 0)
   }
 
-  const waitForGeneratedImageDone = async (stepLabel: string, baselineCount: number, timeoutMs = 360_000, preferredTabId?: number) => {
+  const readGeneratedImageSnapshot = async (preferredTabId?: number) => {
+    const extensionChrome = getChrome()
+    if (!extensionChrome?.scripting?.executeScript) return null
+    const target = await pickChatgptTab(preferredTabId)
+    if (!target?.id) return null
+    const result = await extensionChrome.scripting.executeScript({
+      target: { tabId: target.id },
+      func: chatgptSnapshotGeneratedImagePageScript as (...args: unknown[]) => unknown,
+    })
+    return (result?.[0]?.result || null) as ChatgptGeneratedImageSnapshot | null
+  }
+
+  const waitForGeneratedImageDone = async (
+    stepLabel: string,
+    baselineCount: number,
+    timeoutMs = 360_000,
+    preferredTabId?: number,
+    assistantBaseline?: { count: number; textLen: number },
+  ) => {
     const extensionChrome = getChrome()
     if (!extensionChrome?.tabs?.query || !extensionChrome.scripting?.executeScript) {
       setStatus(`${stepLabel}: Không hỗ trợ theo dõi tạo ảnh ChatGPT.`)
@@ -1474,8 +1492,8 @@ export default function ChatgptScreen() {
     let firstDetectAt = 0
     let lastCount = baselineCount
     let prevSig = await readSnapshot()
-    const baselineAssistantCount = prevSig?.assistantCount ?? 0
-    const baselineAssistantTextLen = prevSig?.assistantTextLen ?? 0
+    const baselineAssistantCount = assistantBaseline?.count ?? prevSig?.assistantCount ?? 0
+    const baselineAssistantTextLen = assistantBaseline?.textLen ?? prevSig?.assistantTextLen ?? 0
 
     while (Date.now() - startedAt < timeoutMs) {
       throwIfWorkflowStopped()
@@ -1524,6 +1542,12 @@ export default function ChatgptScreen() {
         snap.assistantTextLen > baselineAssistantTextLen
       if (elapsed >= textOnlyFailMs && noNewImages && hasNewTextResponse && !generatingNow) {
         setStatus(`${stepLabel}: ChatGPT trả lời text thay vì ảnh — tạo ảnh lỗi.`)
+        return false
+      }
+      const textBelowImageGenFail =
+        snap.textBelowImageGen || (snap.imageGenLoading && hasNewTextResponse)
+      if (elapsed >= textOnlyFailMs && noNewImages && textBelowImageGenFail) {
+        setStatus(`${stepLabel}: ChatGPT hiển thị text dưới vùng đang tạo ảnh — tạo ảnh lỗi.`)
         return false
       }
 
@@ -1855,7 +1879,13 @@ export default function ChatgptScreen() {
     // User-required behavior: every workflow step in ChatGPT screen
     // runs exactly like "Chạy nhanh", then waits for response completion.
     const isGenerateImageStep = isChatgptGenerateImagesStep(step)
-    const baselineImageCount = isGenerateImageStep ? await getAssistantImageCount(lockedWorkflowTabIdRef.current || undefined) : 0
+    const workflowTabId = lockedWorkflowTabIdRef.current || undefined
+    const baselineImageCount = isGenerateImageStep ? await getAssistantImageCount(workflowTabId) : 0
+    const preSendAssistantBaseline = isGenerateImageStep
+      ? await readGeneratedImageSnapshot(workflowTabId).then((snap) =>
+          snap ? { count: snap.assistantCount, textLen: snap.assistantTextLen } : undefined,
+        )
+      : undefined
 
     await runWorkflowStepTools(step, 'before_step')
 
@@ -1865,7 +1895,13 @@ export default function ChatgptScreen() {
     }
 
     const done = isGenerateImageStep
-      ? await waitForGeneratedImageDone(step.label, baselineImageCount, 360_000, lockedWorkflowTabIdRef.current || undefined)
+      ? await waitForGeneratedImageDone(
+          step.label,
+          baselineImageCount,
+          360_000,
+          workflowTabId,
+          preSendAssistantBaseline,
+        )
       : await waitForChatgptResponseDone(step.label, 240_000, lockedWorkflowTabIdRef.current || undefined)
     throwIfWorkflowStopped()
     if (!done) {

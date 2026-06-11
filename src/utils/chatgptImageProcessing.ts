@@ -171,9 +171,13 @@ export type WaitGeneratedImagePageResult = {
 
 export type ChatgptGeneratedImageSnapshot = {
   generating: boolean
+  /** UI halftone/dots "đang tạo ảnh" còn hiển thị. */
+  imageGenLoading: boolean
   imageCount: number
   assistantCount: number
   assistantTextLen: number
+  /** Text ngoài vùng slot ảnh trong turn đang tạo ảnh (bổ sung fail sau 10s). */
+  textBelowImageGen: boolean
 }
 
 /** Một lần đọc trạng thái tạo ảnh — extension poll và có thể dừng giữa chừng. */
@@ -184,20 +188,17 @@ export function chatgptSnapshotGeneratedImagePageScript(): ChatgptGeneratedImage
     const style = window.getComputedStyle(el)
     return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden'
   }
-  const loadingEl = document.querySelector(
-    '[data-testid="image-gen-loading-state-dots"], [data-testid="loading-halftone-dots-animation"]',
-  ) as HTMLElement | null
-  let imageGenLoading = false
-  if (loadingEl) {
-    const st = window.getComputedStyle(loadingEl)
-    const r = loadingEl.getBoundingClientRect()
-    imageGenLoading =
-      st.display !== 'none' &&
-      st.visibility !== 'hidden' &&
-      Number(st.opacity) >= 0.05 &&
-      r.width > 4 &&
-      r.height > 4
+  const isVisibleImageGenLoader = (el: HTMLElement): boolean => {
+    const st = window.getComputedStyle(el)
+    if (st.display === 'none' || st.visibility === 'hidden') return false
+    const r = el.getBoundingClientRect()
+    return r.width > 4 && r.height > 4
   }
+  const imageGenLoading = Array.from(
+    document.querySelectorAll<HTMLElement>(
+      '[data-testid="image-gen-loading-state-dots"], [data-testid="loading-halftone-dots-animation"]',
+    ),
+  ).some(isVisibleImageGenLoader)
   const stopBtn =
     (document.querySelector('button[data-testid="stop-button"]') as HTMLButtonElement | null) ||
     (document.querySelector('button[aria-label*="Stop"]') as HTMLButtonElement | null) ||
@@ -220,15 +221,81 @@ export function chatgptSnapshotGeneratedImagePageScript(): ChatgptGeneratedImage
     if (w > 0 && h > 0 && (w < 96 || h < 96)) return false
     return true
   }).length
-  const turns = Array.from(document.querySelectorAll<HTMLElement>('[data-message-author-role="assistant"]')).filter(
-    (el) => (el.innerText || '').trim().length > 0,
+  const assistantTurns = Array.from(
+    document.querySelectorAll<HTMLElement>('[data-message-author-role="assistant"]'),
   )
-  const lastText = (turns[turns.length - 1]?.innerText || '').replace(/\s+/g, ' ').trim()
+  const lastText = (assistantTurns[assistantTurns.length - 1]?.innerText || '').replace(/\s+/g, ' ').trim()
+
+  const detectTextBelowImageGenLoading = (): boolean => {
+    const loaders = Array.from(
+      document.querySelectorAll<HTMLElement>('[data-testid="image-gen-loading-state-dots"]'),
+    ).filter(isVisibleImageGenLoader)
+
+    const hasMeaningfulText = (el: HTMLElement): boolean =>
+      (el.innerText || '').replace(/\s+/g, ' ').trim().length >= 8
+
+    for (const loadingEl of loaders) {
+      const turn =
+        loadingEl.closest('[data-message-author-role="assistant"]') ||
+        loadingEl.closest('[data-testid="conversation-turn"]') ||
+        loadingEl.closest('article[data-turn="assistant"]') ||
+        loadingEl.closest('article')
+      if (!turn) continue
+
+      const imageSlot =
+        loadingEl.closest('[class*="group"]') ||
+        loadingEl.parentElement?.parentElement ||
+        loadingEl.parentElement
+      const isInsideImageSlot = (el: Element): boolean => {
+        if (loadingEl.contains(el)) return true
+        return Boolean(imageSlot?.contains(el))
+      }
+
+      const textBlocks = turn.querySelectorAll<HTMLElement>(
+        'p, li, [data-start], [class*="markdown"], [class*="prose"], div[class*="text-message"], div[class*="whitespace-pre-wrap"]',
+      )
+      for (const el of textBlocks) {
+        if (isInsideImageSlot(el)) continue
+        if (!hasMeaningfulText(el)) continue
+        if (imageSlot && imageSlot.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING) {
+          return true
+        }
+        const anchor =
+          (loadingEl.querySelector('canvas') as HTMLElement | null) ||
+          (loadingEl.querySelector('[data-testid="loading-halftone-dots-animation"]') as HTMLElement | null) ||
+          loadingEl
+        const anchorRect = anchor.getBoundingClientRect()
+        const rect = el.getBoundingClientRect()
+        if (rect.top >= anchorRect.bottom - 32 && rect.height >= 8) return true
+      }
+
+      if (imageSlot) {
+        const walker = document.createTreeWalker(turn, NodeFilter.SHOW_TEXT)
+        let passedSlot = false
+        while (walker.nextNode()) {
+          const textNode = walker.currentNode
+          const parent = textNode.parentElement
+          if (!parent) continue
+          if (!passedSlot) {
+            if (imageSlot.contains(parent)) continue
+            passedSlot = true
+          }
+          if (isInsideImageSlot(parent)) continue
+          const chunk = (textNode.textContent || '').replace(/\s+/g, ' ').trim()
+          if (chunk.length >= 8) return true
+        }
+      }
+    }
+    return false
+  }
+
   return {
     generating,
+    imageGenLoading,
     imageCount,
-    assistantCount: turns.length,
+    assistantCount: assistantTurns.length,
     assistantTextLen: lastText.length,
+    textBelowImageGen: detectTextBelowImageGenLoading(),
   }
 }
 
@@ -264,6 +331,75 @@ export async function chatgptWaitGeneratedImageDonePageScript(
     if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) < 0.05) return false
     const r = el.getBoundingClientRect()
     return r.width > 4 && r.height > 4
+  }
+
+  const isVisibleImageGenLoader = (el: HTMLElement): boolean => {
+    const st = window.getComputedStyle(el)
+    if (st.display === 'none' || st.visibility === 'hidden') return false
+    const r = el.getBoundingClientRect()
+    return r.width > 4 && r.height > 4
+  }
+
+  const detectTextBelowImageGenLoading = () => {
+    const loaders = Array.from(
+      document.querySelectorAll<HTMLElement>('[data-testid="image-gen-loading-state-dots"]'),
+    ).filter(isVisibleImageGenLoader)
+    const hasMeaningfulText = (el: HTMLElement): boolean =>
+      (el.innerText || '').replace(/\s+/g, ' ').trim().length >= 8
+
+    for (const loadingEl of loaders) {
+      const turn =
+        loadingEl.closest('[data-message-author-role="assistant"]') ||
+        loadingEl.closest('[data-testid="conversation-turn"]') ||
+        loadingEl.closest('article[data-turn="assistant"]') ||
+        loadingEl.closest('article')
+      if (!turn) continue
+
+      const imageSlot =
+        loadingEl.closest('[class*="group"]') ||
+        loadingEl.parentElement?.parentElement ||
+        loadingEl.parentElement
+      const isInsideImageSlot = (el: Element): boolean => {
+        if (loadingEl.contains(el)) return true
+        return Boolean(imageSlot?.contains(el))
+      }
+
+      const textBlocks = turn.querySelectorAll<HTMLElement>(
+        'p, li, [data-start], [class*="markdown"], [class*="prose"], div[class*="text-message"], div[class*="whitespace-pre-wrap"]',
+      )
+      for (const el of textBlocks) {
+        if (isInsideImageSlot(el)) continue
+        if (!hasMeaningfulText(el)) continue
+        if (imageSlot && imageSlot.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING) {
+          return true
+        }
+        const anchor =
+          (loadingEl.querySelector('canvas') as HTMLElement | null) ||
+          (loadingEl.querySelector('[data-testid="loading-halftone-dots-animation"]') as HTMLElement | null) ||
+          loadingEl
+        const anchorRect = anchor.getBoundingClientRect()
+        const rect = el.getBoundingClientRect()
+        if (rect.top >= anchorRect.bottom - 32 && rect.height >= 8) return true
+      }
+
+      if (imageSlot) {
+        const walker = document.createTreeWalker(turn, NodeFilter.SHOW_TEXT)
+        let passedSlot = false
+        while (walker.nextNode()) {
+          const textNode = walker.currentNode
+          const parent = textNode.parentElement
+          if (!parent) continue
+          if (!passedSlot) {
+            if (imageSlot.contains(parent)) continue
+            passedSlot = true
+          }
+          if (isInsideImageSlot(parent)) continue
+          const chunk = (textNode.textContent || '').replace(/\s+/g, ' ').trim()
+          if (chunk.length >= 8) return true
+        }
+      }
+    }
+    return false
   }
 
   const isGenerating = () => {
@@ -346,6 +482,14 @@ export async function chatgptWaitGeneratedImageDonePageScript(
       currentSig.count > baselineSig.count || currentSig.textLen > baselineSig.textLen
     if (elapsed >= textOnlyFailMs && noNewImages && hasNewTextResponse && !generatingNow) {
       return { ok: false, reason: 'text_only_response', imageCount: currentCount }
+    }
+    const imageGenLoadingNow = isImageGenLoadingUi()
+    if (
+      elapsed >= textOnlyFailMs &&
+      noNewImages &&
+      (detectTextBelowImageGenLoading() || (imageGenLoadingNow && hasNewTextResponse))
+    ) {
+      return { ok: false, reason: 'text_below_image_gen', imageCount: currentCount }
     }
 
     lastCount = currentCount

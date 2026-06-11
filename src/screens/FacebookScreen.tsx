@@ -487,6 +487,8 @@ export default function FacebookScreen() {
   /** Chỉ số fanpage trong `fanpages` đã mở ở bước `facebook_open_fanpage` — dùng cho fallbackFanpageCount. */
   const workflowOpenedFanpageIndexRef = useRef<number | null>(null)
   const fbWorkflowStopRef = useRef(false)
+  /** Workflow: đã quét hết feed fanpage hiện tại (hoặc đã có cờ lưu) trước khi chọn reel. */
+  const workflowFullScanDoneRef = useRef(false)
   const workflowCancelledRemotelyRef = useRef(false)
   const runningFbWorkflowRunIdRef = useRef('')
   const [fbWorkflowStatus, setFbWorkflowStatus] = useState('')
@@ -569,6 +571,21 @@ export default function FacebookScreen() {
     setFeedFullyScanned(fully)
     setHasMoreReels(!fully && stored.length > 0)
     return stored
+  }
+
+  /** Gộp localStorage + bộ nhớ tạm — workflow không mất list sau bước quét. */
+  const mergeScanHistoryForFanpage = (fanpageId: string): ScannedReel[] => {
+    const stored = readScanHistoryForFanpage(fanpageId)
+    const map = new Map<string, ScannedReel>()
+    for (const row of stored) map.set(row.url, row)
+    for (const row of scanResultRef.current) map.set(row.url, row)
+    const merged = Array.from(map.values()).sort((a, b) => b.viewCount - a.viewCount)
+    const fully = readFeedFullyScannedForFanpage(fanpageId)
+    setScannedReels(merged)
+    scanResultRef.current = merged
+    setFeedFullyScanned(fully)
+    setHasMoreReels(!fully && merged.length > 0)
+    return merged
   }
 
   useEffect(() => {
@@ -1336,7 +1353,7 @@ export default function FacebookScreen() {
       return
     }
 
-    if (isScanning) {
+    if (isScanningRef.current) {
       return
     }
 
@@ -1345,6 +1362,7 @@ export default function FacebookScreen() {
       setFeedFullyScanned(false)
       if (selectedFanpageId) writeFeedFullyScannedForFanpage(selectedFanpageId, false)
     }
+    isScanningRef.current = true
     setIsScanning(true)
     setScanStatus(
       fullPass
@@ -1377,6 +1395,7 @@ export default function FacebookScreen() {
       if (!targetTab?.id) {
         setScanStatus('Hãy mở fanpage Facebook cần quét trong cửa sổ (tab Facebook).')
         setScannedReels([])
+        isScanningRef.current = false
         setIsScanning(false)
         return
       }
@@ -1387,12 +1406,30 @@ export default function FacebookScreen() {
       if (!isAllowedFanpageTab) {
         setScanStatus('Chỉ quét khi có tab fanpage có trong danh sách (hoặc đúng fanpage workflow).')
         setScannedReels([])
+        isScanningRef.current = false
         setIsScanning(false)
         return
       }
 
       const scanToken = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
       scanControlRef.current = { token: scanToken, tabId: targetTab.id }
+
+      const cleanupScanSessionOnTab = async (tabId: number) => {
+        try {
+          await extensionChrome.scripting?.executeScript?.({
+            target: { tabId },
+            func: ((scanTokenInner: string) => {
+              const w = window as unknown as { __aiContentScanExcluded?: Record<string, Set<string>> }
+              if (w.__aiContentScanExcluded?.[scanTokenInner]) {
+                delete w.__aiContentScanExcluded[scanTokenInner]
+              }
+            }) as (...args: unknown[]) => unknown,
+            args: [scanToken],
+          })
+        } catch {
+          /* ignore */
+        }
+      }
 
       try {
         const prevCountAtStart = append ? scanResultRef.current.length : 0
@@ -1405,8 +1442,15 @@ export default function FacebookScreen() {
             stagnantNeeded: number
             waitMs: number
             excludedUrls: string[]
+            resetExcluded: boolean
           },
         ) => {
+          try {
+            await extensionChrome.tabs?.update?.(tabId, { active: true })
+          } catch {
+            /* ignore */
+          }
+
           const result = await extensionChrome.scripting?.executeScript?.({
             target: { tabId },
             func: runFacebookReelScanBatch as (...args: unknown[]) => unknown,
@@ -1421,19 +1465,50 @@ export default function FacebookScreen() {
               batch.stagnantRoundsIn,
               batch.stagnantNeeded,
               batch.waitMs,
+              batch.resetExcluded,
             ],
           })
-          return result?.[0]?.result as
-            | {
-                rows?: ScannedReel[]
-                stagnantRounds?: number
-                reachedScrollEnd?: boolean
-                roundsCompleted?: number
-                stopped?: boolean
-                foundCount?: number
-                hasMore?: boolean
-              }
-            | undefined
+          const frame = result?.[0] as { result?: unknown; error?: unknown } | undefined
+          if (!frame || frame.result === undefined) {
+            await sleep(400)
+            const retry = await extensionChrome.scripting?.executeScript?.({
+              target: { tabId },
+              func: runFacebookReelScanBatch as (...args: unknown[]) => unknown,
+              args: [
+                minViewCount,
+                maxViewArg,
+                resultLimit,
+                scanToken,
+                batch.excludedUrls,
+                fullPass,
+                batch.roundsPerBatch,
+                batch.stagnantRoundsIn,
+                batch.stagnantNeeded,
+                batch.waitMs,
+                false,
+              ],
+            })
+            const retryFrame = retry?.[0] as { result?: unknown } | undefined
+            if (!retryFrame || retryFrame.result === undefined) return undefined
+            return retryFrame.result as {
+              rows?: ScannedReel[]
+              stagnantRounds?: number
+              reachedScrollEnd?: boolean
+              roundsCompleted?: number
+              stopped?: boolean
+              foundCount?: number
+              hasMore?: boolean
+            }
+          }
+          return frame.result as {
+            rows?: ScannedReel[]
+            stagnantRounds?: number
+            reachedScrollEnd?: boolean
+            roundsCompleted?: number
+            stopped?: boolean
+            foundCount?: number
+            hasMore?: boolean
+          }
         }
 
         let payload: {
@@ -1455,6 +1530,7 @@ export default function FacebookScreen() {
           let reachedScrollEnd = false
           let stopped = false
           let emptyBatches = 0
+          let firstFullPassBatch = true
 
           while (totalRounds < FULL_PASS_MAX_TOTAL_ROUNDS) {
             if (scanAllStopRef.current) {
@@ -1467,10 +1543,20 @@ export default function FacebookScreen() {
               stagnantRoundsIn: stagnantRounds,
               stagnantNeeded: FULL_PASS_STAGNANT_NEEDED,
               waitMs: FULL_PASS_WAIT_MS,
-              excludedUrls: Array.from(accumulated.keys()),
+              excludedUrls: firstFullPassBatch ? Array.from(accumulated.keys()) : [],
+              resetExcluded: firstFullPassBatch,
             })
+            firstFullPassBatch = false
 
             if (!batchResult) {
+              if (accumulated.size > 0) {
+                reachedScrollEnd = true
+                stopped = true
+                setScanStatus(
+                  `Quét hết dừng sớm — giữ ${accumulated.size} reel (tab Facebook có thể bị gián đoạn).`,
+                )
+                break
+              }
               throw new Error('Không nhận được kết quả batch quét hết.')
             }
 
@@ -1515,11 +1601,13 @@ export default function FacebookScreen() {
             stagnantNeeded: QUICK_SCAN_STAGNANT,
             waitMs: QUICK_SCAN_WAIT_MS,
             excludedUrls: existingUrls,
+            resetExcluded: true,
           })
 
           if (!batchResult) {
             setScanStatus('Quét thất bại: không nhận được kết quả từ executeScript.')
             setScannedReels([])
+            isScanningRef.current = false
             setIsScanning(false)
             return
           }
@@ -1588,14 +1676,61 @@ export default function FacebookScreen() {
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
-        setScanStatus(`Quét thất bại: ${message}. Hãy mở đúng trang reels của fanpage rồi thử lại.`)
-        setScannedReels([])
-        setHasMoreReels(false)
+        const partial = scanResultRef.current
+        if (partial.length > 0) {
+          setScannedReels(partial)
+          const historyFanpageId =
+            fanpages.find((page) => tabMatchesFanpageUrl(targetUrl, page.url))?._id || selectedFanpageId
+          if (historyFanpageId) writeScanHistoryForFanpage(historyFanpageId, partial)
+          setScanStatus(
+            `Quét dừng giữa chừng — giữ ${partial.length} reel. ${message}`,
+          )
+        } else {
+          setScanStatus(`Quét thất bại: ${message}. Hãy mở đúng trang reels của fanpage rồi thử lại.`)
+          setScannedReels([])
+          setHasMoreReels(false)
+        }
       } finally {
+        if (targetTab?.id) void cleanupScanSessionOnTab(targetTab.id)
+        isScanningRef.current = false
         setIsScanning(false)
         scanControlRef.current = null
       }
     })
+  }
+
+  /** Workflow: chờ quét hết xong (đồng bộ ref — tránh waitScanIdle thoát sớm). */
+  const runWorkflowFullPassScan = async (
+    fanpageId: string | null,
+    statusLine?: string,
+  ): Promise<ScannedReel[]> => {
+    if (fanpageId && readFeedFullyScannedForFanpage(fanpageId)) {
+      workflowFullScanDoneRef.current = true
+      return mergeScanHistoryForFanpage(fanpageId)
+    }
+
+    if (fanpageId) {
+      const stored = readScanHistoryForFanpage(fanpageId)
+      if (stored.length > 0) {
+        setScannedReels(stored)
+        scanResultRef.current = stored
+      }
+    }
+
+    if (statusLine) setFbWorkflowStatus(statusLine)
+
+    if (isScanningRef.current) {
+      await waitScanIdle(600_000)
+    } else {
+      handleScanReels(scanResultRef.current.length > 0, getExtensionScanViewBounds(), { fullPass: true })
+      await waitForScanToStart(8_000)
+      await waitScanIdle(600_000)
+    }
+
+    await sleep(400)
+    const rows = fanpageId ? mergeScanHistoryForFanpage(fanpageId) : scanResultRef.current
+    workflowFullScanDoneRef.current = fanpageId ? readFeedFullyScannedForFanpage(fanpageId) : rows.length > 0
+    return rows
   }
 
   const handleScanAllReels = async () => {
@@ -1677,6 +1812,23 @@ export default function FacebookScreen() {
     return null
   }
 
+  const waitForScanToStart = (timeoutMs = 8_000) =>
+    new Promise<void>((resolve, reject) => {
+      const started = Date.now()
+      const tick = () => {
+        if (isScanningRef.current) {
+          resolve()
+          return
+        }
+        if (Date.now() - started > timeoutMs) {
+          reject(new Error('Quét reels không khởi động được'))
+          return
+        }
+        window.setTimeout(tick, 80)
+      }
+      tick()
+    })
+
   const waitScanIdle = (timeoutMs = 180_000) =>
     new Promise<void>((resolve, reject) => {
       const started = Date.now()
@@ -1750,48 +1902,30 @@ export default function FacebookScreen() {
         return { fanpageUrl: url }
       }
       case 'facebook_scan_reels': {
-        const viewBounds = getExtensionScanViewBounds()
         const fbCountRaw = schema.fallbackFanpageCount != null ? Number(schema.fallbackFanpageCount) : 0
         const fallbackFanpageCount =
           Number.isFinite(fbCountRaw) && fbCountRaw >= 0 ? Math.floor(fbCountRaw) : 0
         const baseFanpageIdx = workflowOpenedFanpageIndexRef.current
 
-        const pollRowsAfterScan = async () => {
-          let rows = scanResultRef.current
-          for (let i = 0; i < 40 && rows.length === 0; i++) {
-            await sleep(250)
-            rows = scanResultRef.current
-          }
-          return rows
-        }
-
-        const trySkipOrFullScan = async (
-          fanpageId: string | null,
-        ): Promise<{ rows: ScannedReel[]; scanPasses: number; skipped: boolean }> => {
-          if (fanpageId && readFeedFullyScannedForFanpage(fanpageId)) {
-            const stored = readScanHistoryForFanpage(fanpageId)
-            if (stored.length > 0) {
-              hydrateScanHistoryFromFanpage(fanpageId)
-              return { rows: stored, scanPasses: 0, skipped: true }
-            }
-          }
-
-          const existingRows = fanpageId ? readScanHistoryForFanpage(fanpageId) : []
-          if (existingRows.length > 0) {
-            setScannedReels(existingRows)
-            scanResultRef.current = existingRows
-          }
-
-          handleScanReels(existingRows.length > 0, viewBounds, { fullPass: true })
-          await waitScanIdle(600_000)
-          await sleep(400)
-          const rows = await pollRowsAfterScan()
-          return { rows, scanPasses: 1, skipped: false }
-        }
-
         let fanpageId = resolveWorkflowFanpageId()
-        let scanResult = await trySkipOrFullScan(fanpageId)
-        let scanPasses = scanResult.scanPasses
+        const skipped =
+          Boolean(fanpageId && readFeedFullyScannedForFanpage(fanpageId) && readScanHistoryForFanpage(fanpageId).length > 0)
+        let scanPasses = 0
+        let rows: ScannedReel[] = []
+
+        if (skipped && fanpageId) {
+          rows = mergeScanHistoryForFanpage(fanpageId)
+          workflowFullScanDoneRef.current = true
+        } else {
+          setFbWorkflowStatus('Workflow: đang quét hết feed fanpage (bắt buộc)…')
+          rows = await runWorkflowFullPassScan(
+            fanpageId,
+            'Workflow: đang quét hết feed fanpage (bắt buộc)…',
+          )
+          scanPasses = 1
+        }
+
+        let scanResult = { rows, scanPasses, skipped }
 
         if (
           scanResult.rows.length === 0 &&
@@ -1812,8 +1946,12 @@ export default function FacebookScreen() {
             setActiveView('reels')
             await sleep(2500)
             fanpageId = fp._id
-            scanResult = await trySkipOrFullScan(fanpageId)
-            scanPasses += scanResult.scanPasses
+            rows = await runWorkflowFullPassScan(
+              fanpageId,
+              `Workflow: quét hết fanpage dự phòng (${step}/${fallbackFanpageCount})…`,
+            )
+            scanResult = { rows, scanPasses: scanPasses + 1, skipped: false }
+            scanPasses += 1
             if (scanResult.rows.length > 0) break
           }
         }
@@ -1836,10 +1974,21 @@ export default function FacebookScreen() {
             ? Math.max(0, Number(schema.maxAppendRounds))
             : 8
         const fanpageId = resolveWorkflowFanpageId()
-        const feedAlreadyFullyScanned = fanpageId ? readFeedFullyScannedForFanpage(fanpageId) : false
 
-        if (fanpageId && scanResultRef.current.length === 0) {
-          hydrateScanHistoryFromFanpage(fanpageId)
+        if (!workflowFullScanDoneRef.current) {
+          await runWorkflowFullPassScan(
+            fanpageId,
+            'Workflow: quét hết feed trước khi chọn reel…',
+          )
+        } else if (fanpageId) {
+          mergeScanHistoryForFanpage(fanpageId)
+        }
+
+        const feedAlreadyFullyScanned = fanpageId ? readFeedFullyScannedForFanpage(fanpageId) : false
+        if (!workflowFullScanDoneRef.current && !feedAlreadyFullyScanned) {
+          throw new Error(
+            `Chưa quét hết feed (${scanResultRef.current.length} reel trong danh sách). Giữ tab Reels fanpage mở rồi chạy lại workflow.`,
+          )
         }
 
         const pollUntilRows = async () => {
@@ -1855,6 +2004,8 @@ export default function FacebookScreen() {
 
         while (true) {
           if (fbWorkflowStopRef.current) throw new Error('Đã dừng workflow')
+
+          if (fanpageId) mergeScanHistoryForFanpage(fanpageId)
 
           const sources = await queryClient.fetchQuery({
             queryKey: ['video-shorts', 'sources', 'my'],
@@ -1879,6 +2030,7 @@ export default function FacebookScreen() {
               reelUrl: reel.url,
               unsavedIndex: idx,
               unsavedCount: unsaved.length,
+              totalScanned: rows.length,
               appendRoundsUsed: appendRound,
             }
           }
@@ -1887,21 +2039,20 @@ export default function FacebookScreen() {
             throw new Error(`Không có reel sau quét (cần reel chưa lưu tại index=${idx}).`)
           }
 
-          const canAppend =
-            !feedAlreadyFullyScanned && hasMoreReelsRef.current && appendRound < maxAppendRounds
+          const canAppend = !feedAlreadyFullyScanned && appendRound < maxAppendRounds
 
           if (!canAppend) {
             if (unsaved.length === 0) {
               throw new Error(
                 feedAlreadyFullyScanned
-                  ? `Không có reel chưa lưu (${rows.length} reel đều đã lưu). Fanpage đã quét hết — hãy «Quét lại» nếu có reel mới.`
-                  : `Không có reel chưa lưu (${rows.length} reel đều đã lưu). Đã hết reel để quét thêm hoặc đạt giới hạn quét thêm (${maxAppendRounds} lần).`,
+                  ? `Không có reel chưa lưu (${rows.length} reel trong danh sách đều đã lưu). Fanpage đã quét hết — bấm «Quét lại» trên tab Reels nếu có video mới trên Facebook.`
+                  : `Không có reel chưa lưu (${rows.length} reel đều đã lưu). Thử «Quét hết» thủ công hoặc hạ ngưỡng lượt xem tối thiểu.`,
               )
             }
             throw new Error(
               feedAlreadyFullyScanned
                 ? `Không đủ reel chưa lưu tại index=${idx} (chỉ còn ${unsaved.length} reel chưa lưu). Fanpage đã quét hết — hãy «Quét lại» nếu cần thêm reel mới.`
-                : `Không đủ reel chưa lưu tại index=${idx} (chỉ còn ${unsaved.length} reel chưa lưu).`,
+                : `Không đủ reel chưa lưu tại index=${idx} (chỉ còn ${unsaved.length} reel chưa lưu, tổng ${rows.length} reel).`,
             )
           }
 
@@ -2053,6 +2204,7 @@ export default function FacebookScreen() {
     setIsFbWorkflowStopping(false)
     fbWorkflowStopRef.current = false
     workflowCancelledRemotelyRef.current = false
+    workflowFullScanDoneRef.current = false
 
     let workflowRunId = options?.runId || ''
     runningFbWorkflowRunIdRef.current = workflowRunId
