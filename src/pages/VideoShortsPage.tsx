@@ -3,6 +3,7 @@ import { SiOpenai } from 'react-icons/si'
 import {
   FiCheckCircle,
   FiCheckSquare,
+  FiCalendar,
   FiChevronLeft,
   FiChevronRight,
   FiClock,
@@ -42,6 +43,12 @@ import {
   STORY_LIST_STATUS_FILTERS,
   type VideoShortListStatusFilter,
 } from '@/utils/videoShortHelpers'
+import {
+  matchVideoShortDatePreset,
+  resolveVideoShortDatePresetRange,
+  VIDEO_SHORT_DATE_PRESETS,
+  type VideoShortDatePresetId,
+} from '@/utils/videoShortDatePresets'
 
 const STORY_STATUS_ICONS: Record<
   VideoShortListStatusFilter,
@@ -236,6 +243,8 @@ export default function VideoShortsPage() {
   const [searchInput, setSearchInput] = useState('')
   const [searchQuery, setSearchQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState<VideoShortListStatusFilter>('')
+  const [dateFromFilter, setDateFromFilter] = useState('')
+  const [dateToFilter, setDateToFilter] = useState('')
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set())
   const [actionMessage, setActionMessage] = useState('')
   const limit = 20
@@ -246,13 +255,15 @@ export default function VideoShortsPage() {
   const selectionMode = bulkActionMode !== null
 
   const storiesQuery = useQuery({
-    queryKey: ['video-shorts', 'my', page, searchQuery, statusFilter],
+    queryKey: ['video-shorts', 'my', page, searchQuery, statusFilter, dateFromFilter, dateToFilter],
     queryFn: () =>
       getMyVideoShorts({
         page,
         limit,
         q: searchQuery,
         status: statusFilter || undefined,
+        dateFrom: dateFromFilter || undefined,
+        dateTo: dateToFilter || undefined,
       }),
     refetchInterval: 15_000,
   })
@@ -426,6 +437,56 @@ export default function VideoShortsPage() {
     setActionMessage('')
   }
 
+  const handleDateRangeChange = (which: 'from' | 'to', next: string) => {
+    if (which === 'from') setDateFromFilter(next)
+    else setDateToFilter(next)
+    setPage(1)
+    setSelectedIds(new Set())
+    setActionMessage('')
+  }
+
+  const clearDateRange = () => {
+    setDateFromFilter('')
+    setDateToFilter('')
+    setPage(1)
+    setSelectedIds(new Set())
+    setActionMessage('')
+  }
+
+  const applyDatePreset = (preset: VideoShortDatePresetId) => {
+    const { from, to } = resolveVideoShortDatePresetRange(preset)
+    setDateFromFilter(from)
+    setDateToFilter(to)
+    setPage(1)
+    setSelectedIds(new Set())
+    setActionMessage('')
+  }
+
+  const hasDateRangeFilter = Boolean(dateFromFilter || dateToFilter)
+  const activeDatePreset = useMemo(
+    () => matchVideoShortDatePreset(dateFromFilter, dateToFilter),
+    [dateFromFilter, dateToFilter],
+  )
+
+  const formatDateFilterLabel = (isoDate: string) => {
+    const [y, m, d] = isoDate.split('-').map(Number)
+    if (!y || !m || !d) return isoDate
+    return new Date(y, m - 1, d).toLocaleDateString('vi-VN', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+    })
+  }
+
+  const dateRangeSummary = useMemo(() => {
+    if (dateFromFilter && dateToFilter) {
+      return `${formatDateFilterLabel(dateFromFilter)} → ${formatDateFilterLabel(dateToFilter)}`
+    }
+    if (dateFromFilter) return `từ ${formatDateFilterLabel(dateFromFilter)}`
+    if (dateToFilter) return `đến ${formatDateFilterLabel(dateToFilter)}`
+    return ''
+  }, [dateFromFilter, dateToFilter])
+
   const pageHint =
     bulkActionMode === 'grok'
       ? 'Tab Thiếu video — tick hoặc kéo vùng chọn video ngắn, rồi Chạy Grok trên extension.'
@@ -446,23 +507,83 @@ export default function VideoShortsPage() {
         </div>
       </div>
 
-      <form onSubmit={handleSearch} className="flex max-w-xl gap-2">
-        <div className="relative min-w-0 flex-1">
-          <FiSearch className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
-          <input
-            value={searchInput}
-            onChange={(e) => setSearchInput(e.target.value)}
-            placeholder="Tìm theo tên…"
-            className="w-full rounded-xl border border-white/10 bg-black/30 py-2.5 pl-9 pr-3 text-sm text-white outline-none focus:border-blue-300/40"
-          />
+      <div className="flex flex-wrap items-end gap-3">
+        <form onSubmit={handleSearch} className="flex min-w-[min(100%,20rem)] flex-1 gap-2">
+          <div className="relative min-w-0 flex-1">
+            <FiSearch className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+            <input
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+              placeholder="Tìm theo tên…"
+              className="w-full rounded-xl border border-white/10 bg-black/30 py-2.5 pl-9 pr-3 text-sm text-white outline-none focus:border-blue-300/40"
+            />
+          </div>
+          <button
+            type="submit"
+            className="shrink-0 rounded-xl border border-blue-300/30 bg-blue-500/20 px-4 py-2 text-sm text-blue-100 hover:bg-blue-500/30"
+          >
+            Tìm
+          </button>
+        </form>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="inline-flex flex-wrap items-center gap-2 rounded-xl border border-white/10 bg-black/30 px-3 py-2">
+            <FiCalendar className="h-4 w-4 shrink-0 text-slate-500" />
+            <label className="inline-flex items-center gap-1.5 text-sm text-slate-300">
+              <span className="text-xs text-slate-500">Từ</span>
+              <input
+                type="date"
+                value={dateFromFilter}
+                max={dateToFilter || undefined}
+                onChange={(e) => handleDateRangeChange('from', e.target.value)}
+                className="bg-transparent text-sm text-white outline-none scheme-dark"
+              />
+            </label>
+            <span className="text-slate-600">—</span>
+            <label className="inline-flex items-center gap-1.5 text-sm text-slate-300">
+              <span className="text-xs text-slate-500">Đến</span>
+              <input
+                type="date"
+                value={dateToFilter}
+                min={dateFromFilter || undefined}
+                onChange={(e) => handleDateRangeChange('to', e.target.value)}
+                className="bg-transparent text-sm text-white outline-none scheme-dark"
+              />
+            </label>
+          </div>
+          {hasDateRangeFilter ? (
+            <button
+              type="button"
+              onClick={clearDateRange}
+              className="inline-flex items-center gap-1 rounded-xl border border-white/10 px-3 py-2 text-xs text-slate-400 hover:bg-white/5 hover:text-slate-200"
+            >
+              <FiX className="h-3.5 w-3.5" />
+              Bỏ khoảng ngày
+            </button>
+          ) : null}
         </div>
-        <button
-          type="submit"
-          className="shrink-0 rounded-xl border border-blue-300/30 bg-blue-500/20 px-4 py-2 text-sm text-blue-100 hover:bg-blue-500/30"
-        >
-          Tìm
-        </button>
-      </form>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-[11px] text-slate-500">Chọn nhanh:</span>
+        {VIDEO_SHORT_DATE_PRESETS.map((preset) => {
+          const active = activeDatePreset === preset.id
+          return (
+            <button
+              key={preset.id}
+              type="button"
+              onClick={() => applyDatePreset(preset.id)}
+              className={`rounded-full border px-3 py-1 text-xs transition-colors ${
+                active
+                  ? 'border-violet-400/40 bg-violet-500/20 text-violet-100 ring-1 ring-violet-400/25'
+                  : 'border-white/10 bg-black/20 text-slate-400 hover:border-violet-400/25 hover:bg-violet-500/10 hover:text-slate-200'
+              }`}
+            >
+              {preset.label}
+            </button>
+          )
+        })}
+      </div>
 
       <div className="flex flex-wrap gap-2">
         {STORY_LIST_STATUS_FILTERS.map((item) => {
@@ -570,10 +691,10 @@ export default function VideoShortsPage() {
         </div>
       ) : items.length === 0 ? (
         <EmptyState
-          title={statusFilter || searchQuery ? 'Không có video ngắn khớp bộ lọc' : 'Chưa có video ngắn nào'}
+          title={statusFilter || searchQuery || hasDateRangeFilter ? 'Không có video ngắn khớp bộ lọc' : 'Chưa có video ngắn nào'}
           description={
-            statusFilter || searchQuery
-              ? 'Thử bộ lọc khác hoặc xóa tìm kiếm.'
+            statusFilter || searchQuery || hasDateRangeFilter
+              ? 'Thử bộ lọc khác hoặc xóa tìm kiếm / khoảng ngày.'
               : 'Video ngắn được tạo sau bước lưu ChatGPT trong quy trình đa bước hoặc extension.'
           }
         />
@@ -583,6 +704,7 @@ export default function VideoShortsPage() {
             {pagination?.total ?? items.length} video ngắn
             {searchQuery ? ` · tìm: "${searchQuery}"` : ''}
             {statusLabel ? ` · lọc: ${statusLabel}` : ''}
+            {dateRangeSummary ? ` · ${dateRangeSummary}` : ''}
           </p>
 
           <div
