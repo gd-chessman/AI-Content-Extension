@@ -6,10 +6,10 @@ import { StepActionType } from './step.schema';
  * Min/max lượt xem: chỉnh trên extension (tab Reels), không lưu trong `Step.inputSchema`.
  */
 
-/** Gợi ý số reel tối đa mỗi lần quét (FE cố định `MAX_SCAN_RESULTS = 5`). */
+/** Gợi ý số reel tối đa mỗi lần quét thủ công (FE cố định `MAX_SCAN_RESULTS = 5`). */
 export const FACEBOOK_SCAN_MAX_RESULTS_HINT = 5;
 
-/** Mặc định số vòng “quét thêm” khi chọn reel (khớp FE). */
+/** Mặc định số vòng “quét thêm” khi chọn reel nếu feed chưa quét hết (khớp FE). */
 export const FACEBOOK_SELECT_DEFAULT_MAX_APPEND_ROUNDS = 8;
 
 export type FacebookOpenFanpageInput = {
@@ -19,6 +19,7 @@ export type FacebookOpenFanpageInput = {
 };
 
 export type FacebookScanReelsInput = {
+  /** Không còn dùng trong workflow — FE tự «Quét hết» nếu fanpage chưa quét hết, bỏ qua nếu đã quét hết. */
   append?: boolean;
   /** Số fanpage **tiếp theo** trong danh sách (sau fanpage đã mở ở bước mở) để thử khi quét trống. */
   fallbackFanpageCount?: number;
