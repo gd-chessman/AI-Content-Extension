@@ -6,7 +6,14 @@ import {
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
-import { CreateVideoShortDto, ListMyVideoShortsQuery, PatchVideoShortDto, SkipVideoSourceDto, UpsertVideoSourceDto } from './video-shorts.dto';
+import {
+  buildVideoShortCreatedAtFilterForRange,
+  CreateVideoShortDto,
+  ListMyVideoShortsQuery,
+  PatchVideoShortDto,
+  SkipVideoSourceDto,
+  UpsertVideoSourceDto,
+} from './video-shorts.dto';
 import { VideoSource, VideoSourceDocument } from './video-source.schema';
 import { VideoShort, VideoShortDocument } from './video-short.schema';
 import { VideoShortTopic, VideoShortTopicDocument } from './video-short-topic.schema';
@@ -63,6 +70,13 @@ export class VideoShortsService {
     });
   }
 
+  private applyCreatedDateFilter(baseFilter: Record<string, unknown>, dateFrom: string, dateTo: string): void {
+    const dateFilter = buildVideoShortCreatedAtFilterForRange(dateFrom, dateTo);
+    if (dateFilter) {
+      Object.assign(baseFilter, dateFilter);
+    }
+  }
+
   async listForUser(userId: string, query: ListMyVideoShortsQuery) {
     const { page, limit, q } = query;
     const pipelineStatus = parseVideoShortPipelineStatus(query.status);
@@ -73,6 +87,7 @@ export class VideoShortsService {
 
     const userOid = new Types.ObjectId(userId);
     const baseFilter: Record<string, unknown> = { userId: userOid };
+    this.applyCreatedDateFilter(baseFilter, query.dateFrom, query.dateTo);
 
     if (!pipelineStatus && query.hasLongContent) {
       baseFilter.longContent = { $exists: true, $nin: ['', null] };
@@ -105,6 +120,7 @@ export class VideoShortsService {
     const { page, limit, q } = query;
     const userOid = new Types.ObjectId(userId);
     const baseFilter: Record<string, unknown> = { userId: userOid };
+    this.applyCreatedDateFilter(baseFilter, query.dateFrom, query.dateTo);
 
     if (q) {
       const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

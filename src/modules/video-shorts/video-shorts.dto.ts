@@ -52,6 +52,10 @@ export class ListMyVideoShortsQueryDto {
   hasLongContent?: string;
   /** Lọc theo bước pipeline: complete, in_progress, missing_chatgpt, … */
   status?: string;
+  /** Từ ngày tạo (YYYY-MM-DD, múi giờ VN). */
+  dateFrom?: string;
+  /** Đến ngày tạo (YYYY-MM-DD, múi giờ VN). */
+  dateTo?: string;
 
   static parse(raw: ListMyVideoShortsQueryDto): ListMyVideoShortsQuery {
     return {
@@ -60,6 +64,8 @@ export class ListMyVideoShortsQueryDto {
       q: (raw.q || '').trim(),
       hasLongContent: raw.hasLongContent === 'true',
       status: (raw.status || '').trim().toLowerCase(),
+      dateFrom: (raw.dateFrom || '').trim(),
+      dateTo: (raw.dateTo || '').trim(),
     };
   }
 }
@@ -70,7 +76,52 @@ export type ListMyVideoShortsQuery = {
   q: string;
   hasLongContent: boolean;
   status: string;
+  dateFrom: string;
+  dateTo: string;
 };
+
+const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+function parseVnDayStart(date: string): Date | null {
+  if (!DATE_ONLY_RE.test(date)) return null;
+  const start = new Date(`${date}T00:00:00.000+07:00`);
+  return Number.isNaN(start.getTime()) ? null : start;
+}
+
+function parseVnDayEnd(date: string): Date | null {
+  if (!DATE_ONLY_RE.test(date)) return null;
+  const end = new Date(`${date}T23:59:59.999+07:00`);
+  return Number.isNaN(end.getTime()) ? null : end;
+}
+
+/** Lọc createdAt theo khoảng ngày (lịch VN, UTC+7). */
+export function buildVideoShortCreatedAtFilterForRange(
+  dateFrom: string,
+  dateTo: string,
+): { createdAt: { $gte?: Date; $lte?: Date } } | null {
+  const from = (dateFrom || '').trim();
+  const to = (dateTo || '').trim();
+  if (!from && !to) return null;
+
+  const range: { $gte?: Date; $lte?: Date } = {};
+  if (from) {
+    const start = parseVnDayStart(from);
+    if (!start) return null;
+    range.$gte = start;
+  }
+  if (to) {
+    const end = parseVnDayEnd(to);
+    if (!end) return null;
+    range.$lte = end;
+  }
+  if (range.$gte && range.$lte && range.$gte.getTime() > range.$lte.getTime()) {
+    const swapStart = parseVnDayStart(to);
+    const swapEnd = parseVnDayEnd(from);
+    if (!swapStart || !swapEnd) return null;
+    return { createdAt: { $gte: swapStart, $lte: swapEnd } };
+  }
+  return { createdAt: range };
+}
 
 /** Query GET /video-shorts/my/latest-grok-ready */
 export class LatestGrokReadyVideoShortQueryDto {
