@@ -54,6 +54,7 @@ import {
   shouldAcceptWorkflowRunFromStream,
   shouldStopLocalWorkflowForCancelledRun,
 } from '@/utils/multiWorkflowRun'
+import { runFacebookReelScanBatch } from '@/utils/facebookReelScanPageScript'
 
 type ScannedReel = {
   id: string
@@ -104,8 +105,17 @@ type ExtensionChrome = {
 
 const MIN_VIEW_COUNT = 500_000
 const MAX_SCAN_RESULTS = 5
-/** «Quét hết»: cuộn hết feed một lần, lấy tối đa bấy nhiêu reel mới (chưa có trong danh sách). */
-const MAX_SCAN_FULL_PASS_RESULTS = 300
+/** «Quét hết»: không giới hạn số reel — chỉ dừng khi cuộn hết feed hoặc user dừng. */
+const SCAN_FULL_PASS_UNLIMITED = -1
+const QUICK_SCAN_ROUNDS = 55
+const QUICK_SCAN_STAGNANT = 5
+const QUICK_SCAN_WAIT_MS = 1100
+/** Mỗi lần inject ngắn — tránh treo tab Facebook (không chạy 6000 vòng một lúc). */
+const FULL_PASS_BATCH_ROUNDS = 16
+const FULL_PASS_MAX_TOTAL_ROUNDS = 2400
+const FULL_PASS_STAGNANT_NEEDED = 8
+const FULL_PASS_EMPTY_BATCHES_TO_STOP = 2
+const FULL_PASS_WAIT_MS = 1200
 
 /** URL tab đang mở là trang reel (facebook.com/reel/, reel_id=, fb.watch). */
 function isFacebookReelPageUrl(urlString: string): boolean {
@@ -212,9 +222,32 @@ const FB_REELS_SCAN_MIN_LS_KEY = 'facebookReelsScanMinViews'
 const FB_REELS_SCAN_MAX_LS_KEY = 'facebookReelsScanMaxViews'
 const FB_SELECTED_FANPAGE_LS_KEY = 'facebookSelectedFanpageId'
 const FB_REELS_SCAN_HISTORY_PREFIX = 'facebookReelsScanHistory:'
+const FB_REELS_FEED_FULLY_SCANNED_PREFIX = 'facebookReelsFeedFullyScanned:'
 
 function scanHistoryStorageKey(fanpageId: string) {
   return `${FB_REELS_SCAN_HISTORY_PREFIX}${fanpageId}`
+}
+
+function feedFullyScannedStorageKey(fanpageId: string) {
+  return `${FB_REELS_FEED_FULLY_SCANNED_PREFIX}${fanpageId}`
+}
+
+function readFeedFullyScannedForFanpage(fanpageId: string): boolean {
+  try {
+    return localStorage.getItem(feedFullyScannedStorageKey(fanpageId)) === '1'
+  } catch {
+    return false
+  }
+}
+
+function writeFeedFullyScannedForFanpage(fanpageId: string, value: boolean) {
+  try {
+    const key = feedFullyScannedStorageKey(fanpageId)
+    if (value) localStorage.setItem(key, '1')
+    else localStorage.removeItem(key)
+  } catch {
+    /* ignore */
+  }
 }
 
 function isScannedReelLike(value: unknown): value is ScannedReel {
@@ -246,6 +279,7 @@ function writeScanHistoryForFanpage(fanpageId: string, reels: ScannedReel[]) {
 function clearScanHistoryForFanpage(fanpageId: string) {
   try {
     localStorage.removeItem(scanHistoryStorageKey(fanpageId))
+    localStorage.removeItem(feedFullyScannedStorageKey(fanpageId))
   } catch {
     /* ignore */
   }
@@ -256,7 +290,12 @@ function clearAllScanHistories() {
     const keys: string[] = []
     for (let i = 0; i < localStorage.length; i += 1) {
       const key = localStorage.key(i)
-      if (key?.startsWith(FB_REELS_SCAN_HISTORY_PREFIX)) keys.push(key)
+      if (
+        key?.startsWith(FB_REELS_SCAN_HISTORY_PREFIX) ||
+        key?.startsWith(FB_REELS_FEED_FULLY_SCANNED_PREFIX)
+      ) {
+        keys.push(key)
+      }
     }
     keys.forEach((key) => localStorage.removeItem(key))
   } catch {
@@ -280,6 +319,8 @@ export default function FacebookScreen() {
   const [scannedReels, setScannedReels] = useState<ScannedReel[]>([])
   const [hasMoreReels, setHasMoreReels] = useState(false)
   const hasMoreReelsRef = useRef(false)
+  /** Đã «Quét hết» và chạm cuối feed (không còn cần nút quét hết). */
+  const [feedFullyScanned, setFeedFullyScanned] = useState(false)
   const [scanStatus, setScanStatus] = useState('')
   const [isScanning, setIsScanning] = useState(false)
   const [minViewInput, setMinViewInput] = useState(() =>
@@ -503,6 +544,33 @@ export default function FacebookScreen() {
     }
   }
 
+  const resolveWorkflowFanpageId = (): string | null => {
+    const idx = workflowOpenedFanpageIndexRef.current
+    if (idx != null && idx >= 0 && fanpages[idx]) return fanpages[idx]._id
+    const prefer = workflowFanpageUrlRef.current?.trim()
+    if (prefer) {
+      const fp = fanpages.find((p) => {
+        try {
+          return tabMatchesFanpageUrl(prefer, p.url)
+        } catch {
+          return false
+        }
+      })
+      if (fp) return fp._id
+    }
+    return selectedFanpageId
+  }
+
+  const hydrateScanHistoryFromFanpage = (fanpageId: string): ScannedReel[] => {
+    const stored = readScanHistoryForFanpage(fanpageId)
+    const fully = readFeedFullyScannedForFanpage(fanpageId)
+    setScannedReels(stored)
+    scanResultRef.current = stored
+    setFeedFullyScanned(fully)
+    setHasMoreReels(!fully && stored.length > 0)
+    return stored
+  }
+
   useEffect(() => {
     isContentDirtyRef.current = isContentDirty
   }, [isContentDirty])
@@ -526,6 +594,7 @@ export default function FacebookScreen() {
     if (!selectedFanpageId) {
       setScannedReels([])
       scanResultRef.current = []
+      setFeedFullyScanned(false)
       setSelectedReel(null)
       return
     }
@@ -533,6 +602,7 @@ export default function FacebookScreen() {
     const stored = readScanHistoryForFanpage(selectedFanpageId)
     setScannedReels(stored)
     scanResultRef.current = stored
+    setFeedFullyScanned(readFeedFullyScannedForFanpage(selectedFanpageId))
     setSelectedReel(null)
     setContentText('')
     setOriginalContentText('')
@@ -1237,7 +1307,7 @@ export default function FacebookScreen() {
     options?: { fullPass?: boolean },
   ) => {
     const fullPass = Boolean(options?.fullPass)
-    const resultLimit = fullPass ? MAX_SCAN_FULL_PASS_RESULTS : MAX_SCAN_RESULTS
+    const resultLimit = fullPass ? SCAN_FULL_PASS_UNLIMITED : MAX_SCAN_RESULTS
     const extensionChrome = (globalThis as { chrome?: ExtensionChrome }).chrome
     const minViewCount = viewBounds
       ? Math.max(1, Math.floor(viewBounds.minViews))
@@ -1271,6 +1341,10 @@ export default function FacebookScreen() {
     }
 
     const existingUrls = append ? scannedReels.map((item) => item.url) : []
+    if (!append && !fullPass) {
+      setFeedFullyScanned(false)
+      if (selectedFanpageId) writeFeedFullyScannedForFanpage(selectedFanpageId, false)
+    }
     setIsScanning(true)
     setScanStatus(
       fullPass
@@ -1321,263 +1395,168 @@ export default function FacebookScreen() {
       scanControlRef.current = { token: scanToken, tabId: targetTab.id }
 
       try {
-        const result = await extensionChrome.scripting?.executeScript?.({
-          target: { tabId: targetTab.id },
-          func: (async (
-            minViews: number,
-            maxViewsArgInner: number,
-            limit: number,
-            token: string,
-            excludedUrls: string[],
-            fullPassInner: boolean,
-          ) => {
-            const fullPass = Boolean(fullPassInner)
-            const maxViews = maxViewsArgInner > 0 ? maxViewsArgInner : Number.POSITIVE_INFINITY
-            const normalizeNumber = (raw: string) => raw.replace(/\./g, '').replace(',', '.')
-            ;(window as unknown as { __aiContentScanControl?: Record<string, { stop?: boolean }> }).__aiContentScanControl ??= {}
-            const control = (window as unknown as { __aiContentScanControl: Record<string, { stop?: boolean }> }).__aiContentScanControl
-            control[token] = { stop: false }
-            const excludedSet = new Set(excludedUrls || [])
+        const prevCountAtStart = append ? scanResultRef.current.length : 0
 
-            const parseViewCount = (text: string) => {
-              const parseMatch = (match: RegExpMatchArray | null) => {
-                if (!match) return null
-                const value = Number(normalizeNumber(match[1]))
-                if (Number.isNaN(value)) return null
-
-                const unit = (match[2] || '').toLowerCase()
-                if (unit === 'k' || unit === 'nghìn') return Math.round(value * 1_000)
-                if (unit === 'm' || unit === 'triệu') return Math.round(value * 1_000_000)
-                if (unit === 'b' || unit === 'tỷ') return Math.round(value * 1_000_000_000)
-                return Math.round(value)
-              }
-
-              const withLabel = text.match(/([\d.,]+)\s*(k|m|b|nghìn|triệu|tỷ)?\s*(lượt xem|views?)/i)
-              const labeledCount = parseMatch(withLabel)
-              if (labeledCount) return labeledCount
-
-              // Fallback: Facebook sometimes shows only 1.2M / 850K without explicit label.
-              const generic = text.match(/([\d.,]+)\s*(k|m|b|nghìn|triệu|tỷ)\b/i)
-              return parseMatch(generic)
-            }
-
-            type Row = {
-              id: string
-              title: string
-              description: string
-              views: string
-              viewCount: number
-              url: string
-              imageUrl: string
-            }
-
-            const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
-
-            const findScrollRoot = (): HTMLElement => {
-              const direct = document.querySelector('#scrollview') as HTMLElement | null
-              if (direct && direct.scrollHeight > direct.clientHeight + 80) {
-                return direct
-              }
-
-              let best: HTMLElement | null = null
-              let bestScore = 0
-              const visit = (el: Element) => {
-                if (!(el instanceof HTMLElement)) return
-                const style = window.getComputedStyle(el)
-                const oy = style.overflowY
-                if ((oy === 'auto' || oy === 'scroll' || oy === 'overlay') && el.scrollHeight > el.clientHeight + 80) {
-                  const score = el.scrollHeight * el.clientWidth
-                  if (score > bestScore) {
-                    bestScore = score
-                    best = el
-                  }
-                }
-                for (const child of el.children) {
-                  visit(child)
-                }
-              }
-              visit(document.body)
-
-              return best || (document.scrollingElement as HTMLElement) || document.documentElement
-            }
-
-            const scrollFeedDown = (root: HTMLElement) => {
-              const delta = Math.max(Math.floor(root.clientHeight * 0.9), 480)
-              if (
-                root === document.documentElement ||
-                root === document.body ||
-                root === (document.scrollingElement as HTMLElement | null)
-              ) {
-                window.scrollBy(0, delta)
-                return
-              }
-              const nextTop = Math.min(root.scrollTop + delta, Math.max(0, root.scrollHeight - root.clientHeight))
-              if (nextTop > root.scrollTop + 4) {
-                root.scrollTop = nextTop
-              } else {
-                window.scrollBy(0, Math.min(delta, 400))
-              }
-            }
-
-            const scrapePass = (uniqueByUrl: Map<string, Row>) => {
-              const anchors = Array.from(
-                document.querySelectorAll<HTMLAnchorElement>('a[href*="/reel/"], a[href*="reel_id="]'),
-              )
-
-              anchors.forEach((anchor) => {
-                const href = anchor.getAttribute('href')
-                if (!href) return
-
-                const url = new URL(href, location.origin).toString()
-                if (uniqueByUrl.has(url)) return
-                if (excludedSet.has(url)) return
-
-                const container = (anchor.closest('div[role="article"]') || anchor.closest('div')) as HTMLElement | null
-                const ariaTexts = Array.from(container?.querySelectorAll<HTMLElement>('[aria-label]') || [])
-                  .map((element) => element.getAttribute('aria-label') || '')
-                  .join('\n')
-                const containerText = container?.innerText || container?.textContent || ''
-                const text = `${containerText}\n${anchor.innerText || ''}\n${ariaTexts}`.trim()
-                if (!text) return
-
-                const viewCount = parseViewCount(text)
-                if (!viewCount || viewCount < minViews || viewCount > maxViews) return
-
-                const title =
-                  (anchor.getAttribute('aria-label') || text.split('\n').find((line) => line.trim().length > 0) || 'Reel')
-                    .trim()
-                    .slice(0, 120)
-
-                const captionSource =
-                  (ariaTexts || anchor.innerText || '').trim() || containerText || text
-
-                const lines = captionSource
-                  .split('\n')
-                  .map((line) => line.trim())
-                  .filter(Boolean)
-
-                const numericLike = /^[\d\s.,KkMmBb]+$/
-                const contentLines = lines.filter((line) => {
-                  if (!line) return false
-                  if (/^https?:\/\//i.test(line)) return false
-                  if (/lượt xem|views?|thích|likes?|bình luận|comments?|chia sẻ|shares?/i.test(line)) return false
-                  if (/xem thêm/i.test(line)) return false
-                  if (numericLike.test(line)) return false
-                  return true
-                })
-
-                const description =
-                  (contentLines.length > 0 ? contentLines.join('\n') : lines.join('\n')) || title
-
-                const imageCandidate =
-                  container?.querySelector<HTMLImageElement>('img[src]') ||
-                  anchor.querySelector<HTMLImageElement>('img[src]') ||
-                  null
-
-                uniqueByUrl.set(url, {
-                  id: url,
-                  title,
-                  views:
-                    viewCount >= 1_000_000
-                      ? `${(viewCount / 1_000_000).toFixed(1)}M`
-                      : `${Math.round(viewCount / 1000)}K`,
-                  viewCount,
-                  url,
-                  description: description.slice(0, 500),
-                  imageUrl: imageCandidate?.src || '',
-                })
-              })
-            }
-
-            const MAX_SCROLL_ROUNDS = 55
-            const WAIT_MS = 1100
-            const uniqueByUrl = new Map<string, Row>()
-            let stagnantRounds = 0
-
-            let reachedScrollEnd = false
-
-            for (let round = 0; round < MAX_SCROLL_ROUNDS; round += 1) {
-              if (control[token]?.stop) break
-              scrapePass(uniqueByUrl)
-              if (!fullPass && uniqueByUrl.size >= limit) {
-                break
-              }
-
-              const root = findScrollRoot()
-              const beforeTop = root.scrollTop
-              const beforeMax = root.scrollHeight
-
-              scrollFeedDown(root)
-              await sleep(WAIT_MS)
-
-              const afterTop = root.scrollTop
-              const afterMax = root.scrollHeight
-
-              if (Math.abs(afterTop - beforeTop) < 8 && afterMax <= beforeMax + 40) {
-                stagnantRounds += 1
-              } else {
-                stagnantRounds = 0
-              }
-
-              if (stagnantRounds >= 5) {
-                reachedScrollEnd = true
-                break
-              }
-            }
-
-            const sorted = Array.from(uniqueByUrl.values()).sort((a, b) => b.viewCount - a.viewCount)
-            const foundCount = sorted.length
-            const rows = sorted.slice(0, limit)
-            return {
-              rows,
-              foundCount,
-              reachedScrollEnd,
-              truncated: foundCount > limit,
-              hasMore: fullPass
-                ? !reachedScrollEnd && foundCount > 0
-                : foundCount > limit,
-            }
-          }) as (...args: unknown[]) => unknown,
-          args: [minViewCount, maxViewArg, resultLimit, scanToken, existingUrls, fullPass],
-        })
-
-        if (!result) {
-          setScanStatus('Quét thất bại: không nhận được kết quả từ executeScript.')
-          setScannedReels([])
-          setIsScanning(false)
-          return
-        }
-
-        const payload =
-          (result?.[0]?.result as
+        const runScanBatch = async (
+          tabId: number,
+          batch: {
+            roundsPerBatch: number
+            stagnantRoundsIn: number
+            stagnantNeeded: number
+            waitMs: number
+            excludedUrls: string[]
+          },
+        ) => {
+          const result = await extensionChrome.scripting?.executeScript?.({
+            target: { tabId },
+            func: runFacebookReelScanBatch as (...args: unknown[]) => unknown,
+            args: [
+              minViewCount,
+              maxViewArg,
+              resultLimit,
+              scanToken,
+              batch.excludedUrls,
+              fullPass,
+              batch.roundsPerBatch,
+              batch.stagnantRoundsIn,
+              batch.stagnantNeeded,
+              batch.waitMs,
+            ],
+          })
+          return result?.[0]?.result as
             | {
                 rows?: ScannedReel[]
-                hasMore?: boolean
-                foundCount?: number
-                truncated?: boolean
+                stagnantRounds?: number
                 reachedScrollEnd?: boolean
+                roundsCompleted?: number
+                stopped?: boolean
+                foundCount?: number
+                hasMore?: boolean
               }
-            | undefined) || {}
+            | undefined
+        }
+
+        let payload: {
+          rows: ScannedReel[]
+          foundCount: number
+          reachedScrollEnd: boolean
+          hitRoundLimit: boolean
+          hasMore: boolean
+        }
+
+        if (fullPass) {
+          const accumulated = new Map<string, ScannedReel>()
+          if (append) {
+            scanResultRef.current.forEach((item) => accumulated.set(item.url, item))
+          }
+
+          let stagnantRounds = 0
+          let totalRounds = 0
+          let reachedScrollEnd = false
+          let stopped = false
+          let emptyBatches = 0
+
+          while (totalRounds < FULL_PASS_MAX_TOTAL_ROUNDS) {
+            if (scanAllStopRef.current) {
+              stopped = true
+              break
+            }
+
+            const batchResult = await runScanBatch(targetTab.id, {
+              roundsPerBatch: FULL_PASS_BATCH_ROUNDS,
+              stagnantRoundsIn: stagnantRounds,
+              stagnantNeeded: FULL_PASS_STAGNANT_NEEDED,
+              waitMs: FULL_PASS_WAIT_MS,
+              excludedUrls: Array.from(accumulated.keys()),
+            })
+
+            if (!batchResult) {
+              throw new Error('Không nhận được kết quả batch quét hết.')
+            }
+
+            const newInBatch = (batchResult.rows || []).length
+            if (newInBatch === 0) emptyBatches += 1
+            else emptyBatches = 0
+
+            for (const row of batchResult.rows || []) {
+              accumulated.set(row.url, row)
+            }
+            stagnantRounds = Number(batchResult.stagnantRounds) || 0
+            totalRounds += Number(batchResult.roundsCompleted) || 0
+            reachedScrollEnd =
+              Boolean(batchResult.reachedScrollEnd) || emptyBatches >= FULL_PASS_EMPTY_BATCHES_TO_STOP
+            stopped = Boolean(batchResult.stopped)
+
+            const liveList = Array.from(accumulated.values()).sort((a, b) => b.viewCount - a.viewCount)
+            setScannedReels(liveList)
+            scanResultRef.current = liveList
+            setScanStatus(
+              reachedScrollEnd
+                ? `Đang quét hết — ${liveList.length} reel · vòng ${totalRounds} · sắp xong…`
+                : `Đang quét hết — ${liveList.length} reel · vòng cuộn ${totalRounds}…`,
+            )
+
+            if (reachedScrollEnd || stopped || (batchResult.roundsCompleted || 0) === 0) break
+            await sleep(80)
+          }
+
+          const finalRows = Array.from(accumulated.values()).sort((a, b) => b.viewCount - a.viewCount)
+          payload = {
+            rows: finalRows,
+            foundCount: finalRows.length,
+            reachedScrollEnd,
+            hitRoundLimit: !reachedScrollEnd && !stopped && totalRounds >= FULL_PASS_MAX_TOTAL_ROUNDS,
+            hasMore: false,
+          }
+        } else {
+          const batchResult = await runScanBatch(targetTab.id, {
+            roundsPerBatch: QUICK_SCAN_ROUNDS,
+            stagnantRoundsIn: 0,
+            stagnantNeeded: QUICK_SCAN_STAGNANT,
+            waitMs: QUICK_SCAN_WAIT_MS,
+            excludedUrls: existingUrls,
+          })
+
+          if (!batchResult) {
+            setScanStatus('Quét thất bại: không nhận được kết quả từ executeScript.')
+            setScannedReels([])
+            setIsScanning(false)
+            return
+          }
+
+          payload = {
+            rows: batchResult.rows || [],
+            foundCount: Number(batchResult.foundCount) || (batchResult.rows || []).length,
+            reachedScrollEnd: Boolean(batchResult.reachedScrollEnd),
+            hitRoundLimit: false,
+            hasMore: Boolean(batchResult.hasMore),
+          }
+        }
+
         const reels = payload.rows || []
         const foundCount = Number(payload.foundCount) || reels.length
-        const prevCount = append ? scanResultRef.current.length : 0
         const historyFanpageId =
           fanpages.find((page) => tabMatchesFanpageUrl(targetUrl, page.url))?._id || selectedFanpageId
         const mergedList = (() => {
-          if (!append) return reels
+          if (fullPass || !append) return reels
           const map = new Map<string, ScannedReel>()
           scanResultRef.current.forEach((item) => map.set(item.url, item))
           reels.forEach((item) => map.set(item.url, item))
           return Array.from(map.values())
         })()
         setHasMoreReels(Boolean(payload.hasMore))
+        if (fullPass) {
+          const fullyDone = Boolean(payload.reachedScrollEnd) && !payload.hitRoundLimit
+          setFeedFullyScanned(fullyDone)
+          if (historyFanpageId) writeFeedFullyScannedForFanpage(historyFanpageId, fullyDone)
+        }
         setScannedReels(mergedList)
         scanResultRef.current = mergedList
         if (historyFanpageId) {
           writeScanHistoryForFanpage(historyFanpageId, mergedList)
         }
         const mergedCount = mergedList.length
-        const addedCount = Math.max(0, mergedCount - prevCount)
+        const addedCount = Math.max(0, mergedCount - prevCountAtStart)
         const rangeLabel =
           Number.isFinite(maxViewCount) && maxViewCount !== Number.POSITIVE_INFINITY
             ? `${minViewCount.toLocaleString('en-US')} - ${maxViewCount.toLocaleString('en-US')}`
@@ -1589,9 +1568,9 @@ export default function FacebookScreen() {
                 ? `Đã quét hết trang: không còn reel mới trong khoảng ${rangeLabel} lượt xem.`
                 : `Không thấy reel mới (có thể đã lấy hết hoặc bị dừng giữa chừng).`,
             )
-          } else if (payload.truncated) {
+          } else if (payload.hitRoundLimit) {
             setScanStatus(
-              `Đã quét hết (giới hạn ${resultLimit} reel/lần): thêm ${addedCount} reel. Tổng ${mergedCount} trong danh sách (${foundCount} khớp bộ lọc trên trang).`,
+              `Đã quét ${addedCount > 0 ? `thêm ${addedCount} reel` : 'xong một đoạn'} (chạm giới hạn vòng cuộn). Cuộn fanpage thủ công xuống sâu hơn rồi bấm «Quét hết» lại. Tổng ${mergedCount} trong danh sách.`,
             )
           } else {
             setScanStatus(
@@ -1629,12 +1608,19 @@ export default function FacebookScreen() {
     scanAllStopRef.current = false
     handleScanReels(true, undefined, { fullPass: true })
     try {
-      await waitScanIdle(360_000)
+      await waitScanIdle(600_000)
     } catch {
       if (!scanAllStopRef.current) {
         setScanStatus('Quét hết bị gián đoạn (timeout). Hãy cuộn fanpage reels thủ công rồi thử lại.')
       }
     }
+  }
+
+  const handleRescanAllReels = async () => {
+    setFeedFullyScanned(false)
+    if (selectedFanpageId) writeFeedFullyScannedForFanpage(selectedFanpageId, false)
+    setScanStatus('Đang quét lại toàn bộ feed fanpage…')
+    await handleScanAllReels()
   }
 
   const handleStopScan = () => {
@@ -1753,6 +1739,9 @@ export default function FacebookScreen() {
           openedListIndex = Math.floor(pickIndex)
         }
         workflowOpenedFanpageIndexRef.current = openedListIndex
+        if (openedListIndex != null && openedListIndex >= 0 && fanpages[openedListIndex]) {
+          setSelectedFanpageId(fanpages[openedListIndex]._id)
+        }
 
         openFanpage(url)
         workflowFanpageUrlRef.current = url
@@ -1776,17 +1765,40 @@ export default function FacebookScreen() {
           return rows
         }
 
-        const runScanPass = async (appendFlag: boolean) => {
-          handleScanReels(appendFlag, viewBounds)
-          await waitScanIdle()
+        const trySkipOrFullScan = async (
+          fanpageId: string | null,
+        ): Promise<{ rows: ScannedReel[]; scanPasses: number; skipped: boolean }> => {
+          if (fanpageId && readFeedFullyScannedForFanpage(fanpageId)) {
+            const stored = readScanHistoryForFanpage(fanpageId)
+            if (stored.length > 0) {
+              hydrateScanHistoryFromFanpage(fanpageId)
+              return { rows: stored, scanPasses: 0, skipped: true }
+            }
+          }
+
+          const existingRows = fanpageId ? readScanHistoryForFanpage(fanpageId) : []
+          if (existingRows.length > 0) {
+            setScannedReels(existingRows)
+            scanResultRef.current = existingRows
+          }
+
+          handleScanReels(existingRows.length > 0, viewBounds, { fullPass: true })
+          await waitScanIdle(600_000)
           await sleep(400)
-          return pollRowsAfterScan()
+          const rows = await pollRowsAfterScan()
+          return { rows, scanPasses: 1, skipped: false }
         }
 
-        let rows = await runScanPass(Boolean(schema.append))
-        let scanPasses = 1
+        let fanpageId = resolveWorkflowFanpageId()
+        let scanResult = await trySkipOrFullScan(fanpageId)
+        let scanPasses = scanResult.scanPasses
 
-        if (rows.length === 0 && fallbackFanpageCount > 0 && baseFanpageIdx !== null && baseFanpageIdx >= 0) {
+        if (
+          scanResult.rows.length === 0 &&
+          fallbackFanpageCount > 0 &&
+          baseFanpageIdx !== null &&
+          baseFanpageIdx >= 0
+        ) {
           for (let step = 1; step <= fallbackFanpageCount; step += 1) {
             const nextIdx = baseFanpageIdx + step
             if (nextIdx >= fanpages.length) break
@@ -1796,15 +1808,23 @@ export default function FacebookScreen() {
             openFanpage(nextUrl)
             workflowFanpageUrlRef.current = nextUrl
             workflowOpenedFanpageIndexRef.current = nextIdx
+            setSelectedFanpageId(fp._id)
             setActiveView('reels')
             await sleep(2500)
-            scanPasses += 1
-            rows = await runScanPass(false)
-            if (rows.length > 0) break
+            fanpageId = fp._id
+            scanResult = await trySkipOrFullScan(fanpageId)
+            scanPasses += scanResult.scanPasses
+            if (scanResult.rows.length > 0) break
           }
         }
 
-        return { scannedCount: rows.length, scanPasses, fallbackFanpageCount }
+        return {
+          scannedCount: scanResult.rows.length,
+          scanPasses,
+          fallbackFanpageCount,
+          skipped: scanResult.skipped,
+          feedFullyScanned: fanpageId ? readFeedFullyScannedForFanpage(fanpageId) : false,
+        }
       }
       case 'facebook_select_reel': {
         const idx = schema.index != null ? Number(schema.index) : 0
@@ -1815,6 +1835,12 @@ export default function FacebookScreen() {
           schema.maxAppendRounds != null && Number.isFinite(Number(schema.maxAppendRounds))
             ? Math.max(0, Number(schema.maxAppendRounds))
             : 8
+        const fanpageId = resolveWorkflowFanpageId()
+        const feedAlreadyFullyScanned = fanpageId ? readFeedFullyScannedForFanpage(fanpageId) : false
+
+        if (fanpageId && scanResultRef.current.length === 0) {
+          hydrateScanHistoryFromFanpage(fanpageId)
+        }
 
         const pollUntilRows = async () => {
           let rows = scanResultRef.current
@@ -1861,16 +1887,21 @@ export default function FacebookScreen() {
             throw new Error(`Không có reel sau quét (cần reel chưa lưu tại index=${idx}).`)
           }
 
-          const canAppend = hasMoreReelsRef.current && appendRound < maxAppendRounds
+          const canAppend =
+            !feedAlreadyFullyScanned && hasMoreReelsRef.current && appendRound < maxAppendRounds
 
           if (!canAppend) {
             if (unsaved.length === 0) {
               throw new Error(
-                `Không có reel chưa lưu (${rows.length} reel đều đã lưu). Đã hết reel để quét thêm hoặc đạt giới hạn quét thêm (${maxAppendRounds} lần).`,
+                feedAlreadyFullyScanned
+                  ? `Không có reel chưa lưu (${rows.length} reel đều đã lưu). Fanpage đã quét hết — hãy «Quét lại» nếu có reel mới.`
+                  : `Không có reel chưa lưu (${rows.length} reel đều đã lưu). Đã hết reel để quét thêm hoặc đạt giới hạn quét thêm (${maxAppendRounds} lần).`,
               )
             }
             throw new Error(
-              `Không đủ reel chưa lưu tại index=${idx} (chỉ còn ${unsaved.length} reel chưa lưu).`,
+              feedAlreadyFullyScanned
+                ? `Không đủ reel chưa lưu tại index=${idx} (chỉ còn ${unsaved.length} reel chưa lưu). Fanpage đã quét hết — hãy «Quét lại» nếu cần thêm reel mới.`
+                : `Không đủ reel chưa lưu tại index=${idx} (chỉ còn ${unsaved.length} reel chưa lưu).`,
             )
           }
 
@@ -2725,29 +2756,51 @@ export default function FacebookScreen() {
                 </p>
               ) : null}
               {scannedReels.length > 0 ? (
-                <div className="flex gap-2">
-                  {hasMoreReels ? (
-                    <button
-                      type="button"
-                      onClick={() => handleScanReels(true)}
-                      disabled={isScanning}
-                      className="flex-1 cursor-pointer rounded-xl border border-blue-300/30 bg-blue-500/15 px-3 py-2 text-[11px] font-semibold text-blue-200 transition hover:bg-blue-500/25 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      Quét thêm
-                    </button>
-                  ) : null}
-                  <button
-                    type="button"
-                    onClick={() => void handleScanAllReels()}
-                    disabled={isScanning}
-                    className={`cursor-pointer rounded-xl border border-cyan-400/35 bg-cyan-500/15 px-3 py-2 text-[11px] font-semibold text-cyan-100 transition hover:bg-cyan-500/25 disabled:cursor-not-allowed disabled:opacity-50 ${hasMoreReels ? 'flex-1' : 'w-full'}`}
-                    title="Cuộn hết trang reels fanpage và lấy toàn bộ video còn lại (một lần)"
-                  >
-                    <span className="inline-flex items-center justify-center gap-1">
-                      <FiRefreshCw aria-hidden className={`h-3 w-3 ${isScanning ? 'animate-spin' : ''}`} />
-                      Quét hết
-                    </span>
-                  </button>
+                <div className="flex flex-col gap-2">
+                  {feedFullyScanned ? (
+                    <div className="flex flex-col gap-2">
+                      <p className="rounded-xl border border-emerald-400/25 bg-emerald-500/10 px-3 py-2 text-center text-[11px] text-emerald-100">
+                        Đã quét hết feed fanpage (theo bộ lọc lượt xem).
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => void handleRescanAllReels()}
+                        disabled={isScanning}
+                        className="cursor-pointer rounded-xl border border-cyan-400/35 bg-cyan-500/15 px-3 py-2 text-[11px] font-semibold text-cyan-100 transition hover:bg-cyan-500/25 disabled:cursor-not-allowed disabled:opacity-50"
+                        title="Cuộn lại toàn bộ feed và lấy reel mới (nếu có)"
+                      >
+                        <span className="inline-flex items-center justify-center gap-1">
+                          <FiRefreshCw aria-hidden className={`h-3 w-3 ${isScanning ? 'animate-spin' : ''}`} />
+                          Quét lại
+                        </span>
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="flex gap-2">
+                      {hasMoreReels && !feedFullyScanned ? (
+                        <button
+                          type="button"
+                          onClick={() => handleScanReels(true)}
+                          disabled={isScanning}
+                          className="flex-1 cursor-pointer rounded-xl border border-blue-300/30 bg-blue-500/15 px-3 py-2 text-[11px] font-semibold text-blue-200 transition hover:bg-blue-500/25 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          Quét thêm
+                        </button>
+                      ) : null}
+                      <button
+                        type="button"
+                        onClick={() => void handleScanAllReels()}
+                        disabled={isScanning}
+                        className={`cursor-pointer rounded-xl border border-cyan-400/35 bg-cyan-500/15 px-3 py-2 text-[11px] font-semibold text-cyan-100 transition hover:bg-cyan-500/25 disabled:cursor-not-allowed disabled:opacity-50 ${hasMoreReels ? 'flex-1' : 'w-full'}`}
+                        title="Cuộn hết trang reels fanpage và lấy toàn bộ video còn lại (một lần)"
+                      >
+                        <span className="inline-flex items-center justify-center gap-1">
+                          <FiRefreshCw aria-hidden className={`h-3 w-3 ${isScanning ? 'animate-spin' : ''}`} />
+                          Quét hết
+                        </span>
+                      </button>
+                    </div>
+                  )}
                 </div>
               ) : null}
               </div>
