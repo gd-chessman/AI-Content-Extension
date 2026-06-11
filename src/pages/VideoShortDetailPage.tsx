@@ -9,6 +9,7 @@ import {
   FiFilm,
   FiFolder,
   FiImage,
+  FiLayers,
   FiLink,
   FiRefreshCw,
   FiTable,
@@ -36,6 +37,18 @@ import {
   isGrokReady,
   pipelineProgress,
 } from '@/utils/videoShortHelpers'
+import {
+  isLocalVideoEntry,
+  parseLocalStoragePath,
+  readFileFromWorkspace,
+  writeBlobToWorkspace,
+} from '@/utils/localWorkspace'
+import {
+  isMergedVideoEntry,
+  mergeMp4Files,
+  mergedVideoRelativePathFromEntry,
+  upsertMergedVideoAddress,
+} from '@/utils/mergeLocalMp4Videos'
 import { renderTextWithQuotedHighlights } from '@/utils/renderQuotedHighlights'
 
 function Section({
@@ -112,6 +125,7 @@ export default function VideoShortDetailPage() {
   const [sheetMessage, setSheetMessage] = useState('')
   const [grokMessage, setGrokMessage] = useState('')
   const [videoActionMessage, setVideoActionMessage] = useState('')
+  const [mergeProgress, setMergeProgress] = useState(0)
   const [deleteVideoIndex, setDeleteVideoIndex] = useState<number | null>(null)
   const {
     workspaceRoot,
@@ -188,6 +202,51 @@ export default function VideoShortDetailPage() {
     },
     onError: (error: unknown) => {
       setVideoActionMessage(error instanceof Error ? error.message : 'Không thể xóa video.')
+    },
+  })
+
+  const mergeVideosMutation = useMutation({
+    mutationFn: async (item: VideoShortItem) => {
+      if (!workspaceRoot) {
+        throw new Error('Chọn thư mục làm việc để đọc và ghi video trên máy.')
+      }
+      const addresses = item.videoStorageAddresses || []
+      const entry0 = (addresses[0] || '').trim()
+      const entry1 = (addresses[1] || '').trim()
+      if (!isLocalVideoEntry(entry0) || !isLocalVideoEntry(entry1)) {
+        throw new Error('Ghép video chỉ hỗ trợ khi video 1 và 2 đều lưu local trên máy.')
+      }
+      const path0 = parseLocalStoragePath(entry0)
+      const path1 = parseLocalStoragePath(entry1)
+      if (!path0 || !path1) throw new Error('Không đọc được đường dẫn video.')
+      const file0 = await readFileFromWorkspace(workspaceRoot, path0)
+      const file1 = await readFileFromWorkspace(workspaceRoot, path1)
+      if (!file0 || !file1) {
+        throw new Error('Không đọc được file video 1 hoặc 2 — kiểm tra quyền thư mục làm việc.')
+      }
+      const mergedRelative = mergedVideoRelativePathFromEntry(entry0)
+      if (!mergedRelative) throw new Error('Không xác định được nơi lưu video ghép.')
+
+      setMergeProgress(0)
+      const blob = await mergeMp4Files(file0, file1, {
+        onProgress: (ratio) => setMergeProgress(Math.min(99, Math.round(ratio * 100))),
+      })
+      await writeBlobToWorkspace(workspaceRoot, mergedRelative, blob)
+      setMergeProgress(100)
+
+      return patchVideoShort(item._id, {
+        videoStorageAddresses: upsertMergedVideoAddress(addresses, mergedRelative),
+      })
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['video-shorts', 'detail', id] })
+      void queryClient.invalidateQueries({ queryKey: ['video-shorts', 'my'] })
+      setVideoActionMessage('Đã ghép video 1 + 2 thành video-merged.mp4 (hiển thị bên dưới).')
+      setMergeProgress(0)
+    },
+    onError: (error: unknown) => {
+      setMergeProgress(0)
+      setVideoActionMessage(error instanceof Error ? error.message : 'Không ghép được video.')
     },
   })
 
@@ -308,7 +367,11 @@ export default function VideoShortDetailPage() {
   const videos = videoAddresses.filter(Boolean)
   const videoSlotCount = Math.max(videoAddresses.length, stats.promptCount, 1)
   const prompts = (story.videoPrompts || []).filter(Boolean)
-  const isVideoActionPending = deleteVideoMutation.isPending || regenerateVideoMutation.isPending
+  const canMergeLocalVideos =
+    isLocalVideoEntry((videoAddresses[0] || '').trim()) &&
+    isLocalVideoEntry((videoAddresses[1] || '').trim())
+  const isVideoActionPending =
+    deleteVideoMutation.isPending || regenerateVideoMutation.isPending || mergeVideosMutation.isPending
   const heroImage = images[selectedImage] || stats.firstImage
   const canPushSheet = isGgSheetPushable(story)
   const sheetPushed = Boolean(story.ggsheetPush?.pushed)
@@ -442,7 +505,9 @@ export default function VideoShortDetailPage() {
                   return (
                     <div key={`video-slot-${idx}`} className="rounded-xl border border-white/10 bg-black/20 p-3">
                       <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                        <p className="text-xs font-medium text-slate-400">Video {idx + 1}</p>
+                        <p className="text-xs font-medium text-slate-400">
+                          {isMergedVideoEntry(entry) ? 'Video ghép (1+2)' : `Video ${idx + 1}`}
+                        </p>
                         <div className="flex flex-wrap items-center gap-2">
                           {canRegenerate ? (
                             <button
@@ -483,6 +548,35 @@ export default function VideoShortDetailPage() {
                     </div>
                   )
                 })}
+                {canMergeLocalVideos ? (
+                  <div className="rounded-xl border border-violet-500/25 bg-violet-500/8 p-3">
+                    <p className="text-xs text-slate-300">
+                      Ghép video 1 và video 2 thành một file MP4 (video 1 trước, video 2 sau). Lần đầu có thể mất vài
+                      phút để tải công cụ ghép.
+                    </p>
+                    <button
+                      type="button"
+                      disabled={isVideoActionPending || !workspaceRoot}
+                      onClick={() => {
+                        setVideoActionMessage('')
+                        mergeVideosMutation.mutate(story)
+                      }}
+                      className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-violet-500/35 bg-violet-500/15 px-3 py-1.5 text-xs font-medium text-violet-50 transition hover:bg-violet-500/25 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      <FiLayers className="h-3.5 w-3.5" />
+                      {mergeVideosMutation.isPending
+                        ? mergeProgress > 0
+                          ? `Đang ghép… ${mergeProgress}%`
+                          : 'Đang tải công cụ ghép…'
+                        : 'Ghép video 1 + 2'}
+                    </button>
+                    {!workspaceRoot ? (
+                      <p className="mt-2 text-[11px] text-amber-300/90">
+                        Chọn thư mục làm việc (cùng extension) và cho phép ghi khi trình duyệt hỏi.
+                      </p>
+                    ) : null}
+                  </div>
+                ) : null}
                 {!extensionOnline ? (
                   <p className="text-[11px] text-amber-300/90">
                     Extension đang offline — mở tab Grok trong extension trước khi tạo lại video.
