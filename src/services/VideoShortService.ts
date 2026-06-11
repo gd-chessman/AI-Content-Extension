@@ -42,6 +42,10 @@ export type GetMyVideoShortsParams = {
   q?: string
   hasLongContent?: boolean
   status?: string
+  /** YYYY-MM-DD — từ ngày tạo (múi giờ VN). */
+  dateFrom?: string
+  /** YYYY-MM-DD — đến ngày tạo (múi giờ VN). */
+  dateTo?: string
 }
 
 export const getMyVideoShorts = async (params?: GetMyVideoShortsParams) => {
@@ -52,6 +56,8 @@ export const getMyVideoShorts = async (params?: GetMyVideoShortsParams) => {
       ...(params?.q?.trim() ? { q: params.q.trim() } : {}),
       ...(params?.hasLongContent ? { hasLongContent: 'true' } : {}),
       ...(params?.status?.trim() ? { status: params.status.trim() } : {}),
+      ...(params?.dateFrom?.trim() ? { dateFrom: params.dateFrom.trim() } : {}),
+      ...(params?.dateTo?.trim() ? { dateTo: params.dateTo.trim() } : {}),
     },
   })
   return (response.data || {
