@@ -132,6 +132,53 @@ export async function pickContentRootDirectory(): Promise<FileSystemDirectoryHan
 }
 
 /** Đọc file từ workspace theo path sau prefix local: — vd. stories/my-story/videos/video-1.mp4 */
+export async function ensureDirectoryWritable(
+  handle: FileSystemDirectoryHandle,
+  options?: { allowRequest?: boolean },
+): Promise<boolean> {
+  const h = handle as FileSystemDirectoryHandle & {
+    queryPermission?: (opts: { mode: 'readwrite' }) => Promise<PermissionState>
+    requestPermission?: (opts: { mode: 'readwrite' }) => Promise<PermissionState>
+  }
+  if (!h.queryPermission) return true
+  let state = await h.queryPermission({ mode: 'readwrite' })
+  if (state === 'granted') return true
+  if (options?.allowRequest === false) return false
+  if (!h.requestPermission) return false
+  try {
+    state = await h.requestPermission({ mode: 'readwrite' })
+    return state === 'granted'
+  } catch {
+    return false
+  }
+}
+
+export async function writeBlobToWorkspace(
+  root: FileSystemDirectoryHandle,
+  relativePath: string,
+  blob: Blob,
+): Promise<void> {
+  const segments = relativePath.split('/').map((s) => s.trim()).filter(Boolean)
+  if (segments.length === 0) throw new Error('Đường dẫn lưu video không hợp lệ.')
+
+  const writable = await ensureDirectoryWritable(root, { allowRequest: true })
+  if (!writable) {
+    throw new Error('Chưa có quyền ghi thư mục làm việc — bấm ghép lại và cho phép ghi.')
+  }
+
+  let dir = root
+  for (let i = 0; i < segments.length - 1; i += 1) {
+    dir = await dir.getDirectoryHandle(segments[i], { create: true })
+  }
+  const fileHandle = await dir.getFileHandle(segments[segments.length - 1], { create: true })
+  const writer = await fileHandle.createWritable()
+  try {
+    await writer.write(blob)
+  } finally {
+    await writer.close()
+  }
+}
+
 export async function readFileFromWorkspace(
   root: FileSystemDirectoryHandle,
   relativePath: string,
