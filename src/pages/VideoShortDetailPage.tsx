@@ -36,6 +36,7 @@ import {
   isGrokReady,
   pipelineProgress,
 } from '@/utils/videoShortHelpers'
+import { renderTextWithQuotedHighlights } from '@/utils/renderQuotedHighlights'
 
 function Section({
   title,
@@ -619,8 +620,8 @@ export default function VideoShortDetailPage() {
                     <p className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-violet-300">
                       Prompt {index + 1}
                     </p>
-                    <p className="max-h-48 overflow-y-auto text-xs leading-relaxed whitespace-pre-wrap text-slate-300">
-                      {prompt}
+                    <p className="max-h-96 min-h-48 overflow-y-auto text-xs leading-relaxed whitespace-pre-wrap text-slate-300">
+                      {renderTextWithQuotedHighlights(prompt)}
                     </p>
                   </div>
                 ))}
