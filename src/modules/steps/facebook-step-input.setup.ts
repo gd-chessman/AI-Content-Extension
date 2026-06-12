@@ -117,7 +117,8 @@ export function sanitizeFacebookSelectReelInput(raw: Record<string, unknown>): R
 }
 
 export function sanitizeFacebookWaitContentInput(raw: Record<string, unknown>): Record<string, unknown> {
-  const minLength = positiveInt(raw.minLength) ?? 30
+  /** Khớp BE video-shorts `MIN_SOURCE_CONTENT_LENGTH` — tránh wait đủ 30 ký tự rồi save 400. */
+  const minLength = positiveInt(raw.minLength) ?? 256
   const timeoutMs = positiveInt(raw.timeoutMs) ?? 15_000
   const out: FacebookWaitContentInput = { minLength, timeoutMs }
   return out as Record<string, unknown>
