@@ -22,6 +22,7 @@ import {
   pickGrokTab,
   type GrokMediaBaseline,
 } from '@/utils/grokAutomation'
+import { GROK_VIDEO_PROMPT_SUFFIX, withGrokVideoPromptSuffix } from '@/utils/grokVideoPrompt'
 import {
   ensureVideoShortWorkspaceLayout,
   getVideoShortsFolderSegmentFromStorage,
@@ -153,6 +154,7 @@ export default function GrokScreen() {
     submittedAt: 0,
   })
   const grokRunPairIndexRef = useRef<number | null>(null)
+  const grokWorkspaceRootRef = useRef<FileSystemDirectoryHandle | null>(null)
   const pendingGrokRunsRef = useRef<Array<{ runId: string; workflowId: string }>>([])
 
   const enqueueGrokWorkflowRun = (run: { _id: string; workflowId: string }) => {
@@ -222,7 +224,7 @@ export default function GrokScreen() {
     imageDataUrl: string,
     options?: { part?: 1 | 2; single?: boolean; fromRetry?: boolean; submit?: boolean },
   ) => {
-    const trimmedPrompt = prompt.trim()
+    const trimmedPrompt = withGrokVideoPromptSuffix(prompt)
     if (!trimmedPrompt && !imageDataUrl) {
       setStatus('Không có nội dung để điền vào Grok.')
       return false
@@ -334,7 +336,12 @@ export default function GrokScreen() {
       setLastPrompt(prompt)
       setLastImageDataUrl(imageUrl)
       setGrokWorkflowStatus(`${step.label}: điền ảnh + VIDEO ${pairIndex + 1} và Enter…`)
-      const filled = await fillGrokFromVideoShortPair(tabId, prompt, imageUrl, { submit: true })
+      const filled = await fillGrokFromVideoShortPair(
+        tabId,
+        withGrokVideoPromptSuffix(prompt),
+        imageUrl,
+        { submit: true },
+      )
       grokVideoBaselineRef.current = {
         ...filled.videoBaseline,
         submittedAt: filled.submittedAt || filled.videoBaseline.submittedAt || Date.now(),
@@ -353,10 +360,15 @@ export default function GrokScreen() {
 
     if (isGrokCaptureVideoLinkStep(step)) {
       const timeoutMs = readGrokTimeoutMs(step.inputSchema)
-      setGrokWorkflowStatus(`${step.label}: chọn thư mục workspace để lưu video…`)
-      const root = await resolveWritableContentRootDirectory({ allowPicker: true, allowRequest: true })
+      let root = grokWorkspaceRootRef.current
       if (!root) {
-        throw new Error('Cần chọn thư mục workspace trên máy để lưu video Grok.')
+        root = await resolveWritableContentRootDirectory({ allowPicker: false, allowRequest: true })
+        if (root) grokWorkspaceRootRef.current = root
+      }
+      if (!root) {
+        throw new Error(
+          'Chưa có quyền ghi thư mục workspace. Vào Hồ sơ → Chọn thư mục gốc (hoặc Khôi phục quyền), rồi chạy lại Grok.',
+        )
       }
 
       const videoShortForFolder = await getVideoShortById(videoShortId)
@@ -456,7 +468,28 @@ export default function GrokScreen() {
     let mwErrorMessage = ''
 
     try {
+      grokWorkspaceRootRef.current = null
       grokPipelineVideoShortIdRef.current = ''
+
+      if (grokWorkflowSteps.some(isGrokCaptureVideoLinkStep)) {
+        const fromUserClick = options?.source !== 'sse'
+        setGrokWorkflowStatus(
+          fromUserClick ? 'Chọn / khôi phục quyền thư mục workspace…' : 'Khôi phục quyền thư mục workspace…',
+        )
+        const root = await resolveWritableContentRootDirectory({
+          allowPicker: fromUserClick,
+          allowRequest: true,
+        })
+        if (!root) {
+          setGrokWorkflowStatus(
+            fromUserClick
+              ? 'Cần chọn thư mục workspace (Hồ sơ → Cấu hình) để lưu video Grok.'
+              : 'Chưa có quyền workspace. Mở extension → Hồ sơ → chọn thư mục gốc, rồi chạy lại từ web.',
+          )
+          return
+        }
+        grokWorkspaceRootRef.current = root
+      }
 
       const grokTab = await pickGrokTab(true)
       lockedGrokTabIdRef.current = grokTab?.id || 0
@@ -602,6 +635,7 @@ export default function GrokScreen() {
       grokPipelineVideoShortIdRef.current = ''
       grokCapturedVideoUrlsRef.current = []
       grokRunPairIndexRef.current = null
+      grokWorkspaceRootRef.current = null
       isGrokWorkflowRunningRef.current = false
       setIsGrokWorkflowRunning(false)
       setIsGrokWorkflowStopping(false)
@@ -812,7 +846,14 @@ export default function GrokScreen() {
           </div>
         </div>
         <div className="mt-1 min-h-0 flex-1 overflow-y-auto whitespace-pre-wrap text-[11px] text-slate-200">
-          {lastPrompt ? renderTextWithQuotedHighlights(lastPrompt) : 'Chưa có dữ liệu.'}
+          {lastPrompt ? (
+            <>
+              {renderTextWithQuotedHighlights(lastPrompt)}
+              <p className="mt-3 border-t border-white/10 pt-3 text-slate-300">{GROK_VIDEO_PROMPT_SUFFIX}</p>
+            </>
+          ) : (
+            'Chưa có dữ liệu.'
+          )}
         </div>
       </div>
     </section>
