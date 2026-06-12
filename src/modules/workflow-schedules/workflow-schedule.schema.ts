@@ -90,6 +90,10 @@ export class WorkflowSchedule {
   @Prop({ default: 0, min: 0 })
   batchCompletedRuns: number;
 
+  /** Lỗi/skip liên tiếp trong batch hiện tại — reset khi một lần chạy thành công. */
+  @Prop({ default: 0, min: 0 })
+  batchConsecutiveFailures: number;
+
   @Prop({
     default: WorkflowScheduleBatchStatus.IDLE,
     enum: Object.values(WorkflowScheduleBatchStatus),

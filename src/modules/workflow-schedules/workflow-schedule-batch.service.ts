@@ -37,6 +37,9 @@ import {
 
 type ScheduleLean = WorkflowSchedule & { _id: Types.ObjectId };
 
+/** Dừng batch khi đủ số lần lỗi/skip liên tiếp (không reset giữa các lần thành công). */
+const MAX_CONSECUTIVE_BATCH_FAILURES = 3;
+
 export type ScheduleBatchPayload = {
   scheduleId?: string;
   scheduleBatch?: boolean;
@@ -109,6 +112,7 @@ export class WorkflowScheduleBatchService implements OnModuleInit {
           $set: {
             batchStatus: WorkflowScheduleBatchStatus.RUNNING,
             batchCompletedRuns: 0,
+            batchConsecutiveFailures: 0,
             batchStartedAt: triggeredAt,
             lastRunAt: triggeredAt,
             lastRunMessage: `Running batch 0/${consecutiveRuns}…`,
@@ -152,7 +156,7 @@ export class WorkflowScheduleBatchService implements OnModuleInit {
         batchIndex: null,
         batchTotal: null,
       });
-    } else {
+    } else if (result.status !== WorkflowScheduleLastRunStatus.SUCCESS) {
       await this.proceedBatchAfterSlot(String(schedule._id), 1, {
         type: 'skip',
         reason: result.message || 'Failed to start batch.',
@@ -291,6 +295,7 @@ export class WorkflowScheduleBatchService implements OnModuleInit {
     if (outcome.type === 'success') {
       schedule.lastRunMessage = `Completed run ${slotIndex}/${total}.`;
       schedule.lastRunStatus = WorkflowScheduleLastRunStatus.SUCCESS;
+      schedule.batchConsecutiveFailures = 0;
       await schedule.save();
 
       if (slotIndex >= total) {
@@ -307,6 +312,7 @@ export class WorkflowScheduleBatchService implements OnModuleInit {
     if (schedule.lastRunStatus !== WorkflowScheduleLastRunStatus.SUCCESS) {
       schedule.lastRunStatus = outcome.status;
     }
+    schedule.batchConsecutiveFailures = (schedule.batchConsecutiveFailures || 0) + 1;
     await schedule.save();
 
     await this.scheduleRunModel.create({
@@ -321,6 +327,17 @@ export class WorkflowScheduleBatchService implements OnModuleInit {
       batchIndex: slotIndex,
       batchTotal: total,
     });
+
+    if (schedule.batchConsecutiveFailures >= MAX_CONSECUTIVE_BATCH_FAILURES) {
+      await this.abortBatchAfterConsecutiveFailures(
+        schedule.toObject(),
+        slotIndex,
+        total,
+        outcome.reason,
+        outcome.refs,
+      );
+      return;
+    }
 
     if (slotIndex >= total) {
       await this.completeBatch(schedule.toObject(), outcome.refs || {}, { hadSkips: true });
@@ -360,6 +377,45 @@ export class WorkflowScheduleBatchService implements OnModuleInit {
     });
   }
 
+  private async abortBatchAfterConsecutiveFailures(
+    schedule: ScheduleLean,
+    failedAtIndex: number,
+    total: number,
+    reason: string,
+    refs?: { multiWorkflowRunId?: Types.ObjectId; workflowRunId?: Types.ObjectId },
+  ) {
+    const triggeredAt = schedule.batchStartedAt || new Date();
+    const message = `Batch stopped: ${MAX_CONSECUTIVE_BATCH_FAILURES} consecutive failures at run ${failedAtIndex}/${total} — ${reason}`;
+    const nextRunAt = this.computeNextAfterExecution(schedule, new Date());
+
+    await this.scheduleModel.updateOne(
+      { _id: schedule._id },
+      {
+        $set: {
+          batchStatus: WorkflowScheduleBatchStatus.FAILED,
+          batchConsecutiveFailures: 0,
+          lastRunStatus: WorkflowScheduleLastRunStatus.FAILED,
+          lastRunMessage: message,
+          lastRunAt: new Date(),
+          nextRunAt,
+        },
+      },
+    );
+
+    await this.scheduleRunModel.create({
+      scheduleId: schedule._id,
+      userId: schedule.userId,
+      triggeredAt,
+      status: WorkflowScheduleLastRunStatus.FAILED,
+      targetType: schedule.targetType,
+      multiWorkflowRunId: refs?.multiWorkflowRunId || null,
+      workflowRunId: refs?.workflowRunId || null,
+      message,
+      batchIndex: failedAtIndex,
+      batchTotal: total,
+    });
+  }
+
   private async completeBatch(
     schedule: ScheduleLean,
     refs: { multiWorkflowRunId?: Types.ObjectId; workflowRunId?: Types.ObjectId },
@@ -384,6 +440,7 @@ export class WorkflowScheduleBatchService implements OnModuleInit {
       {
         $set: {
           batchStatus: WorkflowScheduleBatchStatus.COMPLETED,
+          batchConsecutiveFailures: 0,
           lastRunStatus: finalStatus,
           lastRunMessage: finalMessage,
           lastRunAt: new Date(),

@@ -118,6 +118,7 @@ export class WorkflowSchedulesService {
       lastRunStatus: null,
       lastRunMessage: '',
       batchCompletedRuns: 0,
+      batchConsecutiveFailures: 0,
       batchStatus: WorkflowScheduleBatchStatus.IDLE,
       batchStartedAt: null,
       lockedAt: null,
