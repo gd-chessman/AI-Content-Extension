@@ -7,6 +7,7 @@ export type ChatgptExtractContentClipboardKind = 'title_plain' | 'title_styled' 
 
 export type ChatgptExtractContentCollectedForSheet = {
   title: string
+  titlePlain: string
   shortContent: string
   fullContent: string
 }
@@ -69,7 +70,27 @@ export function chatgptExtractContent(...args: unknown[]): ChatgptExtractContent
     return last
   }
 
-  const findExtractContentAssistantTurn = (turns: HTMLElement[], promptHint: string) => {
+  const userTurnMatchesExtractPrompt = (
+    userText: string,
+    hint: string,
+    workflowStepNo: number,
+    minOverlap: number,
+  ) => {
+    const userNorm = normalizeCompact(userText)
+    const hasStepLabel =
+      workflowStepNo > 0
+        ? new RegExp(`tiến trình\\s*${workflowStepNo}\\b|step\\s*${workflowStepNo}\\b`, 'i').test(userNorm)
+        : /tiến trình\s*\d+|step\s*\d+/i.test(userNorm)
+    const overlap = promptOverlapScore(userText, hint)
+    return hasStepLabel || overlap >= minOverlap
+  }
+
+  const findExtractContentAssistantTurn = (
+    turns: HTMLElement[],
+    hint: string,
+    workflowStepNo = 0,
+    minOverlap = 70,
+  ) => {
     const userTurns = turns.filter(
       (el) => (el.getAttribute('data-message-author-role') || '').toLowerCase() === 'user',
     )
@@ -77,10 +98,14 @@ export function chatgptExtractContent(...args: unknown[]): ChatgptExtractContent
     let best: { node: HTMLElement; rank: number } | null = null
     for (let i = userTurns.length - 1; i >= 0; i -= 1) {
       const userEl = userTurns[i]
-      const userNorm = normalizeCompact(userEl.innerText || '')
-      const hasStepLabel = /tiến trình\s*4|step\s*4/.test(userNorm)
-      const overlap = promptOverlapScore(userEl.innerText || '', promptHint)
-      if (!hasStepLabel && overlap < 70) continue
+      const userText = userEl.innerText || ''
+      if (!userTurnMatchesExtractPrompt(userText, hint, workflowStepNo, minOverlap)) continue
+      const userNorm = normalizeCompact(userText)
+      const hasStepLabel =
+        workflowStepNo > 0
+          ? new RegExp(`tiến trình\\s*${workflowStepNo}\\b|step\\s*${workflowStepNo}\\b`, 'i').test(userNorm)
+          : /tiến trình\s*4|step\s*4/.test(userNorm)
+      const overlap = promptOverlapScore(userText, hint)
       const assistant = lastAssistantAfterUser(turns, userEl)
       if (!assistant) continue
       if (!isExtractContentAssistantOutput(assistant.innerText || '')) continue
@@ -88,6 +113,40 @@ export function chatgptExtractContent(...args: unknown[]): ChatgptExtractContent
       if (!best || rank > best.rank) best = { node: assistant, rank }
     }
     return best?.node ?? null
+  }
+
+  const scrollElementWithTopInset = (el: HTMLElement) => {
+    const TOP_INSET_PX = 96
+    const prevScrollMarginTop = el.style.scrollMarginTop
+    el.style.scrollMarginTop = `${TOP_INSET_PX}px`
+    el.scrollIntoView({ block: 'start', inline: 'nearest', behavior: 'instant' })
+
+    const alignInScrollParent = (scrollParent: HTMLElement) => {
+      const er = el.getBoundingClientRect()
+      const pr = scrollParent.getBoundingClientRect()
+      const delta = er.top - pr.top - TOP_INSET_PX
+      if (Math.abs(delta) > 2) scrollParent.scrollTop += delta
+    }
+
+    let alignedMain = false
+    let parent: HTMLElement | null = el.parentElement
+    while (parent && parent !== document.body) {
+      const oy = window.getComputedStyle(parent).overflowY
+      if ((oy === 'auto' || oy === 'scroll' || oy === 'overlay') && parent.scrollHeight > parent.clientHeight + 8) {
+        alignInScrollParent(parent)
+        if (parent.matches('main, [role="log"]')) alignedMain = true
+      }
+      parent = parent.parentElement
+    }
+
+    if (!alignedMain) {
+      const main = document.querySelector<HTMLElement>('main, [role="log"]')
+      if (main && main.scrollHeight > main.clientHeight + 8) alignInScrollParent(main)
+    }
+
+    window.requestAnimationFrame(() => {
+      el.style.scrollMarginTop = prevScrollMarginTop
+    })
   }
 
   const promptHint = (() => {
@@ -98,6 +157,7 @@ export function chatgptExtractContent(...args: unknown[]): ChatgptExtractContent
         return ''
       case 'ready':
       case 'collect':
+      case 'prepare':
         if (typeof args[1] === 'string') return args[1]
         if (typeof args[2] === 'string') return args[2]
         return ''
@@ -106,11 +166,61 @@ export function chatgptExtractContent(...args: unknown[]): ChatgptExtractContent
     }
   })()
 
+  const workflowStepNo = (() => {
+    if (mode === 'prepare' && typeof args[2] === 'number') return args[2]
+    if (mode === 'ready' && typeof args[2] === 'number') return args[2]
+    if (mode === 'collect' && typeof args[2] === 'number') return args[2]
+    if (mode === 'clipboard' && typeof args[3] === 'number') return args[3]
+    return 0
+  })()
+
   switch (mode) {
+    case 'prepare': {
+      if (normalizeCompact(promptHint).length < 30) return false
+
+      const allTurns = Array.from(document.querySelectorAll<HTMLElement>('[data-message-author-role]'))
+      const userTurns = allTurns.filter(
+        (el) => (el.getAttribute('data-message-author-role') || '').toLowerCase() === 'user',
+      )
+
+      let scrolled = false
+      for (let i = userTurns.length - 1; i >= 0; i -= 1) {
+        const userEl = userTurns[i]
+        const userText = (userEl.innerText || userEl.textContent || '').trim()
+        if (!userText) continue
+        if (!userTurnMatchesExtractPrompt(userText, promptHint, workflowStepNo, 45)) continue
+        scrollElementWithTopInset(userEl)
+        const assistant = lastAssistantAfterUser(allTurns, userEl)
+        if (assistant) scrollElementWithTopInset(assistant)
+        scrolled = true
+        break
+      }
+
+      if (!scrolled || findExtractContentAssistantTurn(listThreadTurns(), promptHint, workflowStepNo) !== null) {
+        return scrolled || findExtractContentAssistantTurn(listThreadTurns(), promptHint, workflowStepNo) !== null
+      }
+
+      const scrollRoots = [
+        ...document.querySelectorAll<HTMLElement>('main, [role="log"]'),
+      ].filter((el) => el.scrollHeight > el.clientHeight + 40)
+      for (const root of scrollRoots) {
+        const max = Math.max(0, root.scrollHeight - root.clientHeight)
+        for (const ratio of [0.2, 0.35, 0.5, 0.65, 0.8]) {
+          root.scrollTop = Math.round(max * ratio)
+          if (findExtractContentAssistantTurn(listThreadTurns(), promptHint, workflowStepNo) !== null) {
+            const turn = findExtractContentAssistantTurn(listThreadTurns(), promptHint, workflowStepNo)
+            if (turn) scrollElementWithTopInset(turn)
+            return true
+          }
+        }
+      }
+
+      return findExtractContentAssistantTurn(listThreadTurns(), promptHint, workflowStepNo) !== null
+    }
     case 'ready': {
       if (normalizeCompact(promptHint).length < 30) return false
       const turns = listThreadTurns()
-      return findExtractContentAssistantTurn(turns, promptHint) !== null
+      return findExtractContentAssistantTurn(turns, promptHint, workflowStepNo) !== null
     }
     default:
       break
@@ -184,19 +294,22 @@ export function chatgptExtractContent(...args: unknown[]): ChatgptExtractContent
   const pickFull = (text: string) => pickFullBodyOnly(text).body
 
   const parseShortCutFromInject = (): { mode: 'percent' | 'lines'; min: number; max: number } => {
-    const tail = mode === 'clipboard' ? 3 : 2
-    const a = args[tail]
-    const b = args[tail + 1]
-    const c = args[tail + 2]
-    if (a === 'percent' || a === 'lines') {
+    const hintIdx = mode === 'clipboard' ? 2 : 1
+    for (let i = hintIdx + 1; i < args.length - 1; i += 1) {
+      const a = args[i]
+      if (a !== 'percent' && a !== 'lines') continue
+      const b = args[i + 1]
+      const c = args[i + 2]
       return {
         mode: a,
         min: typeof b === 'number' ? b : a === 'lines' ? 45 : 25,
         max: typeof c === 'number' ? c : a === 'lines' ? 100 : 45,
       }
     }
-    if (typeof a === 'number' && typeof b === 'number') {
-      return { mode: 'percent', min: a, max: b }
+    const legacyA = args[args.length - 2]
+    const legacyB = args[args.length - 1]
+    if (typeof legacyA === 'number' && typeof legacyB === 'number') {
+      return { mode: 'percent', min: legacyA, max: legacyB }
     }
     return { mode: 'percent', min: 25, max: 45 }
   }
@@ -552,7 +665,7 @@ export function chatgptExtractContent(...args: unknown[]): ChatgptExtractContent
     return finalizeShortContent(cut || '', raw, domBounds)
   }
 
-  const matchedAssistantNode = findExtractContentAssistantTurn(turns, promptHint)
+  const matchedAssistantNode = findExtractContentAssistantTurn(turns, promptHint, workflowStepNo)
   const raw = matchedAssistantNode ? normalize(matchedAssistantNode.innerText || '') : ''
   if (!raw) {
     switch (mode) {
@@ -576,6 +689,7 @@ export function chatgptExtractContent(...args: unknown[]): ChatgptExtractContent
     case 'collect':
       return {
         title: styledTitle,
+        titlePlain: plainTitle,
         shortContent,
         fullContent: pickFull(raw),
       }

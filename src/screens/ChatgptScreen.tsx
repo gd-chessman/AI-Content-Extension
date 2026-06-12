@@ -2416,12 +2416,26 @@ export default function ChatgptScreen() {
     }
     await sleep(240)
 
-    const readyResult = await extensionChrome.scripting.executeScript({
-      target: { tabId: target.id },
-      func: chatgptExtractContent as (...args: unknown[]) => unknown,
-      args: appendShortCutInjectArgs(['ready', promptHint], cutConfig),
-    })
-    const isReady = readyResult?.[0]?.result === true
+    const extractStepNo = extractStep.stepNo || 0
+
+    let isReady = false
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      await extensionChrome.scripting.executeScript({
+        target: { tabId: target.id },
+        func: chatgptExtractContent as (...args: unknown[]) => unknown,
+        args: ['prepare', promptHint, extractStepNo],
+      })
+      await sleep(attempt === 0 ? 280 : 360)
+
+      const readyResult = await extensionChrome.scripting.executeScript({
+        target: { tabId: target.id },
+        func: chatgptExtractContent as (...args: unknown[]) => unknown,
+        args: appendShortCutInjectArgs(['ready', promptHint, extractStepNo], cutConfig),
+      })
+      isReady = readyResult?.[0]?.result === true
+      if (isReady) break
+    }
+
     setExtractContentReady(isReady)
     if (!isReady) {
       if (copyToClipboard) {
@@ -2434,21 +2448,22 @@ export default function ChatgptScreen() {
 
     await extensionChrome.scripting.executeScript({
       target: { tabId: target.id },
-      func: chatgptWarmThreadScrollContainersPageScript as (...args: unknown[]) => unknown,
+      func: chatgptExtractContent as (...args: unknown[]) => unknown,
+      args: ['prepare', promptHint, extractStepNo],
     })
-    await sleep(140)
+    await sleep(220)
 
     await extensionChrome.scripting.executeScript({
       target: { tabId: target.id },
       func: chatgptScrollHighlightStep4ContentPageScript as (...args: unknown[]) => unknown,
       args: appendShortCutInjectArgs([kind, promptHint], cutConfig),
     })
-    await sleep(copyToClipboard ? 380 : 140)
+    await sleep(copyToClipboard ? 380 : 320)
 
     const result = await extensionChrome.scripting.executeScript({
       target: { tabId: target.id },
       func: chatgptExtractContent as (...args: unknown[]) => unknown,
-      args: appendShortCutInjectArgs(['clipboard', kind, promptHint], cutConfig),
+      args: appendShortCutInjectArgs(['clipboard', kind, promptHint, extractStepNo], cutConfig),
     })
 
     const extracted = ((result?.[0]?.result as string | undefined) || '').trim()
@@ -2490,22 +2505,63 @@ export default function ChatgptScreen() {
     }
     await sleep(240)
 
-    await snapChatgptThreadToBottomBeforeRead(target.id)
+    const cutConfig = await getShortContentCutConfigFromStorage(extensionChrome.storage?.local)
+    const extractStepNo = extractContentStep.stepNo || 0
+    const promptHint = extractContentPromptHint
 
-    const readyResult = await extensionChrome.scripting.executeScript({
-      target: { tabId: target.id },
-      func: chatgptExtractContent as (...args: unknown[]) => unknown,
-      args: ['ready', extractContentPromptHint],
-    })
-    if (readyResult?.[0]?.result !== true) {
+    let isReady = false
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      await extensionChrome.scripting.executeScript({
+        target: { tabId: target.id },
+        func: chatgptExtractContent as (...args: unknown[]) => unknown,
+        args: ['prepare', promptHint, extractStepNo],
+      })
+      await sleep(attempt === 0 ? 280 : 360)
+
+      const readyResult = await extensionChrome.scripting.executeScript({
+        target: { tabId: target.id },
+        func: chatgptExtractContent as (...args: unknown[]) => unknown,
+        args: appendShortCutInjectArgs(['ready', promptHint, extractStepNo], cutConfig),
+      })
+      isReady = readyResult?.[0]?.result === true
+      if (isReady) break
+    }
+
+    if (!isReady) {
       throw new Error(
         `Chưa có phản hồi «${extractContentStepLabel}» trên ChatGPT (hãy chạy xong bước trích nội dung trước).`,
       )
     }
 
-    const titlePlain = (await extractThreadContent('title_plain', { copyToClipboard: false })).trim()
-    const shortContent = (await extractThreadContent('content_short', { copyToClipboard: false })).trim()
-    const longContent = (await extractThreadContent('content_full', { copyToClipboard: false })).trim()
+    await extensionChrome.scripting.executeScript({
+      target: { tabId: target.id },
+      func: chatgptExtractContent as (...args: unknown[]) => unknown,
+      args: ['prepare', promptHint, extractStepNo],
+    })
+    await sleep(280)
+
+    await extensionChrome.scripting.executeScript({
+      target: { tabId: target.id },
+      func: chatgptScrollHighlightStep4ContentPageScript as (...args: unknown[]) => unknown,
+      args: appendShortCutInjectArgs(['collect', promptHint], cutConfig),
+    })
+    await sleep(500)
+
+    const collectResult = await extensionChrome.scripting.executeScript({
+      target: { tabId: target.id },
+      func: chatgptExtractContent as (...args: unknown[]) => unknown,
+      args: appendShortCutInjectArgs(['collect', promptHint, extractStepNo], cutConfig),
+    })
+    const collected = (collectResult?.[0]?.result || null) as {
+      titlePlain?: string
+      title?: string
+      shortContent?: string
+      fullContent?: string
+    } | null
+
+    const titlePlain = (collected?.titlePlain || collected?.title || '').trim()
+    const shortContent = (collected?.shortContent || '').trim()
+    const longContent = (collected?.fullContent || '').trim()
 
     if (!titlePlain || !shortContent || !longContent) {
       throw new Error(
