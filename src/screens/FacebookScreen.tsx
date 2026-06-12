@@ -242,6 +242,10 @@ const FB_REELS_SCAN_MAX_LS_KEY = 'facebookReelsScanMaxViews'
 const FB_SELECTED_FANPAGE_LS_KEY = 'facebookSelectedFanpageId'
 const FB_REELS_SCAN_HISTORY_PREFIX = 'facebookReelsScanHistory:'
 const FB_REELS_FEED_FULLY_SCANNED_PREFIX = 'facebookReelsFeedFullyScanned:'
+const FB_REELS_SCAN_META_PREFIX = 'facebookReelsScanMeta:'
+
+type FanpageScanViewBounds = { minViews: number; maxViews?: number }
+type FanpageScanMeta = { minViews: number; maxViews?: number }
 
 function scanHistoryStorageKey(fanpageId: string) {
   return `${FB_REELS_SCAN_HISTORY_PREFIX}${fanpageId}`
@@ -295,10 +299,60 @@ function writeScanHistoryForFanpage(fanpageId: string, reels: ScannedReel[]) {
   }
 }
 
+function scanMetaStorageKey(fanpageId: string) {
+  return `${FB_REELS_SCAN_META_PREFIX}${fanpageId}`
+}
+
+function writeScanMetaForFanpage(fanpageId: string, meta: FanpageScanMeta) {
+  try {
+    localStorage.setItem(scanMetaStorageKey(fanpageId), JSON.stringify(meta))
+  } catch {
+    /* ignore */
+  }
+}
+
+function readScanMetaForFanpage(fanpageId: string): FanpageScanMeta | null {
+  try {
+    const raw = localStorage.getItem(scanMetaStorageKey(fanpageId))
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as FanpageScanMeta
+    if (!parsed || typeof parsed.minViews !== 'number') return null
+    return parsed
+  } catch {
+    return null
+  }
+}
+
+function normalizeScanViewBounds(bounds: FanpageScanViewBounds): FanpageScanViewBounds {
+  const minViews = Math.max(1, Math.floor(bounds.minViews))
+  const maxViews =
+    bounds.maxViews != null && Number.isFinite(bounds.maxViews) && bounds.maxViews > 0
+      ? Math.floor(bounds.maxViews)
+      : undefined
+  return { minViews, ...(maxViews != null ? { maxViews } : {}) }
+}
+
+function scanViewBoundsMatch(meta: FanpageScanMeta, bounds: FanpageScanViewBounds) {
+  const b = normalizeScanViewBounds(bounds)
+  if (meta.minViews !== b.minViews) return false
+  const aMax = meta.maxViews ?? null
+  const bMax = b.maxViews ?? null
+  return aMax === bMax
+}
+
+function canReuseFullScanCache(fanpageId: string, bounds: FanpageScanViewBounds): boolean {
+  if (!readFeedFullyScannedForFanpage(fanpageId)) return false
+  if (readScanHistoryForFanpage(fanpageId).length === 0) return false
+  const meta = readScanMetaForFanpage(fanpageId)
+  if (!meta) return true
+  return scanViewBoundsMatch(meta, bounds)
+}
+
 function clearScanHistoryForFanpage(fanpageId: string) {
   try {
     localStorage.removeItem(scanHistoryStorageKey(fanpageId))
     localStorage.removeItem(feedFullyScannedStorageKey(fanpageId))
+    localStorage.removeItem(scanMetaStorageKey(fanpageId))
   } catch {
     /* ignore */
   }
@@ -311,7 +365,8 @@ function clearAllScanHistories() {
       const key = localStorage.key(i)
       if (
         key?.startsWith(FB_REELS_SCAN_HISTORY_PREFIX) ||
-        key?.startsWith(FB_REELS_FEED_FULLY_SCANNED_PREFIX)
+        key?.startsWith(FB_REELS_FEED_FULLY_SCANNED_PREFIX) ||
+        key?.startsWith(FB_REELS_SCAN_META_PREFIX)
       ) {
         keys.push(key)
       }
@@ -554,15 +609,32 @@ export default function FacebookScreen() {
     maxViewInputRef.current = maxViewInput
   }, [maxViewInput])
 
-  const getExtensionScanViewBounds = () => {
+  const getExtensionScanViewBounds = (): FanpageScanViewBounds => {
     const minViews = Number(minViewInputRef.current.replace(/[^\d]/g, '')) || MIN_VIEW_COUNT
     const maxDigits = maxViewInputRef.current.replace(/[^\d]/g, '')
     const maxParsed = maxDigits ? Number(maxDigits) : NaN
     const maxViews = Number.isFinite(maxParsed) && maxParsed > 0 ? maxParsed : undefined
-    return {
+    return normalizeScanViewBounds({
       minViews,
       ...(maxViews != null ? { maxViews } : {}),
+    })
+  }
+
+  const resolveWorkflowScanViewBounds = (
+    facebookCriteria?: Record<string, unknown>,
+  ): FanpageScanViewBounds => {
+    const bounds = getExtensionScanViewBounds()
+    const cMin = facebookCriteria?.minViews
+    const cMax = facebookCriteria?.maxViews
+    if (cMin !== undefined && cMin !== null && cMin !== '') {
+      const n = Number(cMin)
+      if (Number.isFinite(n) && n > 0) bounds.minViews = Math.floor(n)
     }
+    if (cMax !== undefined && cMax !== null && cMax !== '') {
+      const n = Number(cMax)
+      if (Number.isFinite(n) && n > 0) bounds.maxViews = Math.floor(n)
+    }
+    return normalizeScanViewBounds(bounds)
   }
 
   const resolveWorkflowFanpageId = (): string | null => {
@@ -1368,14 +1440,21 @@ export default function FacebookScreen() {
     }
 
     const existingUrls = append ? scannedReels.map((item) => item.url) : []
-    if (fullPass || !append) {
+    if (!append) {
       setFeedFullyScanned(false)
       const fanpageIdForFlag =
         selectedFanpageId ||
         fanpages.find((page) => workflowFanpageUrlRef.current && tabMatchesFanpageUrl(workflowFanpageUrlRef.current, page.url))
           ?._id ||
         ''
-      if (fanpageIdForFlag) writeFeedFullyScannedForFanpage(fanpageIdForFlag, false)
+      if (fanpageIdForFlag) {
+        writeFeedFullyScannedForFanpage(fanpageIdForFlag, false)
+        try {
+          localStorage.removeItem(scanMetaStorageKey(fanpageIdForFlag))
+        } catch {
+          /* ignore */
+        }
+      }
     }
     isScanningRef.current = true
     setIsScanning(true)
@@ -1650,7 +1729,17 @@ export default function FacebookScreen() {
         if (fullPass) {
           const fullyDone = Boolean(payload.reachedScrollEnd) && !payload.hitRoundLimit
           setFeedFullyScanned(fullyDone)
-          if (historyFanpageId) writeFeedFullyScannedForFanpage(historyFanpageId, fullyDone)
+          if (historyFanpageId) {
+            writeFeedFullyScannedForFanpage(historyFanpageId, fullyDone)
+            if (fullyDone) {
+              writeScanMetaForFanpage(historyFanpageId, {
+                minViews: minViewCount,
+                ...(Number.isFinite(maxViewCount) && maxViewCount !== Number.POSITIVE_INFINITY
+                  ? { maxViews: maxViewCount }
+                  : {}),
+              })
+            }
+          }
         }
         setScannedReels(mergedList)
         scanResultRef.current = mergedList
@@ -1721,10 +1810,22 @@ export default function FacebookScreen() {
   const runWorkflowFullPassScan = async (
     fanpageId: string | null,
     statusLine?: string,
-  ): Promise<ScannedReel[]> => {
-    if (fanpageId) {
-      writeFeedFullyScannedForFanpage(fanpageId, false)
-      setFeedFullyScanned(false)
+    viewBounds?: FanpageScanViewBounds,
+  ): Promise<{ rows: ScannedReel[]; fromCache: boolean }> => {
+    const bounds = viewBounds || getExtensionScanViewBounds()
+
+    if (fanpageId && canReuseFullScanCache(fanpageId, bounds)) {
+      const rows = mergeScanHistoryForFanpage(fanpageId)
+      setScannedReels(rows)
+      scanResultRef.current = rows
+      setFeedFullyScanned(true)
+      workflowFullScanDoneRef.current = true
+      if (statusLine) {
+        setFbWorkflowStatus(
+          `Workflow: dùng danh sách đã quét hết (${rows.length} reel) — bỏ qua bước quét.`,
+        )
+      }
+      return { rows, fromCache: true }
     }
 
     if (fanpageId) {
@@ -1740,7 +1841,7 @@ export default function FacebookScreen() {
     if (isScanningRef.current) {
       await waitScanIdle(600_000)
     } else {
-      handleScanReels(scanResultRef.current.length > 0, getExtensionScanViewBounds(), { fullPass: true })
+      handleScanReels(scanResultRef.current.length > 0, bounds, { fullPass: true })
       await waitForScanToStart(8_000)
       await waitScanIdle(600_000)
     }
@@ -1748,7 +1849,7 @@ export default function FacebookScreen() {
     await sleep(400)
     const rows = fanpageId ? mergeScanHistoryForFanpage(fanpageId) : scanResultRef.current
     workflowFullScanDoneRef.current = fanpageId ? readFeedFullyScannedForFanpage(fanpageId) : rows.length > 0
-    return rows
+    return { rows, fromCache: false }
   }
 
   const getWorkflowFallbackStepLimit = (
@@ -1787,7 +1888,7 @@ export default function FacebookScreen() {
     setActiveView('reels')
     await sleep(2500)
 
-    const rows = await runWorkflowFullPassScan(
+    const { rows } = await runWorkflowFullPassScan(
       fp._id,
       `Workflow: quét fanpage dự phòng (${step}/${totalFallback})…`,
     )
@@ -1814,7 +1915,14 @@ export default function FacebookScreen() {
 
   const handleRescanAllReels = async () => {
     setFeedFullyScanned(false)
-    if (selectedFanpageId) writeFeedFullyScannedForFanpage(selectedFanpageId, false)
+    if (selectedFanpageId) {
+      writeFeedFullyScannedForFanpage(selectedFanpageId, false)
+      try {
+        localStorage.removeItem(scanMetaStorageKey(selectedFanpageId))
+      } catch {
+        /* ignore */
+      }
+    }
     setScanStatus('Đang quét lại toàn bộ feed fanpage…')
     await handleScanAllReels()
   }
@@ -1969,17 +2077,19 @@ export default function FacebookScreen() {
         const baseFanpageIdx = workflowOpenedFanpageIndexRef.current
 
         let fanpageId = resolveWorkflowFanpageId()
+        const scanBounds = resolveWorkflowScanViewBounds(facebookCriteria)
         let scanPasses = 0
         let rows: ScannedReel[] = []
 
-        setFbWorkflowStatus('Workflow: đang quét hết feed fanpage (bắt buộc)…')
-        rows = await runWorkflowFullPassScan(
+        const scanOutcome = await runWorkflowFullPassScan(
           fanpageId,
           'Workflow: đang quét hết feed fanpage (bắt buộc)…',
+          scanBounds,
         )
-        scanPasses = 1
+        rows = scanOutcome.rows
+        scanPasses = scanOutcome.fromCache ? 0 : 1
 
-        let scanResult = { rows, scanPasses, skipped: false }
+        let scanResult = { rows, scanPasses, skipped: scanOutcome.fromCache }
 
         if (scanResult.rows.length === 0 && fallbackFanpageCount > 0 && baseFanpageIdx !== null && baseFanpageIdx >= 0) {
           for (let step = 1; step <= fallbackFanpageCount; step += 1) {
@@ -2043,6 +2153,7 @@ export default function FacebookScreen() {
           await runWorkflowFullPassScan(
             activeFanpageId,
             'Workflow: quét hết feed trước khi chọn reel…',
+            resolveWorkflowScanViewBounds(facebookCriteria),
           )
         } else if (activeFanpageId) {
           mergeScanHistoryForFanpage(activeFanpageId)
