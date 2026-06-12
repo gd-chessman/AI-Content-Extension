@@ -113,11 +113,12 @@ const QUICK_SCAN_ROUNDS = 55
 const QUICK_SCAN_STAGNANT = 5
 const QUICK_SCAN_WAIT_MS = 1100
 /** Mỗi lần inject ngắn — tránh treo tab Facebook (không chạy 6000 vòng một lúc). */
-const FULL_PASS_BATCH_ROUNDS = 16
+const FULL_PASS_BATCH_ROUNDS = 24
 const FULL_PASS_MAX_TOTAL_ROUNDS = 2400
-const FULL_PASS_STAGNANT_NEEDED = 8
-const FULL_PASS_EMPTY_BATCHES_TO_STOP = 2
-const FULL_PASS_WAIT_MS = 1200
+/** Chỉ khi đã tới cuối feed và liên tiếp không có reel mới đạt ngưỡng. */
+const FULL_PASS_STAGNANT_NEEDED = 10
+const FULL_PASS_EMPTY_BATCHES_TO_STOP = 3
+const FULL_PASS_WAIT_MS = 1400
 
 /** URL tab đang mở là trang reel (facebook.com/reel/, reel_id=, fb.watch). */
 function isFacebookReelPageUrl(urlString: string): boolean {
@@ -1367,9 +1368,14 @@ export default function FacebookScreen() {
     }
 
     const existingUrls = append ? scannedReels.map((item) => item.url) : []
-    if (!append && !fullPass) {
+    if (fullPass || !append) {
       setFeedFullyScanned(false)
-      if (selectedFanpageId) writeFeedFullyScannedForFanpage(selectedFanpageId, false)
+      const fanpageIdForFlag =
+        selectedFanpageId ||
+        fanpages.find((page) => workflowFanpageUrlRef.current && tabMatchesFanpageUrl(workflowFanpageUrlRef.current, page.url))
+          ?._id ||
+        ''
+      if (fanpageIdForFlag) writeFeedFullyScannedForFanpage(fanpageIdForFlag, false)
     }
     isScanningRef.current = true
     setIsScanning(true)
@@ -1559,7 +1565,6 @@ export default function FacebookScreen() {
 
             if (!batchResult) {
               if (accumulated.size > 0) {
-                reachedScrollEnd = true
                 stopped = true
                 setScanStatus(
                   `Quét hết dừng sớm — giữ ${accumulated.size} reel (tab Facebook có thể bị gián đoạn).`,
@@ -1669,9 +1674,13 @@ export default function FacebookScreen() {
             setScanStatus(
               `Đã quét ${addedCount > 0 ? `thêm ${addedCount} reel` : 'xong một đoạn'} (chạm giới hạn vòng cuộn). Cuộn fanpage thủ công xuống sâu hơn rồi bấm «Quét hết» lại. Tổng ${mergedCount} trong danh sách.`,
             )
-          } else {
+          } else if (payload.reachedScrollEnd) {
             setScanStatus(
               `Đã quét hết trang: thêm ${addedCount} reel. Tổng ${mergedCount} trong danh sách.`,
+            )
+          } else {
+            setScanStatus(
+              `Quét dừng sớm — thêm ${addedCount} reel, tổng ${mergedCount}. Chưa chắc đã hết feed; thử «Quét hết» lại hoặc cuộn fanpage sâu hơn.`,
             )
           }
         } else {
@@ -1713,9 +1722,9 @@ export default function FacebookScreen() {
     fanpageId: string | null,
     statusLine?: string,
   ): Promise<ScannedReel[]> => {
-    if (fanpageId && readFeedFullyScannedForFanpage(fanpageId)) {
-      workflowFullScanDoneRef.current = true
-      return mergeScanHistoryForFanpage(fanpageId)
+    if (fanpageId) {
+      writeFeedFullyScannedForFanpage(fanpageId, false)
+      setFeedFullyScanned(false)
     }
 
     if (fanpageId) {
@@ -1960,24 +1969,17 @@ export default function FacebookScreen() {
         const baseFanpageIdx = workflowOpenedFanpageIndexRef.current
 
         let fanpageId = resolveWorkflowFanpageId()
-        const skipped =
-          Boolean(fanpageId && readFeedFullyScannedForFanpage(fanpageId) && readScanHistoryForFanpage(fanpageId).length > 0)
         let scanPasses = 0
         let rows: ScannedReel[] = []
 
-        if (skipped && fanpageId) {
-          rows = mergeScanHistoryForFanpage(fanpageId)
-          workflowFullScanDoneRef.current = true
-        } else {
-          setFbWorkflowStatus('Workflow: đang quét hết feed fanpage (bắt buộc)…')
-          rows = await runWorkflowFullPassScan(
-            fanpageId,
-            'Workflow: đang quét hết feed fanpage (bắt buộc)…',
-          )
-          scanPasses = 1
-        }
+        setFbWorkflowStatus('Workflow: đang quét hết feed fanpage (bắt buộc)…')
+        rows = await runWorkflowFullPassScan(
+          fanpageId,
+          'Workflow: đang quét hết feed fanpage (bắt buộc)…',
+        )
+        scanPasses = 1
 
-        let scanResult = { rows, scanPasses, skipped }
+        let scanResult = { rows, scanPasses, skipped: false }
 
         if (scanResult.rows.length === 0 && fallbackFanpageCount > 0 && baseFanpageIdx !== null && baseFanpageIdx >= 0) {
           for (let step = 1; step <= fallbackFanpageCount; step += 1) {

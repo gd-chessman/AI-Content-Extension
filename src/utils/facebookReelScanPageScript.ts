@@ -338,20 +338,28 @@ export async function runFacebookReelScanBatch(
     }
 
     const root = findScrollRoot()
-    scrollFeedDown(root)
+    const didScroll = scrollFeedDown(root)
     await sleep(waitMs)
     scrapePass()
 
     const addedThisRound = uniqueByUrl.size - sizeBeforeRound
     const atBottom = isAtScrollBottom(root)
+    const cannotScrollFurther = atBottom || !didScroll
     lastAnchorCount = document.querySelectorAll('a[href*="/reel/"], a[href*="reel_id="]').length
 
     // Chỉ reset khi thực sự có reel mới — không tin anchorCount/DOM (FB ảo hóa list).
     if (addedThisRound > 0) {
       stagnantRounds = 0
       scrollRootStore.__aiContentFbScrollRoot = { el: root, at: Date.now() }
+    } else if (fullPass) {
+      // «Quét hết»: giữa feed có thể chưa có reel đạt ngưỡng lượt xem — vẫn phải cuộn tiếp.
+      if (cannotScrollFurther) {
+        stagnantRounds += 1
+      } else {
+        stagnantRounds = 0
+      }
     } else if (atBottom) {
-      stagnantRounds += fullPass ? 2 : 1
+      stagnantRounds += 1
     } else {
       stagnantRounds += 1
     }
@@ -359,8 +367,9 @@ export async function runFacebookReelScanBatch(
     roundsCompleted = round + 1
 
     if (stagnantRounds >= stagnantNeeded) {
-      reachedScrollEnd = true
-      break
+      reachedScrollEnd = fullPass ? cannotScrollFurther : true
+      if (reachedScrollEnd) break
+      stagnantRounds = stagnantNeeded - 1
     }
   }
 
