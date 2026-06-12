@@ -437,7 +437,7 @@ export class WorkflowSchedulesService {
       if (schedule.batchStatus === WorkflowScheduleBatchStatus.RUNNING) {
         batchProgressLabel = ` · Batch ${schedule.batchCompletedRuns}/${consecutiveRuns} (running)`;
       } else if (schedule.batchStatus === WorkflowScheduleBatchStatus.FAILED) {
-        batchProgressLabel = ` · Batch stopped at ${schedule.batchCompletedRuns}/${consecutiveRuns}`;
+        batchProgressLabel = ` · Batch lỗi tại ${schedule.batchCompletedRuns}/${consecutiveRuns} (phiên bản cũ)`;
       } else if (schedule.batchStatus === WorkflowScheduleBatchStatus.COMPLETED) {
         batchProgressLabel = ` · Batch ${consecutiveRuns}/${consecutiveRuns} done`;
       } else {

@@ -152,14 +152,12 @@ export class WorkflowScheduleBatchService implements OnModuleInit {
         batchIndex: null,
         batchTotal: null,
       });
-    } else if (result.status !== WorkflowScheduleLastRunStatus.SUCCESS) {
-      await this.failBatch(
-        schedule._id,
-        triggeredAt,
-        1,
-        consecutiveRuns,
-        result.message || 'Failed to start batch.',
-      );
+    } else {
+      await this.proceedBatchAfterSlot(String(schedule._id), 1, {
+        type: 'skip',
+        reason: result.message || 'Failed to start batch.',
+        status: WorkflowScheduleLastRunStatus.SKIPPED,
+      });
     }
 
     const refreshed = await this.scheduleModel.findById(schedule._id).lean();
@@ -241,31 +239,13 @@ export class WorkflowScheduleBatchService implements OnModuleInit {
     });
     if (!schedule) return;
 
-    const total = Math.max(1, schedule.consecutiveRuns || 1);
     if (batchIndex !== schedule.batchCompletedRuns + 1) {
       this.logger.warn(
         `Batch index mismatch schedule=${scheduleId} expected=${schedule.batchCompletedRuns + 1} got=${batchIndex}`,
       );
     }
 
-    schedule.batchCompletedRuns = batchIndex;
-    schedule.lastRunMessage = `Completed run ${batchIndex}/${total}.`;
-    schedule.lastRunStatus = WorkflowScheduleLastRunStatus.SUCCESS;
-    schedule.lastRunAt = new Date();
-    await schedule.save();
-
-    if (batchIndex >= total) {
-      await this.completeBatch(schedule.toObject(), refs);
-      return;
-    }
-
-    const nextIndex = batchIndex + 1;
-    const result = await this.spawnBatchRun(schedule.toObject(), nextIndex, new Date(), {
-      manual: false,
-    });
-    if (result.status !== WorkflowScheduleLastRunStatus.SUCCESS) {
-      await this.failBatch(schedule._id, new Date(), nextIndex, total, result.message);
-    }
+    await this.proceedBatchAfterSlot(scheduleId, batchIndex, { type: 'success', refs });
   }
 
   private async handleBatchRunFailure(
@@ -277,32 +257,135 @@ export class WorkflowScheduleBatchService implements OnModuleInit {
     const schedule = await this.scheduleModel.findById(scheduleId).lean();
     if (!schedule || schedule.batchStatus !== WorkflowScheduleBatchStatus.RUNNING) return;
 
-    const total = Math.max(1, schedule.consecutiveRuns || 1);
-    await this.failBatch(
-      schedule._id,
-      new Date(),
-      batchIndex,
-      total,
+    await this.proceedBatchAfterSlot(scheduleId, batchIndex, {
+      type: 'skip',
       reason,
+      status: WorkflowScheduleLastRunStatus.FAILED,
       refs,
-    );
+    });
+  }
+
+  /** Sau mỗi slot (thành công hoặc lỗi): ghi nhận và thử slot tiếp theo thay vì dừng batch. */
+  private async proceedBatchAfterSlot(
+    scheduleId: string,
+    slotIndex: number,
+    outcome:
+      | { type: 'success'; refs?: { multiWorkflowRunId?: Types.ObjectId; workflowRunId?: Types.ObjectId } }
+      | {
+          type: 'skip';
+          reason: string;
+          status: WorkflowScheduleLastRunStatus.SKIPPED | WorkflowScheduleLastRunStatus.FAILED;
+          refs?: { multiWorkflowRunId?: Types.ObjectId; workflowRunId?: Types.ObjectId };
+        },
+  ) {
+    const schedule = await this.scheduleModel.findOne({
+      _id: scheduleId,
+      batchStatus: WorkflowScheduleBatchStatus.RUNNING,
+    });
+    if (!schedule) return;
+
+    const total = Math.max(1, schedule.consecutiveRuns || 1);
+    schedule.batchCompletedRuns = slotIndex;
+    schedule.lastRunAt = new Date();
+
+    if (outcome.type === 'success') {
+      schedule.lastRunMessage = `Completed run ${slotIndex}/${total}.`;
+      schedule.lastRunStatus = WorkflowScheduleLastRunStatus.SUCCESS;
+      await schedule.save();
+
+      if (slotIndex >= total) {
+        await this.completeBatch(schedule.toObject(), outcome.refs || {}, { hadSkips: false });
+        return;
+      }
+
+      await this.spawnRemainingBatchSlots(schedule.toObject(), slotIndex + 1);
+      return;
+    }
+
+    const skipMessage = `Skipped run ${slotIndex}/${total}: ${outcome.reason}`;
+    schedule.lastRunMessage = skipMessage;
+    if (schedule.lastRunStatus !== WorkflowScheduleLastRunStatus.SUCCESS) {
+      schedule.lastRunStatus = outcome.status;
+    }
+    await schedule.save();
+
+    await this.scheduleRunModel.create({
+      scheduleId: schedule._id,
+      userId: schedule.userId,
+      triggeredAt: new Date(),
+      status: outcome.status,
+      targetType: schedule.targetType,
+      multiWorkflowRunId: outcome.refs?.multiWorkflowRunId || null,
+      workflowRunId: outcome.refs?.workflowRunId || null,
+      message: skipMessage,
+      batchIndex: slotIndex,
+      batchTotal: total,
+    });
+
+    if (slotIndex >= total) {
+      await this.completeBatch(schedule.toObject(), outcome.refs || {}, { hadSkips: true });
+      return;
+    }
+
+    await this.spawnRemainingBatchSlots(schedule.toObject(), slotIndex + 1);
+  }
+
+  /** Thử spawn một slot; không spawn được thì skip slot đó và chuyển tiếp qua `proceedBatchAfterSlot`. */
+  private async spawnRemainingBatchSlots(schedule: ScheduleLean, startIndex: number) {
+    const total = Math.max(1, schedule.consecutiveRuns || 1);
+    const scheduleId = String(schedule._id);
+
+    if (startIndex > total) {
+      await this.completeBatch(schedule, {}, { hadSkips: true });
+      return;
+    }
+
+    const current = await this.scheduleModel.findOne({
+      _id: scheduleId,
+      batchStatus: WorkflowScheduleBatchStatus.RUNNING,
+    });
+    if (!current) return;
+
+    const result = await this.spawnBatchRun(current.toObject(), startIndex, new Date(), {
+      manual: false,
+    });
+    if (result.status === WorkflowScheduleLastRunStatus.SUCCESS) {
+      return;
+    }
+
+    await this.proceedBatchAfterSlot(scheduleId, startIndex, {
+      type: 'skip',
+      reason: result.message || `Cannot start run ${startIndex}/${total}.`,
+      status: WorkflowScheduleLastRunStatus.SKIPPED,
+    });
   }
 
   private async completeBatch(
     schedule: ScheduleLean,
     refs: { multiWorkflowRunId?: Types.ObjectId; workflowRunId?: Types.ObjectId },
+    options?: { hadSkips?: boolean },
   ) {
     const triggeredAt = schedule.batchStartedAt || new Date();
     const total = Math.max(1, schedule.consecutiveRuns || 1);
     const nextRunAt = this.computeNextAfterExecution(schedule, new Date());
+    const hadSkips = options?.hadSkips === true;
+    const hadSuccess = schedule.lastRunStatus === WorkflowScheduleLastRunStatus.SUCCESS;
+    const finalStatus = hadSuccess
+      ? WorkflowScheduleLastRunStatus.SUCCESS
+      : hadSkips
+        ? WorkflowScheduleLastRunStatus.SKIPPED
+        : WorkflowScheduleLastRunStatus.SUCCESS;
+    const finalMessage = hadSkips
+      ? `Completed batch ${total}/${total} (some runs skipped on error).`
+      : `Completed batch ${total}/${total}.`;
 
     await this.scheduleModel.updateOne(
       { _id: schedule._id },
       {
         $set: {
           batchStatus: WorkflowScheduleBatchStatus.COMPLETED,
-          lastRunStatus: WorkflowScheduleLastRunStatus.SUCCESS,
-          lastRunMessage: `Completed batch ${total}/${total}.`,
+          lastRunStatus: finalStatus,
+          lastRunMessage: finalMessage,
           lastRunAt: new Date(),
           nextRunAt,
           ...(schedule.scheduleKind === WorkflowScheduleKind.ONCE && !nextRunAt
@@ -316,53 +399,12 @@ export class WorkflowScheduleBatchService implements OnModuleInit {
       scheduleId: schedule._id,
       userId: schedule.userId,
       triggeredAt,
-      status: WorkflowScheduleLastRunStatus.SUCCESS,
+      status: finalStatus,
       targetType: schedule.targetType,
       multiWorkflowRunId: refs.multiWorkflowRunId || null,
       workflowRunId: refs.workflowRunId || null,
-      message: `Completed batch ${total}/${total} consecutive runs.`,
+      message: finalMessage,
       batchIndex: total,
-      batchTotal: total,
-    });
-  }
-
-  private async failBatch(
-    scheduleId: Types.ObjectId,
-    triggeredAt: Date,
-    failedAtIndex: number,
-    total: number,
-    reason: string,
-    refs?: { multiWorkflowRunId?: Types.ObjectId; workflowRunId?: Types.ObjectId },
-  ) {
-    const schedule = await this.scheduleModel.findById(scheduleId).lean();
-    if (!schedule) return;
-
-    const message = `Batch stopped at run ${failedAtIndex}/${total}: ${reason}`;
-    const nextRunAt = this.computeNextAfterExecution(schedule, triggeredAt);
-
-    await this.scheduleModel.updateOne(
-      { _id: scheduleId },
-      {
-        $set: {
-          batchStatus: WorkflowScheduleBatchStatus.FAILED,
-          lastRunStatus: WorkflowScheduleLastRunStatus.FAILED,
-          lastRunMessage: message,
-          lastRunAt: triggeredAt,
-          nextRunAt,
-        },
-      },
-    );
-
-    await this.scheduleRunModel.create({
-      scheduleId,
-      userId: schedule.userId,
-      triggeredAt: schedule.batchStartedAt || triggeredAt,
-      status: WorkflowScheduleLastRunStatus.FAILED,
-      targetType: schedule.targetType,
-      multiWorkflowRunId: refs?.multiWorkflowRunId || null,
-      workflowRunId: refs?.workflowRunId || null,
-      message,
-      batchIndex: failedAtIndex,
       batchTotal: total,
     });
   }
