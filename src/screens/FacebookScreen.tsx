@@ -199,12 +199,28 @@ function mergeFacebookStepCriteria(
       break
     case 'facebook_select_reel':
       assignIf(['index', 'maxAppendRounds'])
+      if (
+        criteria.fallbackFanpageCount !== undefined &&
+        criteria.fallbackFanpageCount !== null &&
+        criteria.fallbackFanpageCount !== ''
+      ) {
+        const n = Number(criteria.fallbackFanpageCount)
+        if (Number.isFinite(n) && n >= 0) inputSchema.fallbackFanpageCount = Math.floor(n)
+      }
       if (inputSchema.index === undefined && criteria.reelIndex !== undefined) {
         inputSchema.index = criteria.reelIndex
       }
       break
     case 'facebook_wait_content':
       assignIf(['minLength', 'timeoutMs'])
+      if (
+        criteria.fallbackFanpageCount !== undefined &&
+        criteria.fallbackFanpageCount !== null &&
+        criteria.fallbackFanpageCount !== ''
+      ) {
+        const n = Number(criteria.fallbackFanpageCount)
+        if (Number.isFinite(n) && n >= 0) inputSchema.fallbackFanpageCount = Math.floor(n)
+      }
       break
     default:
       break
@@ -1733,6 +1749,49 @@ export default function FacebookScreen() {
     return rows
   }
 
+  const getWorkflowFallbackStepLimit = (
+    originIdx: number | null,
+    rawConfigured: unknown,
+    tryAllRemainingWhenUnset: boolean,
+  ) => {
+    let configured = 0
+    if (rawConfigured !== undefined && rawConfigured !== null && rawConfigured !== '') {
+      const n = Number(rawConfigured)
+      if (Number.isFinite(n) && n >= 0) configured = Math.floor(n)
+    }
+    if (configured > 0) return configured
+    if (!tryAllRemainingWhenUnset) return 0
+    if (originIdx != null && originIdx >= 0) return Math.max(0, fanpages.length - 1 - originIdx)
+    return Math.max(0, fanpages.length - 1)
+  }
+
+  const openAndScanFallbackFanpage = async (
+    originIdx: number,
+    step: number,
+    totalFallback: number,
+    reason: string,
+  ): Promise<{ fanpageId: string; rows: ScannedReel[] } | null> => {
+    const nextIdx = originIdx + step
+    if (nextIdx >= fanpages.length) return null
+    const fp = fanpages[nextIdx]
+    const nextUrl = fp?.url?.trim()
+    if (!nextUrl || !fp?._id) return null
+
+    setFbWorkflowStatus(`Workflow: chuyển fanpage dự phòng ${step}/${totalFallback} — ${reason}`)
+    openFanpage(nextUrl)
+    workflowFanpageUrlRef.current = nextUrl
+    workflowOpenedFanpageIndexRef.current = nextIdx
+    setSelectedFanpageId(fp._id)
+    setActiveView('reels')
+    await sleep(2500)
+
+    const rows = await runWorkflowFullPassScan(
+      fp._id,
+      `Workflow: quét fanpage dự phòng (${step}/${totalFallback})…`,
+    )
+    return { fanpageId: fp._id, rows }
+  }
+
   const handleScanAllReels = async () => {
     if (isScanningRef.current) return
     if (scannedReels.length === 0) {
@@ -1927,29 +1986,17 @@ export default function FacebookScreen() {
 
         let scanResult = { rows, scanPasses, skipped }
 
-        if (
-          scanResult.rows.length === 0 &&
-          fallbackFanpageCount > 0 &&
-          baseFanpageIdx !== null &&
-          baseFanpageIdx >= 0
-        ) {
+        if (scanResult.rows.length === 0 && fallbackFanpageCount > 0 && baseFanpageIdx !== null && baseFanpageIdx >= 0) {
           for (let step = 1; step <= fallbackFanpageCount; step += 1) {
-            const nextIdx = baseFanpageIdx + step
-            if (nextIdx >= fanpages.length) break
-            const fp = fanpages[nextIdx]
-            const nextUrl = fp?.url?.trim()
-            if (!nextUrl) continue
-            openFanpage(nextUrl)
-            workflowFanpageUrlRef.current = nextUrl
-            workflowOpenedFanpageIndexRef.current = nextIdx
-            setSelectedFanpageId(fp._id)
-            setActiveView('reels')
-            await sleep(2500)
-            fanpageId = fp._id
-            rows = await runWorkflowFullPassScan(
-              fanpageId,
-              `Workflow: quét hết fanpage dự phòng (${step}/${fallbackFanpageCount})…`,
+            const switched = await openAndScanFallbackFanpage(
+              baseFanpageIdx,
+              step,
+              fallbackFanpageCount,
+              'quét trống',
             )
+            if (!switched) break
+            fanpageId = switched.fanpageId
+            rows = switched.rows
             scanResult = { rows, scanPasses: scanPasses + 1, skipped: false }
             scanPasses += 1
             if (scanResult.rows.length > 0) break
@@ -1973,18 +2020,42 @@ export default function FacebookScreen() {
           schema.maxAppendRounds != null && Number.isFinite(Number(schema.maxAppendRounds))
             ? Math.max(0, Number(schema.maxAppendRounds))
             : 8
-        const fanpageId = resolveWorkflowFanpageId()
+        const originFanpageIdx = workflowOpenedFanpageIndexRef.current
+        const maxFallbackSteps = getWorkflowFallbackStepLimit(
+          originFanpageIdx,
+          schema.fallbackFanpageCount,
+          true,
+        )
+        let fallbackStepsUsed = 0
+        let activeFanpageId = resolveWorkflowFanpageId()
+
+        const attemptFallbackFanpage = async (reason: string): Promise<boolean> => {
+          if (originFanpageIdx === null || originFanpageIdx < 0) return false
+          if (fallbackStepsUsed >= maxFallbackSteps) return false
+          fallbackStepsUsed += 1
+          const switched = await openAndScanFallbackFanpage(
+            originFanpageIdx,
+            fallbackStepsUsed,
+            maxFallbackSteps,
+            reason,
+          )
+          if (!switched) return false
+          activeFanpageId = switched.fanpageId
+          return true
+        }
 
         if (!workflowFullScanDoneRef.current) {
           await runWorkflowFullPassScan(
-            fanpageId,
+            activeFanpageId,
             'Workflow: quét hết feed trước khi chọn reel…',
           )
-        } else if (fanpageId) {
-          mergeScanHistoryForFanpage(fanpageId)
+        } else if (activeFanpageId) {
+          mergeScanHistoryForFanpage(activeFanpageId)
         }
 
-        const feedAlreadyFullyScanned = fanpageId ? readFeedFullyScannedForFanpage(fanpageId) : false
+        let feedAlreadyFullyScanned = activeFanpageId
+          ? readFeedFullyScannedForFanpage(activeFanpageId)
+          : false
         if (!workflowFullScanDoneRef.current && !feedAlreadyFullyScanned) {
           throw new Error(
             `Chưa quét hết feed (${scanResultRef.current.length} reel trong danh sách). Giữ tab Reels fanpage mở rồi chạy lại workflow.`,
@@ -2005,7 +2076,10 @@ export default function FacebookScreen() {
         while (true) {
           if (fbWorkflowStopRef.current) throw new Error('Đã dừng workflow')
 
-          if (fanpageId) mergeScanHistoryForFanpage(fanpageId)
+          if (activeFanpageId) mergeScanHistoryForFanpage(activeFanpageId)
+          feedAlreadyFullyScanned = activeFanpageId
+            ? readFeedFullyScannedForFanpage(activeFanpageId)
+            : false
 
           const sources = await queryClient.fetchQuery({
             queryKey: ['video-shorts', 'sources', 'my'],
@@ -2032,10 +2106,15 @@ export default function FacebookScreen() {
               unsavedCount: unsaved.length,
               totalScanned: rows.length,
               appendRoundsUsed: appendRound,
+              fallbackFanpagesUsed: fallbackStepsUsed,
             }
           }
 
           if (rows.length === 0) {
+            if (await attemptFallbackFanpage('không có reel sau quét')) {
+              appendRound = 0
+              continue
+            }
             throw new Error(`Không có reel sau quét (cần reel chưa lưu tại index=${idx}).`)
           }
 
@@ -2043,10 +2122,14 @@ export default function FacebookScreen() {
 
           if (!canAppend) {
             if (unsaved.length === 0) {
+              if (await attemptFallbackFanpage('tất cả reel đã lưu')) {
+                appendRound = 0
+                continue
+              }
               throw new Error(
                 feedAlreadyFullyScanned
-                  ? `Không có reel chưa lưu (${rows.length} reel trong danh sách đều đã lưu). Fanpage đã quét hết — bấm «Quét lại» trên tab Reels nếu có video mới trên Facebook.`
-                  : `Không có reel chưa lưu (${rows.length} reel đều đã lưu). Thử «Quét hết» thủ công hoặc hạ ngưỡng lượt xem tối thiểu.`,
+                  ? `Không có reel chưa lưu (${rows.length} reel đều đã lưu). Đã thử ${fallbackStepsUsed} fanpage dự phòng — thêm fanpage hoặc «Quét lại» khi có reel mới.`
+                  : `Không có reel chưa lưu (${rows.length} reel đều đã lưu). Đã thử ${fallbackStepsUsed} fanpage dự phòng — hạ ngưỡng lượt xem hoặc thêm fanpage.`,
               )
             }
             throw new Error(
@@ -2068,15 +2151,41 @@ export default function FacebookScreen() {
         const maxSkipAttempts = Math.max(scanResultRef.current.length, 1)
         let skippedCount = 0
         const skippedUrls: string[] = []
+        const waitOriginFanpageIdx = workflowOpenedFanpageIndexRef.current
+        const maxWaitFallbackSteps = getWorkflowFallbackStepLimit(
+          waitOriginFanpageIdx,
+          schema.fallbackFanpageCount,
+          true,
+        )
+        let waitFallbackStepsUsed = 0
+
+        const attemptWaitFallbackFanpage = async (reason: string): Promise<boolean> => {
+          if (waitOriginFanpageIdx === null || waitOriginFanpageIdx < 0) return false
+          if (waitFallbackStepsUsed >= maxWaitFallbackSteps) return false
+          waitFallbackStepsUsed += 1
+          const switched = await openAndScanFallbackFanpage(
+            waitOriginFanpageIdx,
+            waitFallbackStepsUsed,
+            maxWaitFallbackSteps,
+            reason,
+          )
+          return Boolean(switched)
+        }
 
         while (skippedCount <= maxSkipAttempts) {
           if (fbWorkflowStopRef.current) throw new Error('Đã dừng workflow')
 
           let current = selectedReelRef.current
           if (!current?.url) {
-            const unsaved = await fetchUnsavedScannedReels()
-            if (!unsaved.length) {
+            let unsaved = await fetchUnsavedScannedReels()
+            if (!unsaved.length && !(await attemptWaitFallbackFanpage('hết reel chưa xử lý'))) {
               throw new Error('Không còn reel chưa xử lý để chờ caption.')
+            }
+            if (!unsaved.length) {
+              unsaved = await fetchUnsavedScannedReels()
+            }
+            if (!unsaved.length) {
+              continue
             }
             handleSelectReel(unsaved[0])
             await sleep(900)
@@ -2116,9 +2225,18 @@ export default function FacebookScreen() {
 
           const unsaved = await fetchUnsavedScannedReels()
           if (!unsaved.length) {
+            if (await attemptWaitFallbackFanpage('caption timeout — hết reel trên fanpage')) {
+              const nextUnsaved = await fetchUnsavedScannedReels()
+              if (nextUnsaved.length) {
+                handleSelectReel(nextUnsaved[0])
+                await sleep(900)
+                continue
+              }
+              continue
+            }
             throw new Error(
               skippedCount > 0
-                ? `Đã bỏ qua ${skippedCount} reel (caption timeout) — không còn reel chưa xử lý.`
+                ? `Đã bỏ qua ${skippedCount} reel (caption timeout) — không còn reel chưa xử lý (đã thử ${waitFallbackStepsUsed} fanpage dự phòng).`
                 : 'Timeout chờ nội dung caption đủ dài',
             )
           }
