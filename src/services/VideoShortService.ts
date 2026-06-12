@@ -1,5 +1,8 @@
 import axiosClient from '@/utils/axiosClient'
 
+/** Khớp BE `MIN_SOURCE_CONTENT_LENGTH` — caption reel phải đủ dài mới sync được. */
+export const MIN_VIDEO_SOURCE_CONTENT_LENGTH = 256
+
 export type VideoShortItem = {
   _id: string
   userId: string

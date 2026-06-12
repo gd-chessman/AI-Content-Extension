@@ -33,9 +33,11 @@ import {
 import {
   checkVideoSourceForReel,
   getMyVideoSources,
+  MIN_VIDEO_SOURCE_CONTENT_LENGTH,
   skipVideoSourceFromReel,
   syncVideoSourceFromReel,
 } from '@/services/VideoShortService'
+import { getAxiosErrorMessage } from '@/utils/axiosClient'
 import { normalizeStepDisplayMode } from '@/utils/stepDisplayMode'
 import {
   createStepRun,
@@ -1284,32 +1286,19 @@ export default function FacebookScreen() {
         const description = (result?.[0]?.result as string | undefined) || ''
         if (!description.trim()) return
 
+        const prevDescription = (targetReel.description || '').trim()
         const next: ScannedReel = {
           ...targetReel,
           description,
         }
-        setSelectedReel(next)
+        if (description !== prevDescription) {
+          setSelectedReel(next)
+        }
         if (!isContentDirtyRef.current) {
           const content = buildContentText(next)
           setContentText(content)
           setOriginalContentText(content)
           setIsContentTranslated(false)
-        }
-        if (isFbWorkflowRunningRef.current) {
-          void syncVideoSourceFromReel({
-            sourceReelUrl: targetReel.url.trim(),
-            sourceContent: description.trim(),
-            name: (targetReel.title || '').trim().slice(0, 200),
-          })
-            .then(() => {
-              void queryClient.invalidateQueries({
-                queryKey: ['video-shorts', 'sources', 'check-reel', targetReel.url],
-              })
-              void queryClient.invalidateQueries({ queryKey: ['video-shorts', 'sources', 'my'] })
-            })
-            .catch(() => {
-              /* chưa đăng nhập hoặc lỗi mạng — bỏ qua */
-            })
         }
       } catch {
         // ignore
@@ -1317,13 +1306,17 @@ export default function FacebookScreen() {
     })
   }
 
+  const selectedReelUrl = selectedReel?.url?.trim() || ''
+
   useEffect(() => {
-    if (activeView !== 'content' || !selectedReel) return
+    if (activeView !== 'content' || !selectedReelUrl) return
     const timeouts: number[] = []
     const schedule = [400, 1100, 2200, 3800]
     schedule.forEach((delay) => {
       const id = window.setTimeout(() => {
-        refreshSelectedReelFromFacebook(selectedReel)
+        const reel = selectedReelRef.current
+        if (!reel?.url || reel.url.trim() !== selectedReelUrl) return
+        refreshSelectedReelFromFacebook(reel)
       }, delay)
       timeouts.push(id)
     })
@@ -1331,7 +1324,7 @@ export default function FacebookScreen() {
     return () => {
       timeouts.forEach((id) => window.clearTimeout(id))
     }
-  }, [activeView, selectedReel])
+  }, [activeView, selectedReelUrl])
 
   /** Khi workflow gọi ngay sau setMinViewInput, state React chưa kịp cập nhật — phải truyền bounds trực tiếp. */
   const handleScanReels = (
@@ -2146,7 +2139,10 @@ export default function FacebookScreen() {
         }
       }
       case 'facebook_wait_content': {
-        const minLen = schema.minLength != null ? Number(schema.minLength) : 30
+        const minLen = Math.max(
+          schema.minLength != null ? Number(schema.minLength) : MIN_VIDEO_SOURCE_CONTENT_LENGTH,
+          MIN_VIDEO_SOURCE_CONTENT_LENGTH,
+        )
         const timeoutMs = 15_000
         const maxSkipAttempts = Math.max(scanResultRef.current.length, 1)
         let skippedCount = 0
@@ -2253,6 +2249,11 @@ export default function FacebookScreen() {
         const sr = selectedReelRef.current
         const text = contentTextRef.current.trim()
         if (!sr?.url || !text) throw new Error('Thiếu reel hoặc nội dung để lưu')
+        if (text.length < MIN_VIDEO_SOURCE_CONTENT_LENGTH) {
+          throw new Error(
+            `Caption quá ngắn (${text.length}/${MIN_VIDEO_SOURCE_CONTENT_LENGTH} ký tự). Chờ đủ nội dung hoặc chọn reel khác.`,
+          )
+        }
         try {
           const saved = await syncVideoSourceFromReel({
             sourceContent: text,
@@ -2267,7 +2268,7 @@ export default function FacebookScreen() {
           if (isAxiosError(e) && e.response?.status === 409) {
             return { skipped: true, reason: 'duplicate_reel' }
           }
-          throw e
+          throw new Error(getAxiosErrorMessage(e, 'Không lưu được nguồn reel.'))
         }
       }
       default:

@@ -52,6 +52,7 @@ import {
   getMyVideoShorts,
   getMyVideoSources,
 } from '@/services/VideoShortService'
+import { getAxiosErrorMessage } from '@/utils/axiosClient'
 import { uploadVideoShortImagesFromDataUrls } from '@/services/CloudinaryUploadService'
 import { chatgptExtractContent } from '@/utils/chatgptExtractContent'
 import {
@@ -276,9 +277,10 @@ async function createVideoShortForPipelineRun(
     }
     return { videoShortId }
   } catch (err) {
-    const msg =
-      err instanceof Error ? err.message : typeof err === 'string' ? err : 'Không tạo được video ngắn trên máy chủ.'
-    return { videoShortId: '', error: msg }
+    return {
+      videoShortId: '',
+      error: getAxiosErrorMessage(err, 'Không tạo được video ngắn trên máy chủ.'),
+    }
   }
 }
 

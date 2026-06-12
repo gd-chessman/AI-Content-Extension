@@ -1,4 +1,4 @@
-import axios, { AxiosError, InternalAxiosRequestConfig } from "axios"
+import axios, { AxiosError, InternalAxiosRequestConfig, isAxiosError } from "axios"
 
 type RetryableRequestConfig = InternalAxiosRequestConfig & { _retry?: boolean }
 
@@ -40,5 +40,22 @@ axiosClient.interceptors.response.use(
     return Promise.reject(error)
   },
 )
+
+/** Lấy message từ NestJS (`message` string hoặc mảng) thay vì "Request failed with status code 4xx". */
+export function getAxiosErrorMessage(error: unknown, fallback = "Request failed"): string {
+  if (!isAxiosError(error)) {
+    return error instanceof Error ? error.message : fallback
+  }
+  const data = error.response?.data
+  if (data && typeof data === "object" && "message" in data) {
+    const msg = (data as { message?: unknown }).message
+    if (typeof msg === "string" && msg.trim()) return msg.trim()
+    if (Array.isArray(msg)) {
+      const joined = msg.map((s) => String(s ?? "").trim()).filter(Boolean).join(", ")
+      if (joined) return joined
+    }
+  }
+  return error.message || fallback
+}
 
 export default axiosClient
