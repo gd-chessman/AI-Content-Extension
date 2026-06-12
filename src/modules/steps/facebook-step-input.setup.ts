@@ -28,6 +28,8 @@ export type FacebookScanReelsInput = {
 export type FacebookSelectReelInput = {
   index?: number;
   maxAppendRounds?: number;
+  /** Số fanpage tiếp theo để thử khi không còn reel chưa lưu (0 = thử hết fanpage còn lại trên FE). */
+  fallbackFanpageCount?: number;
 };
 
 export type FacebookWaitContentInput = {
@@ -109,6 +111,8 @@ export function sanitizeFacebookSelectReelInput(raw: Record<string, unknown>): R
     index: index ?? 0,
     maxAppendRounds: maxAppend ?? FACEBOOK_SELECT_DEFAULT_MAX_APPEND_ROUNDS,
   }
+  const fc = intNonNeg(raw.fallbackFanpageCount)
+  if (fc !== undefined) out.fallbackFanpageCount = fc
   return out as Record<string, unknown>
 }
 
