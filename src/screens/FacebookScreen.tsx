@@ -1515,11 +1515,15 @@ export default function FacebookScreen() {
       const { fanpageUrl, fullPass: fullPassInner, append: appendInner, prevCountAtStart, totalMatched } = options
       const historyFanpageId = resolveScanFanpageId(fanpageUrl)
       const mergedList = (() => {
-        if (fullPassInner || !appendInner) return reels
-        const map = new Map<string, ScannedReel>()
-        scanResultRef.current.forEach((item) => map.set(item.url, item))
-        reels.forEach((item) => map.set(item.url, item))
-        return Array.from(map.values())
+        let list: ScannedReel[]
+        if (fullPassInner || !appendInner) list = reels
+        else {
+          const map = new Map<string, ScannedReel>()
+          scanResultRef.current.forEach((item) => map.set(item.url, item))
+          reels.forEach((item) => map.set(item.url, item))
+          list = Array.from(map.values())
+        }
+        return list.sort((a, b) => b.viewCount - a.viewCount)
       })()
 
       setHasMoreReels(false)
