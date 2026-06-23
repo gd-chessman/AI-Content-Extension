@@ -23,6 +23,7 @@ import { VideoShortsModule } from './modules/video-shorts/video-shorts.module';
 import { DataCleanupModule } from './modules/data-cleanup/data-cleanup.module';
 import { MultiWorkflowsModule } from './modules/multi-workflows/multi-workflows.module';
 import { WorkflowSchedulesModule } from './modules/workflow-schedules/workflow-schedules.module';
+import { ScrapedReelsModule } from './modules/scraped-reels/scraped-reels.module';
 
 @Module({
   imports: [
@@ -49,6 +50,7 @@ import { WorkflowSchedulesModule } from './modules/workflow-schedules/workflow-s
     DataCleanupModule,
     MultiWorkflowsModule,
     WorkflowSchedulesModule,
+    ScrapedReelsModule,
   ],
   controllers: [AppController],
   providers: [AppService]
