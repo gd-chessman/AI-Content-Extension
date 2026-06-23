@@ -37,6 +37,7 @@ import {
   skipVideoSourceFromReel,
   syncVideoSourceFromReel,
 } from '@/services/VideoShortService'
+import { getScrapedReelsFromDb } from '@/services/ScrapedReelService'
 import { getAxiosErrorMessage } from '@/utils/axiosClient'
 import { normalizeStepDisplayMode } from '@/utils/stepDisplayMode'
 import {
@@ -57,6 +58,9 @@ import {
   shouldStopLocalWorkflowForCancelledRun,
 } from '@/utils/multiWorkflowRun'
 import { runFacebookReelScanBatch } from '@/utils/facebookReelScanPageScript'
+
+/** Tạm thời: quét reel từ MongoDB `scraped_reels` thay vì DOM Facebook. */
+const USE_DB_SCRAPED_REELS = true
 
 type ScannedReel = {
   id: string
@@ -776,6 +780,32 @@ export default function FacebookScreen() {
     }
   }
 
+  const resolveScanFanpageUrl = () => {
+    const prefer = workflowFanpageUrlRef.current?.trim()
+    if (prefer) return prefer
+    const fromSelected = fanpages.find((page) => page._id === selectedFanpageId)?.url?.trim()
+    if (fromSelected) return fromSelected
+    return ''
+  }
+
+  const resolveScanFanpageId = (fanpageUrl: string) => {
+    const hit = fanpages.find((page) => tabMatchesFanpageUrl(fanpageUrl, page.url))
+    return hit?._id || selectedFanpageId || ''
+  }
+
+  const mapDbItemsToScannedReels = (
+    items: Awaited<ReturnType<typeof getScrapedReelsFromDb>>['items'],
+  ): ScannedReel[] =>
+    items.map((item) => ({
+      id: item.id || item.reelUrl,
+      title: item.title || item.description || 'Reel',
+      description: item.description || item.title || '',
+      views: item.viewsLabel || '',
+      viewCount: item.viewCount || 0,
+      url: item.reelUrl,
+      imageUrl: item.imageUrl || '',
+    }))
+
   /** Cùng reel dù Facebook thêm/khác query trên thanh địa chỉ */
   const isSameReelTabUrl = (tabUrl: string | undefined, targetUrl: string) => {
     if (!tabUrl) return false
@@ -1460,11 +1490,145 @@ export default function FacebookScreen() {
     setIsScanning(true)
     setScanStatus(
       fullPass
+        ? 'Đang tải reel quét trước từ DB (quét hết)…'
+        : append
+          ? 'Đang tải thêm reel quét trước từ DB…'
+          : 'Đang tải reel quét trước từ DB…',
+    )
+
+    const finishScan = () => {
+      isScanningRef.current = false
+      setIsScanning(false)
+      scanControlRef.current = null
+    }
+
+    const applyScanPayload = (
+      reels: ScannedReel[],
+      options: {
+        fanpageUrl: string
+        fullPass: boolean
+        append: boolean
+        prevCountAtStart: number
+        totalMatched: number
+      },
+    ) => {
+      const { fanpageUrl, fullPass: fullPassInner, append: appendInner, prevCountAtStart, totalMatched } = options
+      const historyFanpageId = resolveScanFanpageId(fanpageUrl)
+      const mergedList = (() => {
+        if (fullPassInner || !appendInner) return reels
+        const map = new Map<string, ScannedReel>()
+        scanResultRef.current.forEach((item) => map.set(item.url, item))
+        reels.forEach((item) => map.set(item.url, item))
+        return Array.from(map.values())
+      })()
+
+      setHasMoreReels(false)
+      if (fullPassInner) {
+        setFeedFullyScanned(true)
+        if (historyFanpageId) {
+          writeFeedFullyScannedForFanpage(historyFanpageId, true)
+          writeScanMetaForFanpage(historyFanpageId, {
+            minViews: minViewCount,
+            ...(Number.isFinite(maxViewCount) && maxViewCount !== Number.POSITIVE_INFINITY
+              ? { maxViews: maxViewCount }
+              : {}),
+          })
+        }
+      }
+
+      setScannedReels(mergedList)
+      scanResultRef.current = mergedList
+      if (historyFanpageId) {
+        writeScanHistoryForFanpage(historyFanpageId, mergedList)
+      }
+
+      const mergedCount = mergedList.length
+      const addedCount = Math.max(0, mergedCount - prevCountAtStart)
+      const rangeLabel =
+        Number.isFinite(maxViewCount) && maxViewCount !== Number.POSITIVE_INFINITY
+          ? `${minViewCount.toLocaleString('en-US')} - ${maxViewCount.toLocaleString('en-US')}`
+          : `>= ${minViewCount.toLocaleString('en-US')}`
+
+      if (reels.length === 0) {
+        setScanStatus(
+          `Không có reel trong DB cho fanpage này (khoảng ${rangeLabel}). Import vào collection scraped_reels trước.`,
+        )
+        return
+      }
+
+      if (fullPassInner) {
+        setScanStatus(
+          `Đã tải ${totalMatched} reel từ DB (hiển thị ${mergedCount}) — khoảng ${rangeLabel} lượt xem.`,
+        )
+        return
+      }
+
+      setScanStatus(
+        appendInner
+          ? `Đã tải thêm ${addedCount} reel từ DB. Tổng ${mergedCount} — khoảng ${rangeLabel} lượt xem.`
+          : `Đã tải ${reels.length} reel từ DB — khoảng ${rangeLabel} lượt xem.`,
+      )
+    }
+
+    if (USE_DB_SCRAPED_REELS) {
+      void (async () => {
+        const prevCountAtStart = append ? scanResultRef.current.length : 0
+        const fanpageUrl = resolveScanFanpageUrl()
+        if (!fanpageUrl) {
+          setScanStatus('Chọn fanpage trong danh sách (hoặc mở fanpage workflow) trước khi quét.')
+          setScannedReels([])
+          finishScan()
+          return
+        }
+
+        try {
+          const data = await getScrapedReelsFromDb({
+            fanpageUrl,
+            minViews: minViewCount,
+            maxViews:
+              Number.isFinite(maxViewCount) && maxViewCount !== Number.POSITIVE_INFINITY
+                ? maxViewCount
+                : undefined,
+            limit: fullPass ? 0 : resultLimit,
+            excludeUrls: append ? existingUrls : undefined,
+          })
+          const reels = mapDbItemsToScannedReels(data.items || [])
+          applyScanPayload(reels, {
+            fanpageUrl,
+            fullPass,
+            append,
+            prevCountAtStart,
+            totalMatched: data.totalMatched ?? reels.length,
+          })
+        } catch (err) {
+          const message = isAxiosError(err)
+            ? getAxiosErrorMessage(err)
+            : err instanceof Error
+              ? err.message
+              : String(err)
+          setScanStatus(`Không tải được reel từ DB: ${message}`)
+          if (!append) setScannedReels([])
+        } finally {
+          finishScan()
+        }
+      })()
+      return
+    }
+
+    setScanStatus(
+      fullPass
         ? 'Đang quét hết — cuộn toàn bộ trang reels và lấy video còn lại...'
         : append
           ? 'Đang quét thêm reels theo khoảng lượt xem...'
           : 'Đang quét reels theo khoảng lượt xem — extension sẽ cuộn trang để tải thêm video nếu cần...',
     )
+
+    if (!extensionChrome?.tabs?.query || !extensionChrome?.scripting?.executeScript) {
+      setScanStatus('Không thể quét trong môi trường hiện tại.')
+      finishScan()
+      return
+    }
+
     extensionChrome.tabs.query({ url: ['*://*.facebook.com/*'], currentWindow: true }, async (fbTabs) => {
       const list = fbTabs || []
       const pickTab = (): (typeof list)[number] | undefined => {
