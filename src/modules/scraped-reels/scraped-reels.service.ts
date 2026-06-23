@@ -51,7 +51,7 @@ export class ScrapedReelsService {
         fanpageUrl: { $in: fanpageVariants },
         $or: [{ userId: { $exists: false } }, { userId: null }, { userId: userObjectId }],
       })
-      .sort({ sortOrder: 1, viewCount: -1, createdAt: -1 })
+      .sort({ viewCount: -1, sortOrder: 1, createdAt: -1 })
       .lean();
 
     const filtered = rows.filter((row) => {
