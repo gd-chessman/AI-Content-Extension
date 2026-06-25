@@ -54,7 +54,8 @@ type GrokProcessStep = {
   inputSchema: Record<string, unknown>
 }
 
-const QUOTED_TEXT_PATTERN = /"[^"]*"/g
+/** Straight `"..."` và curly `\u201C...\u201D` (dialogue trong video prompt). */
+const QUOTED_TEXT_PATTERN = /"[^"]*"|[\u201C][^\u201D]*[\u201D]/g
 
 const renderTextWithQuotedHighlights = (text: string) => {
   if (!text) return text
