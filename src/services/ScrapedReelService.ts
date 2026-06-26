@@ -19,6 +19,15 @@ export type ScrapedReelsApiResponse = {
   items: ScrapedReelApiItem[]
 }
 
+export type UpsertScrapedReelsResponse = {
+  fanpageUrl: string
+  requested: number
+  inserted: number
+  updated: number
+  matched?: number
+  skipped: number
+}
+
 export const getScrapedReelsFromDb = async (params: {
   fanpageUrl: string
   minViews: number
@@ -37,5 +46,21 @@ export const getScrapedReelsFromDb = async (params: {
       ...(params.excludeUrls?.length ? { excludeUrls: params.excludeUrls.join(',') } : {}),
     },
   })
+  return response.data
+}
+
+export const upsertScrapedReelsToDb = async (params: {
+  fanpageUrl: string
+  items: Array<{
+    reelUrl: string
+    title?: string
+    description?: string
+    viewsLabel?: string
+    viewCount?: number
+    imageUrl?: string
+    externalVideoId?: string
+  }>
+}) => {
+  const response = await axiosClient.post<UpsertScrapedReelsResponse>('/scraped-reels/upsert', params)
   return response.data
 }

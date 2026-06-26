@@ -37,7 +37,7 @@ import {
   skipVideoSourceFromReel,
   syncVideoSourceFromReel,
 } from '@/services/VideoShortService'
-import { getScrapedReelsFromDb } from '@/services/ScrapedReelService'
+import { getScrapedReelsFromDb, upsertScrapedReelsToDb } from '@/services/ScrapedReelService'
 import { getAxiosErrorMessage } from '@/utils/axiosClient'
 import { normalizeStepDisplayMode } from '@/utils/stepDisplayMode'
 import {
@@ -59,8 +59,8 @@ import {
 } from '@/utils/multiWorkflowRun'
 import { runFacebookReelScanBatch } from '@/utils/facebookReelScanPageScript'
 
-/** Tạm thời: quét reel từ MongoDB `scraped_reels` thay vì DOM Facebook. */
-const USE_DB_SCRAPED_REELS = true
+/** false = quét DOM Facebook + localStorage; true = đọc MongoDB `scraped_reels`. */
+const USE_DB_SCRAPED_REELS = false
 
 type ScannedReel = {
   id: string
@@ -401,6 +401,7 @@ export default function FacebookScreen() {
   const [feedFullyScanned, setFeedFullyScanned] = useState(false)
   const [scanStatus, setScanStatus] = useState('')
   const [isScanning, setIsScanning] = useState(false)
+  const [isSavingScannedReelsToDb, setIsSavingScannedReelsToDb] = useState(false)
   const [minViewInput, setMinViewInput] = useState(() =>
     readStoredScanViewInput(FB_REELS_SCAN_MIN_LS_KEY, formatViewInput(String(MIN_VIEW_COUNT))),
   )
@@ -1489,11 +1490,17 @@ export default function FacebookScreen() {
     isScanningRef.current = true
     setIsScanning(true)
     setScanStatus(
-      fullPass
-        ? 'Đang tải reel quét trước từ DB (quét hết)…'
-        : append
-          ? 'Đang tải thêm reel quét trước từ DB…'
-          : 'Đang tải reel quét trước từ DB…',
+      USE_DB_SCRAPED_REELS
+        ? fullPass
+          ? 'Đang tải reel quét trước từ DB (quét hết)…'
+          : append
+            ? 'Đang tải thêm reel quét trước từ DB…'
+            : 'Đang tải reel quét trước từ DB…'
+        : fullPass
+          ? 'Đang quét hết — cuộn toàn bộ trang reels và lấy video còn lại...'
+          : append
+            ? 'Đang quét thêm reels theo khoảng lượt xem...'
+            : 'Đang quét reels theo khoảng lượt xem — extension sẽ cuộn trang để tải thêm video nếu cần...',
     )
 
     const finishScan = () => {
@@ -2093,6 +2100,52 @@ export default function FacebookScreen() {
     }
     setScanStatus('Đang quét lại toàn bộ feed fanpage…')
     await handleScanAllReels()
+  }
+
+  const handleSaveScannedReelsToDb = async () => {
+    const reels = scanResultRef.current.length > 0 ? scanResultRef.current : scannedReels
+    if (!reels.length) {
+      setScanStatus('Chưa có reel để lưu — hãy quét trước.')
+      return
+    }
+
+    const fanpageUrl = resolveScanFanpageUrl()
+    if (!fanpageUrl) {
+      setScanStatus('Chọn fanpage trong danh sách trước khi lưu vào DB.')
+      return
+    }
+
+    setIsSavingScannedReelsToDb(true)
+    setScanStatus(`Đang lưu ${reels.length} reel vào DB (chỉ thêm/cập nhật, không xóa reel cũ)...`)
+
+    try {
+      const result = await upsertScrapedReelsToDb({
+        fanpageUrl,
+        items: reels.map((reel) => ({
+          reelUrl: reel.url,
+          title: reel.title,
+          description: reel.description,
+          viewsLabel: reel.views,
+          viewCount: reel.viewCount,
+          imageUrl: reel.imageUrl,
+          externalVideoId: reel.url.match(/\/reel\/(\d+)/i)?.[1] || '',
+        })),
+      })
+      setScanStatus(
+        `Đã lưu DB: ${result.inserted} reel mới, ${result.updated} reel cập nhật` +
+          (result.skipped > 0 ? `, ${result.skipped} bỏ qua` : '') +
+          ` (tổng gửi ${result.requested}). Reel cũ không có trong danh sách quét vẫn giữ nguyên.`,
+      )
+    } catch (err) {
+      const message = isAxiosError(err)
+        ? getAxiosErrorMessage(err)
+        : err instanceof Error
+          ? err.message
+          : String(err)
+      setScanStatus(`Lưu DB thất bại: ${message}`)
+    } finally {
+      setIsSavingScannedReelsToDb(false)
+    }
   }
 
   const handleStopScan = () => {
@@ -3309,6 +3362,18 @@ export default function FacebookScreen() {
               ) : null}
               {scannedReels.length > 0 ? (
                 <div className="flex flex-col gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void handleSaveScannedReelsToDb()}
+                    disabled={isScanning || isSavingScannedReelsToDb}
+                    className="cursor-pointer rounded-xl border border-emerald-400/35 bg-emerald-500/15 px-3 py-2 text-[11px] font-semibold text-emerald-100 transition hover:bg-emerald-500/25 disabled:cursor-not-allowed disabled:opacity-50"
+                    title="Gửi danh sách reel đã quét lên MongoDB — chỉ thêm mới hoặc cập nhật, không xóa reel cũ"
+                  >
+                    <span className="inline-flex items-center justify-center gap-1">
+                      <FiSave aria-hidden className={`h-3 w-3 ${isSavingScannedReelsToDb ? 'animate-pulse' : ''}`} />
+                      {isSavingScannedReelsToDb ? 'Đang lưu DB...' : 'Lưu cập nhật DB'}
+                    </span>
+                  </button>
                   {feedFullyScanned ? (
                     <div className="flex flex-col gap-2">
                       <p className="rounded-xl border border-emerald-400/25 bg-emerald-500/10 px-3 py-2 text-center text-[11px] text-emerald-100">
