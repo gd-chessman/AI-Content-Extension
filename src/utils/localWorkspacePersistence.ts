@@ -371,6 +371,7 @@ export type LocalVideoShortBundleWritePayload = {
   left: string
   right: string
   usedStaleSplitFallback: boolean
+  videoPrompts?: string[]
 }
 
 function buildLocalSaveImageNote(payload: LocalVideoShortBundleWritePayload): string {
@@ -408,8 +409,17 @@ export async function writeVideoShortBundleToWorkspace(
     workflowId: payload.workflowId,
     savedAt: new Date().toISOString(),
     hasSplitImages: payload.splitGeneratedImages ? Boolean(payload.left && payload.right) : Boolean(payload.left),
+    ...(payload.videoPrompts?.length ? { videoPrompts: payload.videoPrompts } : {}),
   }
   await writeUtf8File(dirs.infoDir, 'meta.json', JSON.stringify(infoPayload, null, 2))
+
+  if (payload.videoPrompts?.length) {
+    await writeUtf8File(
+      dirs.contentDir,
+      'video-prompts.txt',
+      payload.videoPrompts.map((line, index) => `VIDEO ${index + 1}\n${line}`).join('\n\n'),
+    )
+  }
 
   if (payload.left) {
     const blobL = await (await fetch(payload.left)).blob()

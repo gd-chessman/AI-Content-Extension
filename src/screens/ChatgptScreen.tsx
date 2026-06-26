@@ -48,12 +48,9 @@ import {
   shouldStopLocalWorkflowForCancelledRun,
 } from '@/utils/multiWorkflowRun'
 import {
-  createVideoShortFromReel,
   getMyVideoShorts,
   getMyVideoSources,
 } from '@/services/VideoShortService'
-import { getAxiosErrorMessage } from '@/utils/axiosClient'
-import { uploadVideoShortImagesFromDataUrls } from '@/services/CloudinaryUploadService'
 import { chatgptExtractContent } from '@/utils/chatgptExtractContent'
 import {
   appendShortCutInjectArgs,
@@ -233,55 +230,32 @@ export type ChatgptVideoShortSaveBundle = {
   title: string
   shortContent: string
   longContent: string
-  imageUrls: string[]
+  left: string
+  right: string
 }
 
-/** Sau khi workflow xong: tạo VideoShort mới kèm videoPrompts + nội dung/ảnh từ ChatGPT. */
-async function createVideoShortForPipelineRun(
-  videoPrompts: string[],
-  bundle: ChatgptVideoShortSaveBundle,
+/** Ngữ cảnh thư mục local khi workflow lưu — gắn URL reel từ VideoSource nếu có. */
+async function resolveLocalStoryContextForWorkflowSave(
+  titlePlain: string,
   preferredVideoSourceId?: string,
-): Promise<{ videoShortId: string; error?: string }> {
-  const sources = await getMyVideoSources()
+): Promise<{
+  videoShortId: string
+  folderSegment: string
+  titleDisplay: string
+  sourceReelUrl: string
+}> {
+  const ctx = buildLocalOnlyVideoShortContextFromTitle(titlePlain)
   const preferredId = (preferredVideoSourceId || '').trim()
-  const top = preferredId
-    ? sources.find((s) => s._id === preferredId) || sources[0]
-    : sources[0]
-  if (!top?._id) {
-    return {
-      videoShortId: '',
-      error: 'Chưa có nguồn reel — hãy lưu nguồn reel trên Facebook trước khi chạy workflow.',
-    }
-  }
-
-  const reelUrl = (top.sourceReelUrl || '').trim()
-  if (!reelUrl) {
-    return {
-      videoShortId: '',
-      error: 'Nguồn reel thiếu URL — mở Facebook, chọn reel và bấm lưu nguồn reel lại.',
-    }
-  }
-
+  if (!preferredId) return ctx
   try {
-    const created = await createVideoShortFromReel({
-      sourceReelUrl: reelUrl,
-      name: (bundle.title || top.name || '').trim().slice(0, 200),
-      videoPrompts,
-      shortContent: bundle.shortContent,
-      longContent: bundle.longContent,
-      imageUrls: bundle.imageUrls,
-    })
-    const videoShortId = (created._id || '').trim()
-    if (!videoShortId) {
-      return { videoShortId: '', error: 'API tạo video ngắn không trả về id.' }
-    }
-    return { videoShortId }
-  } catch (err) {
-    return {
-      videoShortId: '',
-      error: getAxiosErrorMessage(err, 'Không tạo được video ngắn trên máy chủ.'),
-    }
+    const sources = await getMyVideoSources()
+    const src = sources.find((s) => s._id === preferredId) || sources[0]
+    const reelUrl = (src?.sourceReelUrl || '').trim()
+    if (reelUrl) return { ...ctx, sourceReelUrl: reelUrl }
+  } catch {
+    /* ignore */
   }
+  return ctx
 }
 
 /** Lưu cục bộ khi không có story trên API — `videoShortId` dạng `local-…` để phân biệt trong meta.json. */
@@ -1848,30 +1822,67 @@ export default function ChatgptScreen() {
           `${step.label}: Chưa lấy được nội dung VIDEO (kiểm tra «${extractVideosStepLabel}»).`,
         )
       }
-      setStatus(`${step.label}: Đang lấy nội dung ChatGPT và upload ảnh lên Cloudinary...`)
-      const bundle = await collectVideoShortBundleForApiSave()
-      const created = await createVideoShortForPipelineRun(
-        videoPrompts,
-        bundle,
+      setStatus(`${step.label}: Đang lấy nội dung ChatGPT và lưu cục bộ...`)
+      const bundle = await collectVideoShortBundleForLocalSave()
+      const storyCtx = await resolveLocalStoryContextForWorkflowSave(
+        bundle.title,
         chatgptPipelineVideoSourceIdRef.current.trim() || undefined,
       )
-      if (!created.videoShortId) {
-        throw new Error(created.error || `${step.label}: Không tạo được video ngắn trên máy chủ.`)
+      const root = await resolveWritableContentRootDirectory({ allowPicker: true, allowRequest: true })
+      if (!root) {
+        throw new Error(
+          `${step.label}: Cần chọn thư mục lưu video ngắn trên máy (Hồ sơ → Cấu hình thư mục gốc).`,
+        )
       }
-      chatgptPipelineVideoShortIdRef.current = created.videoShortId
+      const ext = getChrome()
+      const videoShortsSeg = await getVideoShortsFolderSegmentFromStorage(ext?.storage?.local)
+      const writePayload: LocalVideoShortBundleWritePayload = {
+        videoShortsSeg,
+        folderSegment: storyCtx.folderSegment,
+        videoShortId: storyCtx.videoShortId,
+        titleDisplay: storyCtx.titleDisplay,
+        sourceReelUrl: storyCtx.sourceReelUrl,
+        workflowId: selectedWorkflowId,
+        shortText: bundle.shortContent,
+        longText: bundle.longContent,
+        titlePlain: bundle.title,
+        splitGeneratedImages,
+        left: bundle.left,
+        right: bundle.right,
+        usedStaleSplitFallback: false,
+        videoPrompts,
+      }
+      try {
+        await writeVideoShortBundleToWorkspace(root, writePayload)
+      } catch (e) {
+        if (isFilesystemPermissionError(e)) {
+          pendingLocalSaveRef.current = writePayload
+          setHasPendingLocalSave(true)
+          throw new Error(
+            `${step.label}: Cần cấp quyền thư mục — mở Hồ sơ → chọn thư mục gốc, rồi bấm «Xác nhận lưu».`,
+          )
+        }
+        throw e
+      }
+      chatgptPipelineVideoShortIdRef.current = storyCtx.videoShortId
       const videoLabel = videoPrompts.length === 1 ? 'VIDEO' : `${videoPrompts.length} VIDEO`
       const imageNote =
-        bundle.imageUrls.length > 0
-          ? `, ${bundle.imageUrls.length} ảnh Cloudinary`
-          : ' (chưa có ảnh — bước tạo ảnh có thể chưa chạy)'
+        splitGeneratedImages
+          ? bundle.left && bundle.right
+            ? ', images/anh-1.png & anh-2.png'
+            : ' (chưa có ảnh cắt đôi)'
+          : bundle.left
+            ? ', images/anh-1.png'
+            : ' (chưa có ảnh — bước tạo ảnh có thể chưa chạy)'
       setStatus(
-        `${step.label}: Đã tạo video ngắn — tiêu đề, nội dung ngắn/dài, prompt ${videoLabel}${imageNote}.`,
+        `${step.label}: Đã lưu cục bộ — tiêu đề, nội dung ngắn/dài, prompt ${videoLabel}${imageNote}.`,
       )
       return {
         saved: true,
-        videoShortId: created.videoShortId,
+        videoShortId: storyCtx.videoShortId,
+        savedLocally: true,
         videoPromptCount: videoPrompts.length,
-        imageCount: bundle.imageUrls.length,
+        imageCount: splitGeneratedImages ? (bundle.left && bundle.right ? 2 : 0) : bundle.left ? 1 : 0,
         titleLength: bundle.title.length,
         shortContentLength: bundle.shortContent.length,
         longContentLength: bundle.longContent.length,
@@ -2142,7 +2153,7 @@ export default function ChatgptScreen() {
       const stepCountLabel = `${workflowSteps.length}/${workflowSteps.length}`
       const savedVideoShortId = chatgptPipelineVideoShortIdRef.current.trim()
       if (savedVideoShortId) {
-        setStatus(`Workflow chạy xong ${stepCountLabel} bước. Đã lưu video ngắn (prompt VIDEO).`)
+        setStatus(`Workflow chạy xong ${stepCountLabel} bước. Đã lưu video ngắn vào máy (prompt VIDEO).`)
       } else {
         setStatus(`Workflow chạy xong ${stepCountLabel} bước.`)
       }
@@ -2488,8 +2499,8 @@ export default function ChatgptScreen() {
     return extracted
   }
 
-  /** Lấy text từ ChatGPT, upload ảnh thẳng Cloudinary, trả URL — POST /stories chỉ nhận JSON nhẹ. */
-  const collectVideoShortBundleForApiSave = async (): Promise<ChatgptVideoShortSaveBundle> => {
+  /** Lấy text + ảnh từ ChatGPT để ghi workspace local (không upload Cloudinary / không POST API). */
+  const collectVideoShortBundleForLocalSave = async (): Promise<ChatgptVideoShortSaveBundle> => {
     if (!extractContentStep || extractContentPromptHint.length < 30) {
       throw new Error('Workflow chưa có bước actionType = chatgpt_extract_content.')
     }
@@ -2598,13 +2609,16 @@ export default function ChatgptScreen() {
       }
     }
 
-    let imageUrls: string[] = []
-    if (imageDataUrls.length > 0) {
-      setStatus('Đang upload ảnh lên Cloudinary (trực tiếp từ extension)...')
-      imageUrls = await uploadVideoShortImagesFromDataUrls(imageDataUrls)
+    let left = ''
+    let right = ''
+    if (splitGeneratedImages) {
+      if (imageDataUrls[0]) left = imageDataUrls[0]
+      if (imageDataUrls[1]) right = imageDataUrls[1]
+    } else if (imageDataUrls[0]) {
+      left = imageDataUrls[0]
     }
 
-    return { title: titlePlain, shortContent, longContent, imageUrls }
+    return { title: titlePlain, shortContent, longContent, left, right }
   }
 
   const resolveVideoShortContextForLocalSave = async (): Promise<{
