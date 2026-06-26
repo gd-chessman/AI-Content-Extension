@@ -6,7 +6,7 @@ import {
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { Fanpage, FanpageDocument } from '../fanpages/fanpages.schema';
-import { ListScrapedReelsQueryDto } from './scraped-reels.dto';
+import { ListScrapedReelsQueryDto, UpsertScrapedReelsDto } from './scraped-reels.dto';
 import { ScrapedReel, ScrapedReelDocument } from './scraped-reels.schema';
 
 @Injectable()
@@ -80,6 +80,97 @@ export class ScrapedReelsService {
         viewCount: Number(row.viewCount) || 0,
         imageUrl: (row.imageUrl || '').trim(),
       })),
+    };
+  }
+
+  /** Upsert reel từ extension (quét local). Chỉ insert/update — không xóa bản ghi cũ. */
+  async upsertFromLocalScan(userId: string, body: UpsertScrapedReelsDto) {
+    const fanpageUrl = this.normalizeFanpageUrl((body.fanpageUrl || '').trim());
+    if (!fanpageUrl) {
+      throw new BadRequestException('fanpageUrl is required.');
+    }
+
+    const items = Array.isArray(body.items) ? body.items : [];
+    if (!items.length) {
+      throw new BadRequestException('items must be a non-empty array.');
+    }
+    if (items.length > 5000) {
+      throw new BadRequestException('items exceeds maximum of 5000 per request.');
+    }
+
+    await this.assertUserOwnsFanpageUrl(userId, fanpageUrl);
+
+    const userObjectId = new Types.ObjectId(userId);
+    const ops: Array<{
+      updateOne: {
+        filter: { fanpageUrl: string; reelUrl: string };
+        update: {
+          $set: Record<string, string | number>;
+          $setOnInsert: { fanpageUrl: string; reelUrl: string; userId: Types.ObjectId };
+        };
+        upsert: boolean;
+      };
+    }> = [];
+    let skipped = 0;
+
+    items.forEach((item, index) => {
+      const reelUrl = this.canonicalReelUrl(String(item.reelUrl || ''));
+      if (!reelUrl) {
+        skipped += 1;
+        return;
+      }
+
+      const viewCount = Math.max(0, Number(item.viewCount) || 0);
+      const viewsLabel =
+        (item.viewsLabel || '').trim() || this.formatViewsLabel(viewCount);
+      const externalVideoId =
+        (item.externalVideoId || '').trim() ||
+        reelUrl.match(/\/reel\/(\d+)/i)?.[1] ||
+        '';
+
+      ops.push({
+        updateOne: {
+          filter: { fanpageUrl, reelUrl },
+          update: {
+            $set: {
+              title: (item.title || '').trim(),
+              description: (item.description || item.title || '').trim(),
+              viewsLabel,
+              viewCount,
+              imageUrl: (item.imageUrl || '').trim(),
+              externalVideoId,
+              sortOrder: index,
+            },
+            $setOnInsert: {
+              fanpageUrl,
+              reelUrl,
+              userId: userObjectId,
+            },
+          },
+          upsert: true,
+        },
+      });
+    });
+
+    if (!ops.length) {
+      return {
+        fanpageUrl,
+        requested: items.length,
+        inserted: 0,
+        updated: 0,
+        skipped,
+      };
+    }
+
+    const result = await this.scrapedReelModel.bulkWrite(ops, { ordered: false });
+
+    return {
+      fanpageUrl,
+      requested: items.length,
+      inserted: result.upsertedCount || 0,
+      updated: result.modifiedCount || 0,
+      matched: result.matchedCount || 0,
+      skipped,
     };
   }
 
